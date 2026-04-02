@@ -109,7 +109,7 @@ resp, err := svc.Save(ctx, &artifact.SaveRequest{
 
 ### Load an Artifact
 
-> **Note:** `Version: 0` in Load, Delete, and GetArtifactVersion always resolves to "latest".
+> **Note:** `Version: 0` in Load and Delete always resolves to "latest".
 > The first saved artifact is version 0. When only one version exists, both "latest"
 > and "specific version 0" resolve to the same content.
 
@@ -173,25 +173,6 @@ if err != nil {
 for _, v := range versResp.Versions {
     fmt.Println("version:", v)
 }
-```
-
-### Get Version Metadata
-
-```go
-avResp, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
-    AppName:   "myapp",
-    UserID:    "alice",
-    SessionID: "session-1",
-    FileName:  "report.txt",
-    Version:   0, // 0 = latest
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Println("version:", avResp.ArtifactVersion.Version)
-fmt.Println("mime:", avResp.ArtifactVersion.MimeType)
-fmt.Println("uri:", avResp.ArtifactVersion.CanonicalURI)
 ```
 
 ### User-Scoped Artifacts

@@ -325,7 +325,7 @@ func main() {
 
 ## Compatibility
 
-- **Go 1.25+** — Required because ADK-Go (`google.golang.org/adk`) specifies `go 1.25` in its `go.mod`. Uses `iter.Seq2` and range-over-func.
+- **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
 - **ADK-Go** (`google.golang.org/adk`)
 
 ## Dependencies

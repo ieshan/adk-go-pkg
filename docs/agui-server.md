@@ -262,7 +262,7 @@ always `nil` for channel sends, but the signature is future-proof).
 ```go
 type StateManager struct { /* unexported */ }
 
-func NewStateManager(initial any) *StateManager
+func NewStateManager(initial any) (*StateManager, error)
 ```
 
 `StateManager` tracks shared application state using RFC 6902 JSON Patch
@@ -273,7 +273,7 @@ operations. It is safe for concurrent use.
 | Method | Description |
 |--------|-------------|
 | `Snapshot() any` | Returns a deep copy of the current state |
-| `Set(state any)` | Replaces the entire state |
+| `Set(state any) error` | Replaces the entire state |
 | `Apply(patch []events.JSONPatchOperation) error` | Applies JSON Patch operations |
 | `Diff(newState any) ([]events.JSONPatchOperation, error)` | Computes a patch from current to new state |
 
@@ -300,7 +300,10 @@ import (
 )
 
 func main() {
-	sm := agui.NewStateManager(map[string]any{"count": 0})
+	sm, err := agui.NewStateManager(map[string]any{"count": 0})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		ch := make(chan events.Event, 64)
@@ -808,9 +811,12 @@ func loggingMiddleware(next agui.Agent) agui.Agent {
 }
 
 func main() {
-	sm := agui.NewStateManager(map[string]any{
+	sm, err := agui.NewStateManager(map[string]any{
 		"messages_processed": 0,
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		ch := make(chan events.Event, 64)

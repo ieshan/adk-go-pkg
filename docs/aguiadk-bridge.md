@@ -299,23 +299,23 @@ func main() {
 func Handler(cfg Config, agCfg agui.Config) (http.Handler, error)
 ```
 
-`Handler` combines `NewAgent` (which creates the ADK-to-AG-UI bridge) with
+`Handler` combines `New` (which creates the ADK-to-AG-UI bridge) with
 `agui.Handler` (which serves the SSE endpoint) into a single call. It:
 
-1. Calls `NewAgent(cfg)` to create the bridge agent
+1. Calls `New(cfg)` to create the bridge agent
 2. Sets `agCfg.Agent` to the bridge agent
 3. Calls `agui.Handler(agCfg)` to create the HTTP handler
 
 This is the recommended entry point for most applications.
 
-### NewAgent
+### New
 
 ```go
-func NewAgent(cfg Config) (agui.Agent, error)
+func New(cfg Config) (agui.Agent, error)
 ```
 
 For advanced use cases where you need to compose the bridge agent with custom
-middleware or additional logic, use `NewAgent` directly:
+middleware or additional logic, use `New` directly:
 
 ```go
 package main
@@ -332,7 +332,7 @@ import (
 func main() {
 	myAgent := agent.New("assistant", nil)
 
-	bridgeAgent, err := aguiadk.NewAgent(aguiadk.Config{
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   myAgent,
 		AppName: "my-app",
 		UserID:  "user-1",
