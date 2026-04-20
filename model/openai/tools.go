@@ -2,7 +2,6 @@ package openai
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"google.golang.org/genai"
 )
@@ -166,26 +165,4 @@ func toolCallsToFunctionCalls(toolCalls []map[string]any) []*genai.Part {
 	}
 
 	return parts
-}
-
-// functionResponseToMessage converts a [genai.FunctionResponse] into an OpenAI
-// "tool" role [chatMessage] as required by the Chat Completions API.
-//
-// The Response map is JSON-encoded and placed in the Content field. The
-// ToolCallID is set from fr.ID so the API can correlate the response with the
-// originating tool call.
-//
-// If marshalling fr.Response fails, Content is set to "{}" so the message
-// remains syntactically valid.
-func functionResponseToMessage(fr *genai.FunctionResponse) chatMessage {
-	responseJSON, err := json.Marshal(fr.Response)
-	if err != nil {
-		responseJSON = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
-	}
-	return chatMessage{
-		Role:       "tool",
-		Content:    string(responseJSON),
-		Name:       fr.Name,
-		ToolCallID: fr.ID,
-	}
 }

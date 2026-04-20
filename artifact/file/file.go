@@ -410,5 +410,55 @@ func (s *fileService) Versions(_ context.Context, req *artifact.VersionsRequest)
 	return &artifact.VersionsResponse{Versions: versions}, nil
 }
 
+// GetArtifactVersion implements artifact.Service.
+//
+// Returns metadata for a specific artifact version. When req.Version is 0,
+// the latest version is returned. An error wrapping fs.ErrNotExist is returned
+// when the artifact or requested version does not exist.
+func (s *fileService) GetArtifactVersion(_ context.Context, req *artifact.GetArtifactVersionRequest) (*artifact.GetArtifactVersionResponse, error) {
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+	}
+	if err := validateFileName(req.FileName); err != nil {
+		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+	}
+
+	versDir := s.versionsDir(req.UserID, req.SessionID, req.FileName)
+
+	var targetVersion int64
+	if req.Version == 0 {
+		// 0 means "latest"
+		latest, ok, err := latestVersion(versDir)
+		if err != nil {
+			return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("GetArtifactVersion: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
+		}
+		targetVersion = latest
+	} else {
+		targetVersion = req.Version
+	}
+
+	vDir := filepath.Join(versDir, strconv.FormatInt(targetVersion, 10))
+	meta, err := readMetadata(vDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("GetArtifactVersion: artifact %q version %d not found: %w", req.FileName, targetVersion, fs.ErrNotExist)
+		}
+		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+	}
+
+	return &artifact.GetArtifactVersionResponse{
+		ArtifactVersion: &artifact.ArtifactVersion{
+			Version:        meta.Version,
+			CanonicalURI:   meta.CanonicalURI,
+			CustomMetadata: meta.CustomMetadata,
+			CreateTime:     meta.CreateTime,
+			MimeType:       meta.MimeType,
+		},
+	}, nil
+}
+
 // Ensure fileService satisfies the interface at compile time.
 var _ artifact.Service = (*fileService)(nil)
