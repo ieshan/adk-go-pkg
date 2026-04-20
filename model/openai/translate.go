@@ -3,10 +3,20 @@ package openai
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
+)
+
+// Sentinel errors for FunctionResponse validation.
+var (
+	ErrEmptyFunctionResponseParts = errors.New("function response has no parts")
+	ErrMissingInlineData          = errors.New("function response part has no inline data")
+	ErrInvalidMIMEType            = errors.New("function response part has non-JSON MIME type")
+	ErrInvalidJSONData            = errors.New("function response part contains invalid JSON")
+	ErrEmptyToolCallID            = errors.New("function response has empty tool call ID")
 )
 
 // chatRequest is the request body for the OpenAI /v1/chat/completions endpoint.
@@ -197,6 +207,38 @@ func contentsToMessagesErr(contents []*genai.Content) ([]chatMessage, error) {
 	return msgs, nil
 }
 
+// extractFunctionResponseContent extracts JSON content from a FunctionResponse.
+// It expects exactly one Part with InlineData containing valid JSON.
+// Returns the content as a string suitable for OpenAI's tool message content field.
+func extractFunctionResponseContent(fr *genai.FunctionResponse) (string, error) {
+	if fr.ID == "" {
+		return "", ErrEmptyToolCallID
+	}
+	if len(fr.Parts) == 0 {
+		return "", ErrEmptyFunctionResponseParts
+	}
+
+	// For text/JSON-only responses, expect exactly one part
+	if len(fr.Parts) != 1 {
+		return "", fmt.Errorf("expected exactly 1 part, got %d", len(fr.Parts))
+	}
+
+	part := fr.Parts[0]
+	if part.InlineData == nil {
+		return "", ErrMissingInlineData
+	}
+
+	if part.InlineData.MIMEType != "application/json" {
+		return "", fmt.Errorf("%w: got %q", ErrInvalidMIMEType, part.InlineData.MIMEType)
+	}
+
+	if !json.Valid(part.InlineData.Data) {
+		return "", ErrInvalidJSONData
+	}
+
+	return string(part.InlineData.Data), nil
+}
+
 // openAIRole translates a genai content role to the corresponding OpenAI role.
 func openAIRole(genaiRole string) string {
 	if genaiRole == "model" {
@@ -223,14 +265,13 @@ func contentToMessages(c *genai.Content) ([]chatMessage, error) {
 		// the content as-is — thought text is included as normal text in the message.
 		switch {
 		case p.FunctionResponse != nil:
-			responseJSON, err := json.Marshal(p.FunctionResponse.Response)
+			content, err := extractFunctionResponseContent(p.FunctionResponse)
 			if err != nil {
-				return nil, fmt.Errorf("marshal function response: %w", err)
+				return nil, fmt.Errorf("extract function response: %w", err)
 			}
 			toolMsgs = append(toolMsgs, chatMessage{
 				Role:       "tool",
-				Content:    string(responseJSON),
-				Name:       p.FunctionResponse.Name,
+				Content:    content,
 				ToolCallID: p.FunctionResponse.ID,
 			})
 		case p.FunctionCall != nil:

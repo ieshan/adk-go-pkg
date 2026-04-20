@@ -375,3 +375,129 @@ func TestSave_AbsolutePath(t *testing.T) {
 		t.Fatal("expected error for absolute path filename, got nil")
 	}
 }
+
+// TestGetArtifactVersion_Latest verifies that GetArtifactVersion returns
+// metadata for the latest version when Version is 0.
+func TestGetArtifactVersion_Latest(t *testing.T) {
+	svc := newService(t)
+	ctx := context.Background()
+
+	// Save two versions
+	_, err := svc.Save(ctx, &artifact.SaveRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "test.txt",
+		Part:      &genai.Part{Text: "version 0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Save(ctx, &artifact.SaveRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "test.txt",
+		Part:      &genai.Part{Text: "version 1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get latest version (Version: 0)
+	resp, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "test.txt",
+		Version:   0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.ArtifactVersion == nil {
+		t.Fatal("expected ArtifactVersion, got nil")
+	}
+	if resp.ArtifactVersion.Version != 1 {
+		t.Errorf("expected version 1 (latest), got %d", resp.ArtifactVersion.Version)
+	}
+	if resp.ArtifactVersion.MimeType != "text/plain" {
+		t.Errorf("expected MIME type text/plain, got %q", resp.ArtifactVersion.MimeType)
+	}
+	if resp.ArtifactVersion.CanonicalURI == "" {
+		t.Error("expected non-empty CanonicalURI")
+	}
+}
+
+// TestGetArtifactVersion_SpecificVersion verifies that GetArtifactVersion
+// returns metadata for a specific version.
+func TestGetArtifactVersion_SpecificVersion(t *testing.T) {
+	svc := newService(t)
+	ctx := context.Background()
+
+	// Save a version
+	_, err := svc.Save(ctx, &artifact.SaveRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "test.txt",
+		Part:      &genai.Part{Text: "version 0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get specific version 0
+	resp, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "test.txt",
+		Version:   0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.ArtifactVersion.Version != 0 {
+		t.Errorf("expected version 0, got %d", resp.ArtifactVersion.Version)
+	}
+}
+
+// TestGetArtifactVersion_NotFound verifies that GetArtifactVersion returns
+// an error when the artifact does not exist.
+func TestGetArtifactVersion_NotFound(t *testing.T) {
+	svc := newService(t)
+	ctx := context.Background()
+
+	_, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "nonexistent.txt",
+		Version:   0,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent artifact, got nil")
+	}
+}
+
+// TestGetArtifactVersion_InvalidFileName verifies that GetArtifactVersion
+// validates the filename and rejects path traversal attempts.
+func TestGetArtifactVersion_InvalidFileName(t *testing.T) {
+	svc := newService(t)
+	ctx := context.Background()
+
+	_, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "../secret.txt",
+		Version:   0,
+	})
+	if err == nil {
+		t.Fatal("expected error for path traversal filename, got nil")
+	}
+}

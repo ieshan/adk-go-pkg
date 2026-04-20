@@ -253,6 +253,19 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println("saved version:", resp.Version)
+
+	// Get artifact version metadata without loading content
+	versionResp, err := svc.GetArtifactVersion(context.Background(), &artifact.GetArtifactVersionRequest{
+		AppName:   "myapp",
+		UserID:    "alice",
+		SessionID: "session-1",
+		FileName:  "report.txt",
+		Version:   0, // 0 means latest
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("MIME type:", versionResp.ArtifactVersion.MimeType)
 }
 ```
 
@@ -326,7 +339,13 @@ func main() {
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
-- **ADK-Go** (`google.golang.org/adk`)
+- **ADK-Go v1.1.0** (`google.golang.org/adk`)
+- **GenAI v1.54.0** (`google.golang.org/genai`)
+
+## Recent Changes
+
+- **OpenAI Model Provider**: Updated to support genai v1.54.0 `FunctionResponse.Parts` structure for function calling compatibility
+- **File Artifact Service**: Added `GetArtifactVersion` method for ADK-Go v1.1.0 compatibility, enabling metadata retrieval without loading full content
 
 ## Dependencies
 

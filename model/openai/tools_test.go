@@ -296,47 +296,6 @@ func TestToolCallsToFunctionCalls_Parallel(t *testing.T) {
 	}
 }
 
-// TestFunctionResponseToMessage verifies that a genai FunctionResponse is
-// converted to the correct OpenAI "tool" role chatMessage, including the Name field.
-func TestFunctionResponseToMessage(t *testing.T) {
-	fr := &genai.FunctionResponse{
-		ID:   "call_abc123",
-		Name: "get_weather",
-		Response: map[string]any{
-			"temperature": 22.5,
-			"condition":   "sunny",
-		},
-	}
-
-	msg := functionResponseToMessage(fr)
-
-	if msg.Role != "tool" {
-		t.Errorf("Role: got %q, want %q", msg.Role, "tool")
-	}
-	if msg.ToolCallID != "call_abc123" {
-		t.Errorf("ToolCallID: got %q, want %q", msg.ToolCallID, "call_abc123")
-	}
-	if msg.Name != "get_weather" {
-		t.Errorf("Name: got %q, want %q", msg.Name, "get_weather")
-	}
-
-	contentStr, ok := msg.Content.(string)
-	if !ok {
-		t.Fatalf("Content is not string: %T", msg.Content)
-	}
-
-	var response map[string]any
-	if err := json.Unmarshal([]byte(contentStr), &response); err != nil {
-		t.Fatalf("Content is not valid JSON: %v", err)
-	}
-	if response["temperature"] != 22.5 {
-		t.Errorf("response.temperature: got %v, want %v", response["temperature"], 22.5)
-	}
-	if response["condition"] != "sunny" {
-		t.Errorf("response.condition: got %v, want %q", response["condition"], "sunny")
-	}
-}
-
 // TestToolCallsToFunctionCalls_InvalidJSON verifies that tool calls with
 // invalid JSON arguments are silently skipped while valid ones are still
 // processed. This exercises the graceful-degradation path in

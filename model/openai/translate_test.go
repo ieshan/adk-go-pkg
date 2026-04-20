@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -102,9 +103,16 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 			Parts: []*genai.Part{
 				{
 					FunctionResponse: &genai.FunctionResponse{
-						ID:       "call_abc123",
-						Name:     "get_weather",
-						Response: map[string]any{"temperature": 72},
+						ID:   "call_abc123",
+						Name: "get_weather",
+						Parts: []*genai.FunctionResponsePart{
+							{
+								InlineData: &genai.FunctionResponseBlob{
+									MIMEType: "application/json",
+									Data:     []byte(`{"temperature": 72}`),
+								},
+							},
+						},
 					},
 				},
 			},
@@ -126,8 +134,17 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 	if msg.ToolCallID != "call_abc123" {
 		t.Errorf("tool_call_id: got %q, want %q", msg.ToolCallID, "call_abc123")
 	}
-	if msg.Name != "get_weather" {
-		t.Errorf("name: got %q, want %q", msg.Name, "get_weather")
+	// Verify content contains valid JSON with expected data
+	content, ok := msg.Content.(string)
+	if !ok {
+		t.Fatalf("content: expected string, got %T", msg.Content)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		t.Fatalf("content is not valid JSON: %v", err)
+	}
+	if result["temperature"] != float64(72) {
+		t.Errorf("temperature: got %v, want %v", result["temperature"], 72)
 	}
 }
 
@@ -568,5 +585,100 @@ func TestContentsToMessages_NilEntries(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Errorf("expected 1 message (skipping nils), got %d", len(msgs))
+	}
+}
+
+// TestContentsToMessages_FunctionResponse_NoParts verifies that a FunctionResponse
+// with empty Parts returns an error.
+func TestContentsToMessages_FunctionResponse_NoParts(t *testing.T) {
+	contents := []*genai.Content{
+		{
+			Role: "user",
+			Parts: []*genai.Part{
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:    "call_abc123",
+						Name:  "get_weather",
+						Parts: []*genai.FunctionResponsePart{},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := contentsToMessagesErr(contents)
+	if err == nil {
+		t.Fatal("expected error for empty Parts, got nil")
+	}
+	if !errors.Is(err, ErrEmptyFunctionResponseParts) {
+		t.Errorf("expected ErrEmptyFunctionResponseParts, got: %v", err)
+	}
+}
+
+// TestContentsToMessages_FunctionResponse_EmptyID verifies that a FunctionResponse
+// with empty ID returns an error.
+func TestContentsToMessages_FunctionResponse_EmptyID(t *testing.T) {
+	contents := []*genai.Content{
+		{
+			Role: "user",
+			Parts: []*genai.Part{
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:   "",
+						Name: "get_weather",
+						Parts: []*genai.FunctionResponsePart{
+							{
+								InlineData: &genai.FunctionResponseBlob{
+									MIMEType: "application/json",
+									Data:     []byte(`{"temperature": 72}`),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := contentsToMessagesErr(contents)
+	if err == nil {
+		t.Fatal("expected error for empty ID, got nil")
+	}
+	if !errors.Is(err, ErrEmptyToolCallID) {
+		t.Errorf("expected ErrEmptyToolCallID, got: %v", err)
+	}
+}
+
+// TestContentsToMessages_FunctionResponse_InvalidJSON verifies that a FunctionResponse
+// with invalid JSON data returns an error.
+func TestContentsToMessages_FunctionResponse_InvalidJSON(t *testing.T) {
+	contents := []*genai.Content{
+		{
+			Role: "user",
+			Parts: []*genai.Part{
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:   "call_abc123",
+						Name: "get_weather",
+						Parts: []*genai.FunctionResponsePart{
+							{
+								InlineData: &genai.FunctionResponseBlob{
+									MIMEType: "application/json",
+									Data:     []byte(`{invalid json}`),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := contentsToMessagesErr(contents)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+	if !errors.Is(err, ErrInvalidJSONData) {
+		t.Errorf("expected ErrInvalidJSONData, got: %v", err)
 	}
 }

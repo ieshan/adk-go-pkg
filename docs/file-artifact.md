@@ -175,6 +175,45 @@ for _, v := range versResp.Versions {
 }
 ```
 
+### Get Artifact Version Metadata
+
+Retrieve metadata for a specific artifact version without loading the full content:
+
+```go
+// Get latest version metadata (Version: 0 means latest)
+versionResp, err := svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+    AppName:   "myapp",
+    UserID:    "alice",
+    SessionID: "session-1",
+    FileName:  "report.txt",
+    Version:   0,
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Println("version:", versionResp.ArtifactVersion.Version)
+fmt.Println("created at:", versionResp.ArtifactVersion.CreateTime)
+fmt.Println("MIME type:", versionResp.ArtifactVersion.MimeType)
+fmt.Println("canonical URI:", versionResp.ArtifactVersion.CanonicalURI)
+
+// Get specific version metadata
+versionResp, err = svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionRequest{
+    AppName:   "myapp",
+    UserID:    "alice",
+    SessionID: "session-1",
+    FileName:  "report.txt",
+    Version:   2,
+})
+```
+
+The `ArtifactVersion` contains:
+- `Version`: The version number
+- `CreateTime`: Unix timestamp (seconds with fractional part)
+- `MimeType`: The MIME type of the stored content
+- `CanonicalURI`: A deterministic URI identifier for the artifact
+- `CustomMetadata`: Optional user-defined metadata map
+
 ### User-Scoped Artifacts
 
 Prefix the filename with `user:` to store artifacts outside any session:
