@@ -1,5 +1,8 @@
 # adk-go-pkg
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/ieshan/adk-go-pkg.svg)](https://pkg.go.dev/github.com/ieshan/adk-go-pkg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ieshan/adk-go-pkg)](https://goreportcard.com/report/github.com/ieshan/adk-go-pkg)
+
 Extension library for Google's ADK-Go.
 
 `adk-go-pkg` provides production-ready building blocks that complement
