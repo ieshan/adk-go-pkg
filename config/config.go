@@ -7,6 +7,27 @@
 // Configuration files can be stored as .json, .yaml, or .yml files and loaded with [Load],
 // or parsed directly from byte slices with [Parse].
 //
+// # Agent Skills
+//
+// Agents can be configured with skillsets—specialized instruction sets stored in
+// SKILL.md files with YAML frontmatter. Skills extend agent capabilities without
+// requiring code changes.
+//
+// To configure skills, add a skillsets section to your agent config:
+//
+//	name: my-agent
+//	type: llm
+//	skillsets:
+//	  - name: filesystem
+//	    config:
+//	      path: "./skills"
+//	    preload: complete
+//
+// The built-in "filesystem" skill factory reads skills from disk. Register custom
+// factories via [Registry.RegisterSkill] for cloud storage or other sources.
+//
+// See [SkillsetRef] for configuration details and [SkillFactory] for creating custom sources.
+//
 // # Loading a file
 //
 //	cfg, err := config.Load("agents/my-agent.yaml")
@@ -39,27 +60,36 @@ import (
 )
 
 // AgentConfig holds the declarative configuration for a single agent.
-// It supports hierarchical definitions via [AgentConfig.SubAgents].
+// It supports hierarchical definitions via [AgentConfig.SubAgents] and now skill integration
+// via [AgentConfig.Skillsets].
 //
-// Example YAML:
+// An agent with skills can discover and use specialized instruction sets
+// defined in SKILL.md files. Skills extend agent capabilities without
+// requiring code changes to the agent itself.
+//
+// Example YAML with skills:
 //
 //	name: my-agent
 //	type: llm
-//	model: gemini/gemini-2.0-flash
+//	model: gemini/gemini-2.5-flash
 //	instruction: "You are a helpful assistant."
+//	skillsets:
+//	  - name: filesystem
+//	    config:
+//	      path: "./skills"
 //	tools:
 //	  - name: search
-//	generateConfig:
-//	  temperature: 0.7
+//
+// See [SkillsetRef] for skill configuration details.
 type AgentConfig struct {
 	// Name is the unique identifier for this agent.
 	Name string `json:"name" yaml:"name"`
 
-	// Type describes the agent kind (e.g. "llm", "sequential", "loop").
+	// Type describes the agent kind: "llm", "sequential", "parallel", or "loop".
 	Type string `json:"type" yaml:"type"`
 
-	// Model is an optional model reference in the form "prefix/model-id"
-	// (e.g. "gemini/gemini-2.0-flash" or "openai/gpt-4o").
+	// Model is an optional model reference in the form "prefix/model-id".
+	// Required for "llm" type agents.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
 	// Instruction is an optional system-level prompt for the agent.
@@ -71,10 +101,22 @@ type AgentConfig struct {
 	// Tools lists the tool references available to this agent.
 	Tools []ToolRef `json:"tools,omitempty" yaml:"tools,omitempty"`
 
+	// Skillsets lists skill source references available to this agent.
+	// Optional. Each skillset becomes a tool.Toolset via skilltoolset.New()
+	// and provides the agent with access to specialized instruction sets.
+	//
+	// Skillsets are resolved during Build() using the Registry's SkillFactory
+	// registrations. The built-in "filesystem" factory reads skills from disk.
+	// Custom factories can be registered for cloud storage sources.
+	//
+	// Skills and tools work together: tools provide executable capabilities,
+	// while skills provide domain-specific instructions and knowledge.
+	Skillsets []SkillsetRef `json:"skillsets,omitempty" yaml:"skillsets,omitempty"`
+
 	// SubAgents holds nested child agent configurations.
 	SubAgents []AgentConfig `json:"subAgents,omitempty" yaml:"subAgents,omitempty"`
 
-	// GenerateConfig contains arbitrary generation parameters (temperature, topP, …)
+	// GenerateConfig contains arbitrary generation parameters (temperature, topP, etc.)
 	// that are translated to [genai.GenerateContentConfig] by [TranslateGenerateConfig].
 	GenerateConfig map[string]any `json:"generateConfig,omitempty" yaml:"generateConfig,omitempty"`
 
@@ -96,6 +138,108 @@ type ToolRef struct {
 
 	// Config holds tool-specific settings passed to the [ToolFactory] at resolve time.
 	Config map[string]any `json:"config,omitempty" yaml:"config,omitempty"`
+}
+
+// SkillsetRef identifies a skill source by name with optional configuration.
+// It is similar to ToolRef but for skill sources that become SkillToolsets
+// via the skilltoolset package.
+//
+// Skillsets provide agents with access to specialized instruction sets stored
+// as SKILL.md files with YAML frontmatter. The agent can list available skills,
+// load skill instructions, and access skill resources (references/, assets/).
+//
+// Example YAML configurations:
+//
+// Wildcard loading (all skills from source):
+//
+//	skillsets:
+//	  - name: filesystem
+//	    config:
+//	      path: "./skills"
+//	    preload: complete
+//	  - name: gcs
+//	    config:
+//	      bucket: "my-org-skills"
+//	      prefix: "production/"
+//	    preload: frontmatters
+//	    systemInstruction: "Custom skill guidance for this agent."
+//
+// Specific skill loading (only selected skills):
+//
+//	skillsets:
+//	  - name: filesystem
+//	    config:
+//	      path: "./skills"
+//	    names: ["weather", "cooking"]  // Only these 2 skills visible
+//	    preload: frontmatters
+//
+// The Name field references a registered SkillFactory in the Registry.
+// Built-in factories include "filesystem". Additional factories can be
+// registered via Registry.RegisterSkill for custom sources (GCS, S3, etc.).
+//
+// Use the Names field to restrict an agent to specific skills from a source,
+// improving both security (agent can't see other skills) and performance
+// (filtered skills are not loaded during preload).
+type SkillsetRef struct {
+	// Name is the registered SkillFactory identifier.
+	// Required. Must match a factory registered with Registry.RegisterSkill.
+	// Built-in: "filesystem".
+	Name string `json:"name" yaml:"name"`
+
+	// Config holds skill-source-specific settings passed to the SkillFactory.
+	// Optional. Recognized keys depend on the source type:
+	//
+	//   - "filesystem": {"path": "./skills"} - relative or absolute path
+	//   - "gcs": {"bucket": "my-bucket", "prefix": "skills/"} - GCS bucket
+	//
+	// The "path" key is required for filesystem sources.
+	Config map[string]any `json:"config,omitempty" yaml:"config,omitempty"`
+
+	// Preload strategy for optimizing skill access at initialization time.
+	// Optional. Default is "" (no preload).
+	//
+	// Valid values:
+	//   - "" (empty): No preload, query skills on-demand (lowest memory, slowest access)
+	//   - "complete": Load all skills (frontmatters, instructions, resources) into memory.
+	//                 Fastest access after init. Highest memory usage. Longest init time.
+	//   - "frontmatters": Load only skill frontmatters into memory. Balanced option.
+	//                     Skill instructions/resources loaded on-demand.
+	//
+	// Use "complete" for small skill sets or when fast response is critical.
+	// Use "frontmatters" for large skill sets where listing skills is frequent.
+	// Use "" (default) for very large skill sets where memory is constrained.
+	Preload string `json:"preload,omitempty" yaml:"preload,omitempty"`
+
+	// Names is a list of specific skill names to include from the source.
+	// Optional. If empty, all skills from the source are available (wildcard).
+	// If specified, only these exact skill names will be visible to the agent.
+	//
+	// Use this to restrict an agent to a subset of skills from a larger source.
+	// For example, to only allow "weather" and "cooking" skills from a folder
+	// containing 20+ skills.
+	//
+	// Example:
+	//
+	//	skillsets:
+	//	  - name: filesystem
+	//	    config:
+	//	      path: "./skills"
+	//	    names: ["weather", "cooking"]  // Only 2 skills visible
+	//
+	// The filtering happens at the source level - filtered skills are completely
+	// hidden (do not appear in list_skills output) and are not preloaded.
+	// This is more efficient than wildcard loading with runtime filtering.
+	Names []string `json:"names,omitempty" yaml:"names,omitempty"`
+
+	// SystemInstruction overrides the default skill system instruction.
+	// Optional. If empty, skilltoolset uses its default instruction that
+	// explains skill usage patterns (list skills, load skill, load resources).
+	//
+	// Custom instructions should explain:
+	//   - When to use skills vs other tools
+	//   - Any skill-specific conventions
+	//   - Resource handling preferences
+	SystemInstruction string `json:"systemInstruction,omitempty" yaml:"systemInstruction,omitempty"`
 }
 
 // Load reads an agent configuration from a file at path.

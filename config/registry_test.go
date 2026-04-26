@@ -1,10 +1,15 @@
 package config_test
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/skilltoolset/skill"
 
 	"github.com/ieshan/adk-go-pkg/config"
 )
@@ -162,4 +167,147 @@ func TestRegistry_MultipleTools(t *testing.T) {
 	if t2.Name() != "calculator" {
 		t.Errorf("t2.Name: got %q", t2.Name())
 	}
+}
+
+// TestRegistry_RegisterSkill verifies skill factory registration and resolution.
+func TestRegistry_RegisterSkill(t *testing.T) {
+	r := config.NewRegistry()
+
+	var receivedCfg map[string]any
+	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
+		receivedCfg = cfg
+		return stubSkillSource{}, nil
+	})
+
+	source, err := r.ResolveSkill("memory", map[string]any{"data": "test"})
+	if err != nil {
+		t.Fatalf("ResolveSkill: %v", err)
+	}
+	if source == nil {
+		t.Fatal("got nil skill source")
+	}
+	if receivedCfg == nil {
+		t.Fatal("factory not called")
+	}
+	if receivedCfg["data"] != "test" {
+		t.Errorf("receivedCfg[data]: got %v, want test", receivedCfg["data"])
+	}
+}
+
+// TestRegistry_RegisterSkill_Overwrite verifies overwriting existing skill factory.
+func TestRegistry_RegisterSkill_Overwrite(t *testing.T) {
+	r := config.NewRegistry()
+
+	var firstCalled, secondCalled bool
+	r.RegisterSkill("test", func(cfg map[string]any) (skill.Source, error) {
+		firstCalled = true
+		return stubSkillSource{}, nil
+	})
+	r.RegisterSkill("test", func(cfg map[string]any) (skill.Source, error) {
+		secondCalled = true
+		return stubSkillSource{}, nil
+	})
+
+	_, err := r.ResolveSkill("test", nil)
+	if err != nil {
+		t.Fatalf("ResolveSkill: %v", err)
+	}
+
+	if firstCalled {
+		t.Error("first factory was called, expected second to overwrite")
+	}
+	if !secondCalled {
+		t.Error("second factory was not called")
+	}
+}
+
+// TestRegistry_ResolveSkill_NotFound verifies error for unregistered skill name.
+func TestRegistry_ResolveSkill_NotFound(t *testing.T) {
+	r := config.NewRegistry()
+	_, err := r.ResolveSkill("unknown-skill", nil)
+	if err == nil {
+		t.Fatal("expected error for unknown skill, got nil")
+	}
+}
+
+// TestRegistry_ResolveSkill_FactoryError verifies error propagation from factory.
+func TestRegistry_ResolveSkill_FactoryError(t *testing.T) {
+	r := config.NewRegistry()
+
+	r.RegisterSkill("failing", func(cfg map[string]any) (skill.Source, error) {
+		return stubSkillSource{}, fmt.Errorf("factory error")
+	})
+
+	_, err := r.ResolveSkill("failing", nil)
+	if err == nil {
+		t.Fatal("expected error from factory, got nil")
+	}
+}
+
+// TestRegistry_ResolveSkill_MultipleSkills verifies multiple skill factories coexist.
+func TestRegistry_ResolveSkill_MultipleSkills(t *testing.T) {
+	r := config.NewRegistry()
+
+	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
+		return stubSkillSource{name: "memory"}, nil
+	})
+	r.RegisterSkill("gcs", func(cfg map[string]any) (skill.Source, error) {
+		return stubSkillSource{name: "gcs"}, nil
+	})
+
+	s1, err := r.ResolveSkill("memory", nil)
+	if err != nil {
+		t.Fatalf("ResolveSkill memory: %v", err)
+	}
+	if s1.(stubSkillSource).name != "memory" {
+		t.Errorf("s1.name: got %q", s1.(stubSkillSource).name)
+	}
+
+	s2, err := r.ResolveSkill("gcs", nil)
+	if err != nil {
+		t.Fatalf("ResolveSkill gcs: %v", err)
+	}
+	if s2.(stubSkillSource).name != "gcs" {
+		t.Errorf("s2.name: got %q", s2.(stubSkillSource).name)
+	}
+}
+
+// TestNewRegistry_BuiltinSkills verifies built-in filesystem factory is registered.
+func TestNewRegistry_BuiltinSkills(t *testing.T) {
+	r := config.NewRegistry()
+
+	// The filesystem factory should be registered by default.
+	// It will fail without a valid path, but we can verify it's registered
+	// by checking that it attempts to resolve the path.
+	_, err := r.ResolveSkill("filesystem", map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing path, got nil")
+	}
+	// Error should mention the missing path requirement.
+	if !strings.Contains(err.Error(), "path") {
+		t.Errorf("error should mention 'path', got: %v", err)
+	}
+}
+
+// stubSkillSource is a test double for skill.Source.
+type stubSkillSource struct {
+	name string
+}
+
+// Ensure stubSkillSource implements skill.Source interface.
+// We only need to stub the interface, not implement all methods fully.
+func (s stubSkillSource) ListFrontmatters(ctx context.Context) ([]*skill.Frontmatter, error) {
+	return nil, nil
+}
+func (s stubSkillSource) ListResources(ctx context.Context, name, subpath string) ([]string, error) {
+	return nil, nil
+}
+func (s stubSkillSource) LoadFrontmatter(ctx context.Context, name string) (*skill.Frontmatter, error) {
+	return nil, nil
+}
+func (s stubSkillSource) LoadInstructions(ctx context.Context, name string) (string, error) {
+	return "", nil
+}
+func (s stubSkillSource) LoadResource(ctx context.Context, name, resourcePath string) (io.ReadCloser, error) {
+	return nil, nil
 }

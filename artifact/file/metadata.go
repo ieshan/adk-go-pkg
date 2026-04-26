@@ -1,10 +1,3 @@
-// Package file provides a file-system backed implementation of the ADK-Go
-// artifact storage service.
-//
-// Artifacts are stored as individual files on disk, each version in its own
-// subdirectory. A metadata.json sidecar file is written alongside every
-// artifact version so that the service can reconstruct version history and
-// rich metadata without scanning binary content.
 package file
 
 import (

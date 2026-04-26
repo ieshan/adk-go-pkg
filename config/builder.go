@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 
 	"google.golang.org/adk/agent"
@@ -9,6 +10,8 @@ import (
 	"google.golang.org/adk/agent/workflowagents/parallelagent"
 	"google.golang.org/adk/agent/workflowagents/sequentialagent"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/skilltoolset"
+	"google.golang.org/adk/tool/skilltoolset/skill"
 	"google.golang.org/genai"
 )
 
@@ -98,7 +101,7 @@ func buildSubAgents(configs []AgentConfig, reg *Registry) ([]agent.Agent, error)
 	return agents, nil
 }
 
-// buildLLMAgent resolves the model and tools then delegates to llmagent.New.
+// buildLLMAgent resolves the model, tools, and skillsets then delegates to llmagent.New.
 func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
 	llm, err := reg.ResolveModel(cfg.Model, cfg.GenerateConfig)
 	if err != nil {
@@ -112,6 +115,38 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name, err)
 		}
 		tools = append(tools, t)
+	}
+
+	// Resolve skillsets to tool.Toolset instances.
+	var toolsets []tool.Toolset
+	for _, ref := range cfg.Skillsets {
+		source, err := reg.ResolveSkill(ref.Name, ref.Config)
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name, ref.Name, err)
+		}
+
+		// Apply name-based filtering if specific skills are requested.
+		// This happens before preload so filtered skills are not loaded.
+		if len(ref.Names) > 0 {
+			source = NewFilteredSource(source, ref.Names)
+		}
+
+		// Apply preload proxy if specified.
+		// When Names is set, only the selected skills are preloaded (more efficient).
+		ctx := context.Background() // Use background for init; consider making this configurable.
+		source, err = applyPreload(ctx, source, ref.Preload)
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name, ref.Name, err)
+		}
+
+		skillToolset, err := skilltoolset.New(ctx, skilltoolset.Config{
+			Source:            source,
+			SystemInstruction: ref.SystemInstruction,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name, ref.Name, err)
+		}
+		toolsets = append(toolsets, skillToolset)
 	}
 
 	// Translate the optional generate config map.
@@ -128,10 +163,45 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 		Description:           cfg.Description,
 		Model:                 llm,
 		Tools:                 tools,
+		Toolsets:              toolsets,
 		Instruction:           cfg.Instruction,
 		SubAgents:             subAgents,
 		GenerateContentConfig: gc,
 	})
+}
+
+// applyPreload wraps a skill.Source with a preload proxy based on the strategy.
+//
+// Preload strategies optimize skill access patterns by loading data into memory
+// at initialization time rather than on-demand. This trades memory for latency.
+//
+// Strategies:
+//   - "": Returns base source unchanged. Skills loaded on-demand. Lowest memory,
+//     highest latency for first access to each skill.
+//   - "complete": Loads all skill data (frontmatters, instructions, resources)
+//     into memory. Fastest access after initialization. Highest memory usage.
+//     Best for small skill sets (<100MB) where fast response is critical.
+//   - "frontmatters": Loads only skill frontmatters (metadata) into memory.
+//     Balanced option. Skill instructions/resources loaded on-demand.
+//     Best when listing skills is frequent but loading individual skills is rare.
+//
+// The context is used during the initial load. Cancellation during preload will
+// return an error, but the returned source (if any) should not be used.
+//
+// Returns an error if the strategy is unrecognized or if preload fails.
+func applyPreload(ctx context.Context, base skill.Source, strategy string) (skill.Source, error) {
+	switch strategy {
+	case "":
+		return base, nil
+	case "complete":
+		source, _, err := skill.WithCompletePreloadSource(ctx, base)
+		return source, err
+	case "frontmatters":
+		source, _, err := skill.WithFrontmatterPreloadSource(ctx, base)
+		return source, err
+	default:
+		return nil, fmt.Errorf("unknown preload strategy %q (valid: '', 'complete', 'frontmatters')", strategy)
+	}
 }
 
 // buildSequentialAgent delegates to sequentialagent.New.

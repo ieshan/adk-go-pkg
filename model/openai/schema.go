@@ -1,5 +1,3 @@
-// Package openai provides adapters and helpers for integrating ADK-Go agents
-// with OpenAI-compatible APIs, including schema translation utilities.
 package openai
 
 import "google.golang.org/genai"

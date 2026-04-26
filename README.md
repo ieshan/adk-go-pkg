@@ -17,7 +17,8 @@ out of the box.
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
 | **File Artifact Service** | Filesystem-backed `artifact.Service` with automatic versioning and metadata sidecars. |
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
-| **Config Agent Loader** | Declare entire agent trees in YAML/JSON and build them at runtime via a factory registry. |
+| **Config Agent Loader** | Declare entire agent trees in YAML/JSON and build them at runtime via a factory registry. Now includes Agent Skills support. |
+| **Agent Skills Config** | Declarative skill integration via YAML/JSON. Supports filesystem sources with preload optimization and specific skill loading (wildcard or filtered by name). |
 
 ## Installation
 
@@ -336,14 +337,57 @@ func main() {
 
 [Detailed docs &rarr;](docs/config-agent.md)
 
+### Agent Skills Config
+
+```go
+package main
+
+import (
+	"log"
+
+	"github.com/ieshan/adk-go-pkg/config"
+)
+
+func main() {
+	reg := config.NewRegistry()
+	// Filesystem skill factory is built-in, no registration needed
+
+	// Load agent with skills from YAML
+	agent, err := config.LoadAndBuild("agents/skills-agent.yaml", reg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Agent now has access to skills defined in ./skills/
+}
+```
+
+**Example YAML configuration:**
+
+```yaml
+name: skills-agent
+type: llm
+model: gemini/gemini-2.5-flash
+instruction: "You are a helpful assistant with access to specialized skills."
+skillsets:
+  - name: filesystem
+    config:
+      path: "./skills"
+    preload: complete
+    # Optional: load only specific skills instead of all
+    # names: ["weather", "cooking"]
+```
+
+[Detailed docs &rarr;](docs/skills-config.md)
+
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
-- **ADK-Go v1.1.0** (`google.golang.org/adk`)
+- **ADK-Go v1.2.0+** (`google.golang.org/adk`) — Required for Agent Skills support
 - **GenAI v1.54.0** (`google.golang.org/genai`)
 
 ## Recent Changes
 
+- **Agent Skills Config**: New skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name). Requires ADK-Go v1.2.0+.
 - **OpenAI Model Provider**: Updated to support genai v1.54.0 `FunctionResponse.Parts` structure for function calling compatibility
 - **File Artifact Service**: Added `GetArtifactVersion` method for ADK-Go v1.1.0 compatibility, enabling metadata retrieval without loading full content
 

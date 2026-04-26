@@ -92,6 +92,93 @@ portion of the model ref after the first `/`.
 type ToolFactory func(cfg map[string]any) (tool.Tool, error)
 ```
 
+## Skillsets
+
+Skillsets provide agents with access to specialized instruction sets stored in
+SKILL.md files. Each skill is a directory containing:
+
+- `SKILL.md` (required): YAML frontmatter + markdown instructions
+- `references/` (optional): Additional documentation
+- `assets/` (optional): Templates and resources
+- `scripts/` (optional): Executable scripts (future support)
+
+### SkillsetRef Schema
+
+```go
+type SkillsetRef struct {
+    Name              string         // Factory name (e.g., "filesystem")
+    Config            map[string]any // Factory-specific config
+    Names             []string       // Optional: specific skills to load (default: all)
+    Preload           string         // "", "complete", or "frontmatters"
+    SystemInstruction string         // Optional custom instruction
+}
+```
+
+### Preload Strategies
+
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| `""` (default) | Load on-demand | Large skill sets, memory-constrained |
+| `"complete"` | Load all data at init | Small skill sets, fast response needed |
+| `"frontmatters"` | Load metadata only | Balanced, frequent skill listing |
+
+### YAML Examples
+
+**Basic filesystem skills:**
+```yaml
+name: my-agent
+type: llm
+skillsets:
+  - name: filesystem
+    config:
+      path: "./skills"
+```
+
+**Preloaded skills with custom instruction:**
+```yaml
+skillsets:
+  - name: filesystem
+    config:
+      path: "/app/skills"
+    preload: complete
+    systemInstruction: "Use these skills for domain-specific tasks."
+```
+
+**Multiple skill sources:**
+```yaml
+skillsets:
+  - name: filesystem
+    config:
+      path: "./local-skills"
+    preload: frontmatters
+  - name: gcs
+    config:
+      bucket: "org-skills"
+      prefix: "shared/"
+```
+
+**Specific skills only (filtering):**
+```yaml
+skillsets:
+  - name: filesystem
+    config:
+      path: "./skills"  # Folder has 20+ skills
+    names:              # But agent only sees these 2:
+      - "weather"
+      - "cooking"
+    preload: frontmatters
+```
+
+### Registering Custom Skill Factories
+
+```go
+reg.RegisterSkill("s3", func(cfg map[string]any) (skill.Source, error) {
+    bucket := cfg["bucket"].(string)
+    // Create S3-based skill source...
+    return s3Source, nil
+})
+```
+
 ## Loading and Building
 
 ### Load
