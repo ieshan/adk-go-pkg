@@ -21,6 +21,7 @@ out of the box.
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
 | **Config Agent Loader** | Declare entire agent trees in YAML/JSON and build them at runtime via a factory registry. Now includes Agent Skills support. |
 | **Agent Skills Config** | Declarative skill integration via YAML/JSON. Supports filesystem sources with preload optimization and specific skill loading (wildcard or filtered by name). |
+| **Test Utilities** | Complete fake implementations of all ADK-Go interfaces for deterministic testing without external LLM providers. Includes FakeLLM, FakeAgent, FakeSession, and RunnerBuilder. |
 
 ## Installation
 
@@ -349,6 +350,55 @@ skillsets:
 
 [Detailed docs &rarr;](docs/skills-config.md)
 
+### Test Utilities
+
+```go
+package main
+
+import (
+    "testing"
+
+    "github.com/ieshan/adk-go-pkg/testutil"
+    "google.golang.org/adk/agent"
+    "google.golang.org/adk/llmagent"
+    "google.golang.org/adk/runner"
+    "google.golang.org/genai"
+)
+
+func TestMyAgent(t *testing.T) {
+    // Create fake LLM with preconfigured responses
+    llm := testutil.NewFakeLLM(
+        testutil.NewTextResponse("I'll help you!"),
+    )
+
+    // Build agent with fake LLM
+    ag, _ := llmagent.New(llmagent.Config{
+        Name:  "test-agent",
+        Model: llm,
+        Instruction: "You are helpful.",
+    })
+
+    // Use RunnerBuilder for end-to-end testing
+    r, fakes, _ := testutil.NewRunnerBuilder().
+        WithAgent(ag).
+        BuildWithFakes()
+
+    // Run and collect events
+    events, _ := testutil.CollectEvents(r.Run(ctx, "user-1", "session-1",
+        genai.NewContentFromText("Hello", "user"), agent.RunConfig{}))
+
+    // Assert on results and calls
+    if len(events) == 0 {
+        t.Error("expected events")
+    }
+    if fakes.SessionService.AppendEventCount() == 0 {
+        t.Error("expected events to be appended")
+    }
+}
+```
+
+[Detailed docs &rarr;](docs/testutil.md)
+
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
@@ -357,6 +407,7 @@ skillsets:
 
 ## Recent Changes
 
+- **Test Utilities**: New `testutil` package with fake implementations of all ADK-Go interfaces (FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, RunnerBuilder). Enables fast, deterministic testing without external LLM providers. See [docs/testutil.md](docs/testutil.md).
 - **Agent Skills Config**: New skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name). Requires ADK-Go v1.2.0+.
 - **OpenAI Model Provider**: Updated to support genai v1.54.0 `FunctionResponse.Parts` structure for function calling compatibility
 - **File Artifact Service**: Added `GetArtifactVersion` method for ADK-Go v1.1.0 compatibility, enabling metadata retrieval without loading full content

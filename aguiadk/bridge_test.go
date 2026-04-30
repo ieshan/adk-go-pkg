@@ -10,33 +10,13 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 
 	"github.com/ieshan/adk-go-pkg/aguiadk"
+	"github.com/ieshan/adk-go-pkg/testutil"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
-
-// makeAgent creates a simple ADK agent that yields the given events.
-func makeAgent(name string, events []*session.Event) agent.Agent {
-	a, err := agent.New(agent.Config{
-		Name:        name,
-		Description: "test agent",
-		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
-			return func(yield func(*session.Event, error) bool) {
-				for _, ev := range events {
-					if !yield(ev, nil) {
-						return
-					}
-				}
-			}
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return a
-}
 
 // collectEvents runs the bridge agent and collects all emitted AG-UI events.
 func collectEvents(t *testing.T, aguiAgent interface {
@@ -80,7 +60,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 	})
 
 	t.Run("both AppName and AppNameFunc", func(t *testing.T) {
-		a := makeAgent("test", nil)
+		a := testutil.NewFakeAgent("test")
 		_, err := aguiadk.New(aguiadk.Config{
 			Agent:       a,
 			AppName:     "app1",
@@ -92,7 +72,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 	})
 
 	t.Run("both UserID and UserIDFunc", func(t *testing.T) {
-		a := makeAgent("test", nil)
+		a := testutil.NewFakeAgent("test")
 		_, err := aguiadk.New(aguiadk.Config{
 			Agent:  a,
 			UserID: "user1",
@@ -106,7 +86,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 	})
 
 	t.Run("valid config", func(t *testing.T) {
-		a := makeAgent("test", nil)
+		a := testutil.NewFakeAgent("test")
 		_, err := aguiadk.New(aguiadk.Config{
 			Agent:   a,
 			AppName: "myapp",
@@ -129,7 +109,13 @@ func TestBridge_TextParts(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -176,7 +162,16 @@ func TestBridge_StreamingTextParts(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev1, ev2})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -220,7 +215,13 @@ func TestBridge_FunctionCallParts(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -258,7 +259,13 @@ func TestBridge_ThoughtParts(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -287,7 +294,7 @@ func TestBridge_ThoughtParts(t *testing.T) {
 
 func TestBridge_StateSnapshot(t *testing.T) {
 	t.Run("enabled by default", func(t *testing.T) {
-		a := makeAgent("test-agent", nil)
+		a := testutil.NewFakeAgent("test-agent")
 		bridgeAgent, err := aguiadk.New(aguiadk.Config{
 			Agent:   a,
 			AppName: "testapp",
@@ -313,7 +320,7 @@ func TestBridge_StateSnapshot(t *testing.T) {
 	})
 
 	t.Run("disabled", func(t *testing.T) {
-		a := makeAgent("test-agent", nil)
+		a := testutil.NewFakeAgent("test-agent")
 		bridgeAgent, err := aguiadk.New(aguiadk.Config{
 			Agent:             a,
 			AppName:           "testapp",
@@ -347,7 +354,13 @@ func TestBridge_StateDelta(t *testing.T) {
 	}
 	ev.Actions.StateDelta["key1"] = "value1"
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -384,7 +397,13 @@ func TestBridge_MessagesSnapshot(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:                a,
@@ -426,7 +445,13 @@ func TestBridge_MixedParts(t *testing.T) {
 		Partial: false,
 	}
 
-	a := makeAgent("test-agent", []*session.Event{ev})
+	a := testutil.NewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,
@@ -457,7 +482,7 @@ func TestBridge_MixedParts(t *testing.T) {
 
 func TestBridge_NoUserMessage(t *testing.T) {
 	// No events from agent, no user message.
-	a := makeAgent("test-agent", nil)
+	a := testutil.NewFakeAgent("test-agent")
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   a,

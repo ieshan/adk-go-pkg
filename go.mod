@@ -3,7 +3,7 @@ module github.com/ieshan/adk-go-pkg
 go 1.26
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260429194253-93441c194acc
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260430085200-5b8dee58e9b6
 	google.golang.org/adk v1.2.0
 	google.golang.org/genai v1.55.0
 	sigs.k8s.io/yaml v1.6.0

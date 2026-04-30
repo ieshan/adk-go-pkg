@@ -12,6 +12,7 @@ import (
 	"google.golang.org/adk/tool/skilltoolset/skill"
 
 	"github.com/ieshan/adk-go-pkg/config"
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
 // TestRegistry_RegisterModel verifies that a registered ModelFactory is called with the
@@ -25,7 +26,7 @@ func TestRegistry_RegisterModel(t *testing.T) {
 	var receivedCfg map[string]any
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
 		receivedCfg = cfg
-		return &stubLLM{name: cfg["model"].(string)}, nil
+		return testutil.NewFakeLLM().WithName(cfg["model"].(string)), nil
 	})
 
 	llm, err := r.ResolveModel("openai/gpt-4o", map[string]any{"temperature": 0.5})
@@ -59,7 +60,7 @@ func TestRegistry_RegisterTool(t *testing.T) {
 	var receivedCfg map[string]any
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
 		receivedCfg = cfg
-		return &stubTool{name: "search"}, nil
+		return testutil.NewFakeTool("search"), nil
 	})
 
 	got, err := r.ResolveTool("search", map[string]any{"timeout": float64(30)})
@@ -103,7 +104,7 @@ func TestRegistry_ResolveTool_NotFound(t *testing.T) {
 func TestRegistry_ResolveModel_NoPrefixSlash(t *testing.T) {
 	r := config.NewRegistry()
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
-		return &stubLLM{}, nil
+		return testutil.NewFakeLLM(), nil
 	})
 
 	// "gpt-4o" has no "/" — no matching prefix factory.
@@ -118,10 +119,10 @@ func TestRegistry_MultipleModels(t *testing.T) {
 	r := config.NewRegistry()
 
 	r.RegisterModel("gemini", func(cfg map[string]any) (model.LLM, error) {
-		return &stubLLM{name: "gemini:" + cfg["model"].(string)}, nil
+		return testutil.NewFakeLLM().WithName("gemini:" + cfg["model"].(string)), nil
 	})
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
-		return &stubLLM{name: "openai:" + cfg["model"].(string)}, nil
+		return testutil.NewFakeLLM().WithName("openai:" + cfg["model"].(string)), nil
 	})
 
 	llm1, err := r.ResolveModel("gemini/gemini-2.0-flash", nil)
@@ -146,10 +147,10 @@ func TestRegistry_MultipleTools(t *testing.T) {
 	r := config.NewRegistry()
 
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
-		return &stubTool{name: "search"}, nil
+		return testutil.NewFakeTool("search"), nil
 	})
 	r.RegisterTool("calculator", func(cfg map[string]any) (tool.Tool, error) {
-		return &stubTool{name: "calculator"}, nil
+		return testutil.NewFakeTool("calculator"), nil
 	})
 
 	t1, err := r.ResolveTool("search", nil)

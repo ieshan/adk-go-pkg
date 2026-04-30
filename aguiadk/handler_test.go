@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,14 +14,16 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
+	"github.com/ieshan/adk-go-pkg/testutil"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
 
 func TestHandler_Success(t *testing.T) {
-	adkAgent := makeAgent("test-handler", []*session.Event{})
+	adkAgent := testutil.NewFakeAgent("test-handler")
 
 	h, err := aguiadk.Handler(
 		aguiadk.Config{
@@ -64,7 +67,13 @@ func TestHandler_E2E_SSE(t *testing.T) {
 		Partial: false,
 	}
 
-	adkAgent := makeAgent("e2e-agent", []*session.Event{ev})
+	adkAgent := testutil.NewFakeAgent("e2e-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
 
 	h, err := aguiadk.Handler(
 		aguiadk.Config{

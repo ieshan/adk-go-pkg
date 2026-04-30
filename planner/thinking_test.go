@@ -2,34 +2,12 @@ package planner_test
 
 import (
 	"context"
-	"iter"
 	"strings"
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/planner"
-	"google.golang.org/adk/model"
-	"google.golang.org/genai"
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
-
-// capturingLLM is a mock model.LLM that records the last LLMRequest it received
-// and returns a fixed response string.  It is used in tests that need to
-// inspect the prompt sent to the model (e.g. ThinkingBudget tests).
-type capturingLLM struct {
-	response    string
-	lastRequest *model.LLMRequest
-}
-
-func (c *capturingLLM) Name() string { return "capturing-mock" }
-
-func (c *capturingLLM) GenerateContent(_ context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
-	c.lastRequest = req
-	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(&model.LLMResponse{
-			Content:      genai.NewContentFromText(c.response, "model"),
-			TurnComplete: true,
-		}, nil)
-	}
-}
 
 // thinkingResponseWithJSON is a response that embeds a JSON plan inside a
 // markdown code fence, mimicking a model that "thinks aloud" before producing
@@ -44,7 +22,7 @@ const thinkingResponsePlain = "I should first search the web, then summarise wha
 // ThinkingPlanner extracts the steps correctly and sets Plan.Reasoning to the
 // full model response.
 func TestThinking_GeneratePlan_Structured(t *testing.T) {
-	mock := &mockLLM{response: thinkingResponseWithJSON}
+	mock := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponseWithJSON))
 	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
 	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
@@ -82,7 +60,7 @@ func TestThinking_GeneratePlan_Structured(t *testing.T) {
 // PlanStep whose Description equals the full response text, and that
 // Plan.Reasoning is also set to the full response text.
 func TestThinking_GeneratePlan_Fallback(t *testing.T) {
-	mock := &mockLLM{response: thinkingResponsePlain}
+	mock := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
 	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
 	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
@@ -114,7 +92,7 @@ func TestThinking_GeneratePlan_Fallback(t *testing.T) {
 // ThinkingConfig, the budget value appears somewhere in the prompt sent to the
 // model.
 func TestThinking_ThinkingBudget(t *testing.T) {
-	llmCapture := &capturingLLM{response: thinkingResponsePlain}
+	llmCapture := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
 	p := planner.NewThinking(planner.ThinkingConfig{
 		Model:          llmCapture,
 		ThinkingBudget: 100,
@@ -127,13 +105,14 @@ func TestThinking_ThinkingBudget(t *testing.T) {
 		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
 	}
 
-	if llmCapture.lastRequest == nil {
-		t.Fatal("expected capturingLLM to record the request, got nil")
+	lastCall := llmCapture.LastCall()
+	if lastCall == nil {
+		t.Fatal("expected FakeLLM to record the request, got nil")
 	}
 
 	// Extract the prompt text from the first content part.
 	var promptText string
-	for _, content := range llmCapture.lastRequest.Contents {
+	for _, content := range lastCall.Contents {
 		for _, part := range content.Parts {
 			promptText += part.Text
 		}
@@ -159,7 +138,7 @@ func TestThinking_ReasoningField(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := &mockLLM{response: tc.response}
+			mock := testutil.NewFakeLLM(testutil.NewTextResponse(tc.response))
 			p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
 			plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{

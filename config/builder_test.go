@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/config"
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 )
@@ -17,11 +18,11 @@ func testRegistry() *config.Registry {
 
 	r.RegisterModel("mock", func(cfg map[string]any) (model.LLM, error) {
 		name, _ := cfg["model"].(string)
-		return &stubLLM{name: name}, nil
+		return testutil.NewFakeLLM().WithName(name), nil
 	})
 
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
-		return &stubTool{name: "search"}, nil
+		return testutil.NewFakeTool("search"), nil
 	})
 
 	return r

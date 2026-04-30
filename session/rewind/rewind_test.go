@@ -8,6 +8,7 @@ import (
 	"google.golang.org/adk/session"
 
 	"github.com/ieshan/adk-go-pkg/session/rewind"
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
 const (
@@ -58,7 +59,7 @@ func getSession(t *testing.T, ctx context.Context, svc session.Service, sessionI
 // Creates 5 events, rewinds to the 3rd (index 2), expects 3 events to remain.
 func TestRewind_ByID(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-by-id"
 
 	sess := createSession(t, ctx, svc, sessID)
@@ -96,7 +97,7 @@ func TestRewind_ByID(t *testing.T) {
 // Creates 5 events, rewinds to index 2, expects 3 events to remain.
 func TestRewind_ByIndex(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-by-index"
 
 	createSession(t, ctx, svc, sessID)
@@ -130,7 +131,7 @@ func TestRewind_ByIndex(t *testing.T) {
 // TestRewind_EventNotFound verifies that rewinding to a non-existent event ID returns an error.
 func TestRewind_EventNotFound(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-not-found"
 
 	sess := createSession(t, ctx, svc, sessID)
@@ -145,7 +146,7 @@ func TestRewind_EventNotFound(t *testing.T) {
 // TestRewind_IndexOutOfBounds verifies that rewinding to an index beyond event count returns an error.
 func TestRewind_IndexOutOfBounds(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-out-of-bounds"
 
 	createSession(t, ctx, svc, sessID)
@@ -163,7 +164,7 @@ func TestRewind_IndexOutOfBounds(t *testing.T) {
 // TestRewind_EmptySession verifies that rewinding a session with no events returns an error.
 func TestRewind_EmptySession(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-empty"
 
 	createSession(t, ctx, svc, sessID)
@@ -178,7 +179,7 @@ func TestRewind_EmptySession(t *testing.T) {
 // All events should remain.
 func TestRewind_LastEvent(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-last-event"
 
 	createSession(t, ctx, svc, sessID)
@@ -211,7 +212,7 @@ func TestRewind_LastEvent(t *testing.T) {
 // After rewinding to event 1 (index 1), state should be {"a": 1, "b": 2}.
 func TestRewind_StateRecalculation(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-state-recalc"
 
 	createSession(t, ctx, svc, sessID)
@@ -259,7 +260,7 @@ func TestRewind_StateRecalculation(t *testing.T) {
 // TestRewindToIndex_Zero verifies that rewinding to index 0 leaves only the first event.
 func TestRewindToIndex_Zero(t *testing.T) {
 	ctx := context.Background()
-	svc := session.InMemoryService()
+	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-index-zero"
 
 	createSession(t, ctx, svc, sessID)

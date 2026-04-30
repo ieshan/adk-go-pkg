@@ -2,31 +2,11 @@ package planner_test
 
 import (
 	"context"
-	"iter"
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/planner"
-	"google.golang.org/adk/model"
-	"google.golang.org/genai"
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
-
-// mockLLM is a minimal in-process mock of model.LLM that returns a fixed
-// response string. It is intentionally kept simple: no HTTP server, no
-// external dependency.
-type mockLLM struct {
-	response string
-}
-
-func (m *mockLLM) Name() string { return "mock" }
-
-func (m *mockLLM) GenerateContent(_ context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
-	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(&model.LLMResponse{
-			Content:      genai.NewContentFromText(m.response, "model"),
-			TurnComplete: true,
-		}, nil)
-	}
-}
 
 // threeStepJSON is a well-formed JSON plan with 3 steps.
 const threeStepJSON = `{
@@ -57,7 +37,7 @@ const threeStepJSON = `{
 // LLM is correctly parsed into a Plan with the expected steps and reasoning.
 func TestPlanReAct_GeneratePlan(t *testing.T) {
 	p := planner.NewPlanReAct(planner.PlanReActConfig{
-		Model:    &mockLLM{response: threeStepJSON},
+		Model:    testutil.NewFakeLLM(testutil.NewTextResponse(threeStepJSON)),
 		MaxSteps: 10,
 	})
 
@@ -119,7 +99,7 @@ func TestPlanReAct_MaxSteps(t *testing.T) {
 	fifteenStepsJSON := buildNStepsJSON(15)
 
 	p := planner.NewPlanReAct(planner.PlanReActConfig{
-		Model:    &mockLLM{response: fifteenStepsJSON},
+		Model:    testutil.NewFakeLLM(testutil.NewTextResponse(fifteenStepsJSON)),
 		MaxSteps: 5,
 	})
 
@@ -138,7 +118,7 @@ func TestPlanReAct_MaxSteps(t *testing.T) {
 // GeneratePlan to return an error.
 func TestPlanReAct_MalformedJSON(t *testing.T) {
 	p := planner.NewPlanReAct(planner.PlanReActConfig{
-		Model: &mockLLM{response: "This is not JSON at all!"},
+		Model: testutil.NewFakeLLM(testutil.NewTextResponse("This is not JSON at all!")),
 	})
 
 	_, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
@@ -167,7 +147,7 @@ func TestPlanReAct_EmptyToolDescriptions(t *testing.T) {
 }`
 
 	p := planner.NewPlanReAct(planner.PlanReActConfig{
-		Model:    &mockLLM{response: noToolJSON},
+		Model:    testutil.NewFakeLLM(testutil.NewTextResponse(noToolJSON)),
 		MaxSteps: 10,
 	})
 
