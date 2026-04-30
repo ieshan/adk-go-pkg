@@ -16,7 +16,6 @@ out of the box.
 | **OpenAI Model Provider** | Drop-in `model.LLM` adapter for any OpenAI-compatible API (OpenAI, Ollama, LiteLLM, OpenRouter, vLLM, Together AI). |
 | **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management, tool orchestration, middleware, and SSE handler. Zero ADK dependency. |
 | **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, and client tool proxy. |
-| **Event Compaction** | Pluggable strategies (truncation, LLM summarisation) for keeping session event histories within token budgets. |
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
 | **File Artifact Service** | Filesystem-backed `artifact.Service` with automatic versioning and metadata sidecars. |
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
@@ -152,38 +151,6 @@ func main() {
 ```
 
 [Detailed docs &rarr;](docs/aguiadk-bridge.md)
-
-### Event Compaction
-
-```go
-package main
-
-import (
-	"context"
-	"log"
-
-	"github.com/ieshan/adk-go-pkg/compaction"
-	"google.golang.org/adk/session"
-)
-
-func main() {
-	tr := compaction.NewTruncation(20)
-	cfg := compaction.Config{
-		Strategy:   tr,
-		MaxEvents:  100,
-		KeepRecent: 20,
-	}
-
-	var events []*session.Event // from your session
-	compacted, err := compaction.Apply(context.Background(), cfg, events)
-	if err != nil {
-		log.Fatal(err)
-	}
-	_ = compacted
-}
-```
-
-[Detailed docs &rarr;](docs/compaction.md)
 
 ### Planners
 
