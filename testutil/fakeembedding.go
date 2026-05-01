@@ -114,6 +114,19 @@ func (f *FakeEmbedding) Embed(ctx context.Context, text string) ([]float32, erro
 	return generateDeterministicEmbedding(text, dim), nil
 }
 
+// FakeEmbed generates a deterministic 1536-dim float32 vector from text.
+// This is a convenience function for simple test cases that don't need the full
+// FakeEmbedding struct capabilities. Uses SHA-256 hash for reproducibility.
+//
+// Example:
+//
+//	obs := &adapter.Observation{
+//	    Embedding: testutil.FakeEmbed("test content"),
+//	}
+func FakeEmbed(text string) []float32 {
+	return generateDeterministicEmbedding(text, 1536)
+}
+
 // generateDeterministicEmbedding creates a reproducible float32 vector from text.
 // Uses SHA-256 hash of the text to seed the vector values.
 func generateDeterministicEmbedding(text string, dim int) []float32 {
