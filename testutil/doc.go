@@ -1,17 +1,3 @@
-// Copyright 2025 ieshan
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 // Package testutil provides fake implementations of ADK-Go interfaces for
 // deterministic testing without external LLM providers.
 //
@@ -24,6 +10,7 @@
 //   - FakeArtifactService: implements artifact.Service with in-memory storage
 //   - FakeMemoryService: implements memory.Service with configurable search
 //   - FakeSessionService: implements session.Service with call tracking
+//   - FakeEmbedding: generates deterministic embedding vectors for testing semantic search
 //   - RunnerBuilder: constructs runner.Runner with all fakes pre-wired
 //
 // All fakes support the builder pattern for configuration, record calls for

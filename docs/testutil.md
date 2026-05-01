@@ -409,6 +409,56 @@ assert.Equal(t, 1, fakes.ArtifactService.SaveCount())
 - `ArtifactService *FakeArtifactService`
 - `MemoryService *FakeMemoryService`
 
+### FakeEmbedding
+
+Generates deterministic embedding vectors for testing semantic search and memory systems without calling external embedding APIs:
+
+```go
+fake := testutil.NewFakeEmbedding()
+
+// Generate embedding
+vec, err := fake.Embed(ctx, "hello world")
+if err != nil {
+    log.Fatal(err)
+}
+// vec is []float32 with 1536 dimensions (default)
+
+// Use with memory kit for semantic search testing
+kit, err := memory.New(memory.KitConfig{
+    Storage:       storage,
+    EmbeddingFunc: fake.AsFunc(),
+})
+
+// Configure custom dimension (e.g., for different embedding models)
+fake384 := testutil.NewFakeEmbedding().WithDimension(384)
+vec, _ := fake384.Embed(ctx, "test")
+// vec has 384 dimensions
+
+// Preconfigure specific embeddings for known texts
+fake.WithPrecomputedEmbedding("user query", []float32{0.1, 0.2, 0.3})
+vec, _ := fake.Embed(ctx, "user query") // Returns {0.1, 0.2, 0.3}
+```
+
+**Features:**
+- Deterministic: same text always produces same vector (using SHA-256 hashing)
+- Thread-safe: safe for concurrent use in parallel tests
+- Configurable: custom dimensions, precomputed embeddings, error injection
+- Call recording: tracks all Embed calls for assertions
+
+**Deterministic Generation:**
+Vectors are generated deterministically from the input text using SHA-256 hashing. This means:
+- Tests are reproducible across runs
+- Same text produces identical embeddings
+- Different texts produce different embeddings
+- No randomness, no external API calls
+
+**Assertions:**
+```go
+assert.Equal(t, 2, fake.CallCount())
+assert.Equal(t, "hello world", fake.LastCall())
+calls := fake.Calls() // []string{"first", "second"}
+```
+
 ## Helper Functions
 
 ### Content Builders
