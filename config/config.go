@@ -49,14 +49,15 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"go.yaml.in/yaml/v4"
 	"google.golang.org/genai"
-	"sigs.k8s.io/yaml"
 )
 
 // AgentConfig holds the declarative configuration for a single agent.
@@ -275,6 +276,7 @@ func Load(path string) (*AgentConfig, error) {
 
 // Parse decodes raw bytes into an [AgentConfig].
 // The format parameter must be "json" or "yaml" (case-insensitive).
+// YAML parsing uses strict validation - unknown fields will produce errors.
 //
 // Example — JSON:
 //
@@ -291,7 +293,9 @@ func Parse(data []byte, format string) (*AgentConfig, error) {
 			return nil, fmt.Errorf("config.Parse JSON: %w", err)
 		}
 	case "yaml":
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&cfg); err != nil {
 			return nil, fmt.Errorf("config.Parse YAML: %w", err)
 		}
 	default:
