@@ -254,7 +254,7 @@ func main() {
     reg := config.NewRegistry()
 
     // Load agent with skills from YAML
-    agent, err := config.LoadAndBuild("agents/skills-agent.yaml", reg)
+    agent, err := config.LoadAndBuild(ctx, "agents/skills-agent.yaml", reg)
     if err != nil {
         log.Fatal(err)
     }

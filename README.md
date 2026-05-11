@@ -279,6 +279,7 @@ func main() {
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/config"
@@ -298,7 +299,7 @@ func main() {
 		return nil, nil
 	})
 
-	agent, err := config.LoadAndBuild("agents/root.yaml", reg)
+	agent, err := config.LoadAndBuild(context.Background(), "agents/root.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -314,6 +315,7 @@ func main() {
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/config"
@@ -324,7 +326,7 @@ func main() {
 	// Filesystem skill factory is built-in, no registration needed
 
 	// Load agent with skills from YAML
-	agent, err := config.LoadAndBuild("agents/skills-agent.yaml", reg)
+	agent, err := config.LoadAndBuild(context.Background(), "agents/skills-agent.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}

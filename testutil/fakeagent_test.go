@@ -11,15 +11,15 @@ import (
 )
 
 func TestFakeAgent_Name(t *testing.T) {
-	f := NewFakeAgent("my-agent")
+	f := MustNewFakeAgent("my-agent")
 	if f.Name() != "my-agent" {
 		t.Errorf("Name() = %q, want %q", f.Name(), "my-agent")
 	}
 }
 
 func TestFakeAgent_SubAgents(t *testing.T) {
-	child := NewFakeAgent("child")
-	parent := NewFakeAgent("parent").WithSubAgents(child)
+	child := MustNewFakeAgent("child")
+	parent := MustNewFakeAgent("parent").WithSubAgents(child)
 
 	subs := parent.SubAgents()
 	if len(subs) != 1 || subs[0].Name() != "child" {
@@ -38,7 +38,7 @@ func TestFakeAgent_SubAgents(t *testing.T) {
 }
 
 func TestFakeAgent_RunTracking(t *testing.T) {
-	f := NewFakeAgent("tracker")
+	f := MustNewFakeAgent("tracker")
 	ic := NewFakeInvocationContext()
 
 	events, err := CollectEvents(f.Run(ic))
@@ -57,7 +57,7 @@ func TestFakeAgent_RunTracking(t *testing.T) {
 }
 
 func TestFakeAgent_WithRunFunc(t *testing.T) {
-	f := NewFakeAgent("custom").
+	f := MustNewFakeAgent("custom").
 		WithRunFunc(func(ic agent.InvocationContext) iter.Seq2[*session.Event, error] {
 			return func(yield func(*session.Event, error) bool) {
 				yield(NewTextEvent("custom", "hello"), nil)
@@ -78,7 +78,7 @@ func TestFakeAgent_WithRunFunc(t *testing.T) {
 }
 
 func TestFakeAgent_Reset(t *testing.T) {
-	f := NewFakeAgent("reset")
+	f := MustNewFakeAgent("reset")
 	ic := NewFakeInvocationContext()
 	_, _ = CollectEvents(f.Run(ic))
 	_, _ = CollectEvents(f.Run(ic))

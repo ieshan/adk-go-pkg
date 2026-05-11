@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,21 +10,16 @@ import (
 
 // TestLoad_JSON verifies that Load correctly reads and parses a JSON config file.
 func TestLoad_JSON(t *testing.T) {
-	cfg := config.AgentConfig{
-		Name:        "my-agent",
-		Type:        "llm",
-		Model:       "gemini/gemini-2.0-flash",
-		Instruction: "You are helpful.",
-		Description: "A helpful assistant",
-		Tools: []config.ToolRef{
-			{Name: "search", Config: map[string]any{"timeout": float64(30)}},
-		},
-	}
-
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	data := []byte(`{
+		"name": "my-agent",
+		"type": "llm",
+		"model": "gemini/gemini-2.0-flash",
+		"instruction": "You are helpful.",
+		"description": "A helpful assistant",
+		"tools": [
+			{"name": "search", "config": {"timeout": 30}}
+		]
+	}`)
 
 	f, err := os.CreateTemp(t.TempDir(), "agent-*.json")
 	if err != nil {
@@ -40,23 +34,28 @@ func TestLoad_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Name != cfg.Name {
-		t.Errorf("Name: got %q, want %q", got.Name, cfg.Name)
+	if got.Name() != "my-agent" {
+		t.Errorf("Name: got %q, want %q", got.Name(), "my-agent")
 	}
-	if got.Type != cfg.Type {
-		t.Errorf("Type: got %q, want %q", got.Type, cfg.Type)
+	if got.Type() != "llm" {
+		t.Errorf("Type: got %q, want %q", got.Type(), "llm")
 	}
-	if got.Model != cfg.Model {
-		t.Errorf("Model: got %q, want %q", got.Model, cfg.Model)
+
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
 	}
-	if got.Instruction != cfg.Instruction {
-		t.Errorf("Instruction: got %q, want %q", got.Instruction, cfg.Instruction)
+	if llmCfg.Model != "gemini/gemini-2.0-flash" {
+		t.Errorf("Model: got %q, want %q", llmCfg.Model, "gemini/gemini-2.0-flash")
 	}
-	if got.Description != cfg.Description {
-		t.Errorf("Description: got %q, want %q", got.Description, cfg.Description)
+	if llmCfg.Instruction != "You are helpful." {
+		t.Errorf("Instruction: got %q, want %q", llmCfg.Instruction, "You are helpful.")
 	}
-	if len(got.Tools) != 1 || got.Tools[0].Name != "search" {
-		t.Errorf("Tools: got %v, want [{search ...}]", got.Tools)
+	if llmCfg.BaseAgentConfig.Description != "A helpful assistant" {
+		t.Errorf("Description: got %q, want %q", llmCfg.BaseAgentConfig.Description, "A helpful assistant")
+	}
+	if len(llmCfg.Tools) != 1 || llmCfg.Tools[0].Name != "search" {
+		t.Errorf("Tools: got %v, want [{search ...}]", llmCfg.Tools)
 	}
 }
 
@@ -78,33 +77,9 @@ subAgents:
     model: gemini/gemini-pro
 `)
 
-	f, err := os.CreateTemp(t.TempDir(), "agent-*.yaml")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
-	}
-	if _, err := f.Write(yamlData); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	_ = f.Close()
-
-	got, err := config.Load(f.Name())
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got.Name != "yaml-agent" {
-		t.Errorf("Name: got %q, want %q", got.Name, "yaml-agent")
-	}
-	if got.Type != "sequential" {
-		t.Errorf("Type: got %q, want %q", got.Type, "sequential")
-	}
-	if got.Model != "openai/gpt-4o" {
-		t.Errorf("Model: got %q, want %q", got.Model, "openai/gpt-4o")
-	}
-	if len(got.Tools) != 1 || got.Tools[0].Name != "calculator" {
-		t.Errorf("Tools: got %v", got.Tools)
-	}
-	if len(got.SubAgents) != 1 || got.SubAgents[0].Name != "sub1" {
-		t.Errorf("SubAgents: got %v", got.SubAgents)
+	_, err := config.Parse(yamlData, "yaml")
+	if err == nil {
+		t.Fatal("expected error for sequential agent with LLM fields, got nil")
 	}
 }
 
@@ -125,24 +100,41 @@ func TestLoad_YML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Name != "yml-agent" {
-		t.Errorf("Name: got %q, want %q", got.Name, "yml-agent")
+	if got.Name() != "yml-agent" {
+		t.Errorf("Name: got %q, want %q", got.Name(), "yml-agent")
+	}
+	if got.Type() != "llm" {
+		t.Errorf("Type: got %q, want %q", got.Type(), "llm")
+	}
+}
+
+// TestParse_UnknownType verifies that Parse returns an error for unknown agent types.
+func TestParse_UnknownType(t *testing.T) {
+	data := []byte("name: unknown-agent\ntype: unknown\n")
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for unknown type, got nil")
 	}
 }
 
 // TestParse_JSON verifies Parse with explicit "json" format.
 func TestParse_JSON(t *testing.T) {
-	data := []byte(`{"name":"parse-json","type":"llm","model":"gemini/gemini-pro","maxIterations":5}`)
+	data := []byte(`{"name":"parse-json","type":"llm","model":"gemini/gemini-pro"}`)
 
 	got, err := config.Parse(data, "json")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if got.Name != "parse-json" {
-		t.Errorf("Name: got %q, want %q", got.Name, "parse-json")
+	if got.Name() != "parse-json" {
+		t.Errorf("Name: got %q, want %q", got.Name(), "parse-json")
 	}
-	if got.MaxIterations != 5 {
-		t.Errorf("MaxIterations: got %d, want 5", got.MaxIterations)
+
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if llmCfg.Model != "gemini/gemini-pro" {
+		t.Errorf("Model: got %q, want gemini/gemini-pro", llmCfg.Model)
 	}
 }
 
@@ -154,11 +146,16 @@ func TestParse_YAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if got.Name != "parse-yaml" {
-		t.Errorf("Name: got %q, want %q", got.Name, "parse-yaml")
+	if got.Name() != "parse-yaml" {
+		t.Errorf("Name: got %q, want %q", got.Name(), "parse-yaml")
 	}
-	if got.MaxIterations != 10 {
-		t.Errorf("MaxIterations: got %d, want 10", got.MaxIterations)
+
+	loopCfg, ok := got.(*config.LoopAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LoopAgentConfig, got %T", got)
+	}
+	if loopCfg.MaxIterations != 10 {
+		t.Errorf("MaxIterations: got %d, want 10", loopCfg.MaxIterations)
 	}
 }
 
@@ -215,21 +212,24 @@ subAgents:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if got.Name != "root" {
-		t.Errorf("Name: got %q, want root", got.Name)
+	if got.Name() != "root" {
+		t.Errorf("Name: got %q, want root", got.Name())
 	}
-	if len(got.SubAgents) != 2 {
-		t.Fatalf("SubAgents len: got %d, want 2", len(got.SubAgents))
+	if got.Type() != "sequential" {
+		t.Errorf("Type: got %q, want sequential", got.Type())
 	}
-	child1 := got.SubAgents[0]
-	if child1.Name != "child1" {
-		t.Errorf("child1 Name: got %q, want child1", child1.Name)
+	if len(got.SubAgents()) != 2 {
+		t.Fatalf("SubAgents len: got %d, want 2", len(got.SubAgents()))
 	}
-	if len(child1.SubAgents) != 1 || child1.SubAgents[0].Name != "grandchild" {
-		t.Errorf("grandchild: got %v", child1.SubAgents)
+	child1 := got.SubAgents()[0]
+	if child1.Name() != "child1" {
+		t.Errorf("child1 Name: got %q, want child1", child1.Name())
 	}
-	if got.SubAgents[1].Name != "child2" {
-		t.Errorf("child2 Name: got %q, want child2", got.SubAgents[1].Name)
+	if len(child1.SubAgents()) != 1 || child1.SubAgents()[0].Name() != "grandchild" {
+		t.Errorf("grandchild: got %v", child1.SubAgents())
+	}
+	if got.SubAgents()[1].Name() != "child2" {
+		t.Errorf("child2 Name: got %q, want child2", got.SubAgents()[1].Name())
 	}
 }
 
@@ -314,11 +314,15 @@ skillsets:
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(got.Skillsets) != 1 {
-		t.Fatalf("Skillsets: got %d, want 1", len(got.Skillsets))
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if len(llmCfg.Skillsets) != 1 {
+		t.Fatalf("Skillsets: got %d, want 1", len(llmCfg.Skillsets))
 	}
 
-	s := got.Skillsets[0]
+	s := llmCfg.Skillsets[0]
 	if s.Name != "filesystem" {
 		t.Errorf("Name: got %q, want filesystem", s.Name)
 	}
@@ -358,11 +362,15 @@ func TestSkillsetRef_ParseJSON(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(got.Skillsets) != 1 {
-		t.Fatalf("Skillsets: got %d, want 1", len(got.Skillsets))
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if len(llmCfg.Skillsets) != 1 {
+		t.Fatalf("Skillsets: got %d, want 1", len(llmCfg.Skillsets))
 	}
 
-	s := got.Skillsets[0]
+	s := llmCfg.Skillsets[0]
 	if s.Name != "filesystem" {
 		t.Errorf("Name: got %q, want filesystem", s.Name)
 	}
@@ -390,11 +398,15 @@ skillsets:
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(got.Skillsets) != 1 {
-		t.Fatalf("Skillsets: got %d, want 1", len(got.Skillsets))
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if len(llmCfg.Skillsets) != 1 {
+		t.Fatalf("Skillsets: got %d, want 1", len(llmCfg.Skillsets))
 	}
 
-	s := got.Skillsets[0]
+	s := llmCfg.Skillsets[0]
 	if s.Name != "filesystem" {
 		t.Errorf("Name: got %q, want filesystem", s.Name)
 	}
@@ -428,11 +440,15 @@ skillsets:
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(got.Skillsets) != 1 {
-		t.Fatalf("Skillsets: got %d, want 1", len(got.Skillsets))
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if len(llmCfg.Skillsets) != 1 {
+		t.Fatalf("Skillsets: got %d, want 1", len(llmCfg.Skillsets))
 	}
 
-	s := got.Skillsets[0]
+	s := llmCfg.Skillsets[0]
 	if len(s.Names) != 2 {
 		t.Errorf("Names len: got %d, want 2", len(s.Names))
 	}
@@ -469,15 +485,20 @@ skillsets:
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if got.Name != "agent-with-skills" {
-		t.Errorf("Name: got %q, want agent-with-skills", got.Name)
+	if got.Name() != "agent-with-skills" {
+		t.Errorf("Name: got %q, want agent-with-skills", got.Name())
 	}
-	if len(got.Skillsets) != 2 {
-		t.Fatalf("Skillsets: got %d, want 2", len(got.Skillsets))
+
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if len(llmCfg.Skillsets) != 2 {
+		t.Fatalf("Skillsets: got %d, want 2", len(llmCfg.Skillsets))
 	}
 
 	// Check first skillset
-	s1 := got.Skillsets[0]
+	s1 := llmCfg.Skillsets[0]
 	if s1.Name != "filesystem" {
 		t.Errorf("Skillset[0].Name: got %q, want filesystem", s1.Name)
 	}
@@ -486,7 +507,7 @@ skillsets:
 	}
 
 	// Check second skillset
-	s2 := got.Skillsets[1]
+	s2 := llmCfg.Skillsets[1]
 	if s2.Name != "gcs" {
 		t.Errorf("Skillset[1].Name: got %q, want gcs", s2.Name)
 	}
@@ -495,5 +516,134 @@ skillsets:
 	}
 	if len(s2.Names) != 1 || s2.Names[0] != "shared-skill" {
 		t.Errorf("Skillset[1].Names: got %v, want [shared-skill]", s2.Names)
+	}
+}
+
+// TestParse_LLMAgent_WithTransferFlags_JSON verifies JSON parsing of transfer flags.
+func TestParse_LLMAgent_WithTransferFlags_JSON(t *testing.T) {
+	data := []byte(`{"name":"transfer-agent","type":"llm","model":"gemini/gemini-pro","disallowTransferToParent":true,"disallowTransferToPeers":true}`)
+
+	got, err := config.Parse(data, "json")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if !llmCfg.DisallowTransferToParent {
+		t.Errorf("DisallowTransferToParent: got false, want true")
+	}
+	if !llmCfg.DisallowTransferToPeers {
+		t.Errorf("DisallowTransferToPeers: got false, want true")
+	}
+}
+
+// TestParse_LLMAgent_WithTransferFlags_YAML verifies YAML parsing of transfer flags.
+func TestParse_LLMAgent_WithTransferFlags_YAML(t *testing.T) {
+	data := []byte(`
+name: transfer-agent
+type: llm
+model: gemini/gemini-pro
+disallowTransferToParent: true
+disallowTransferToPeers: true
+`)
+
+	got, err := config.Parse(data, "yaml")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	llmCfg, ok := got.(*config.LLMAgentConfig)
+	if !ok {
+		t.Fatalf("expected *LLMAgentConfig, got %T", got)
+	}
+	if !llmCfg.DisallowTransferToParent {
+		t.Errorf("DisallowTransferToParent: got false, want true")
+	}
+	if !llmCfg.DisallowTransferToPeers {
+		t.Errorf("DisallowTransferToPeers: got false, want true")
+	}
+}
+
+// TestParse_LLMAgent_WithMaxIterations_ReturnsError verifies that maxIterations on LLM agent errors.
+func TestParse_LLMAgent_WithMaxIterations_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-llm
+type: llm
+model: gemini/gemini-pro
+maxIterations: 5
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for maxIterations on llm agent, got nil")
+	}
+}
+
+// TestParse_SequentialWithModel_ReturnsError verifies that model on sequential agent errors.
+func TestParse_SequentialWithModel_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-seq
+type: sequential
+model: openai/gpt-4o
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for model on sequential agent, got nil")
+	}
+}
+
+// TestParse_SequentialWithTransferFlags_ReturnsError verifies that transfer flags on sequential agent errors.
+func TestParse_SequentialWithTransferFlags_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-seq
+type: sequential
+disallowTransferToParent: true
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for disallowTransferToParent on sequential agent, got nil")
+	}
+}
+
+// TestParse_ParallelWithTools_ReturnsError verifies that tools on parallel agent errors.
+func TestParse_ParallelWithTools_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-parallel
+type: parallel
+tools:
+  - name: search
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for tools on parallel agent, got nil")
+	}
+}
+
+// TestParse_LoopWithModel_ReturnsError verifies that model on loop agent errors.
+func TestParse_LoopWithModel_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-loop
+type: loop
+model: openai/gpt-4o
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for model on loop agent, got nil")
+	}
+}
+
+// TestParse_LoopWithTools_ReturnsError verifies that tools on loop agent errors.
+func TestParse_LoopWithTools_ReturnsError(t *testing.T) {
+	data := []byte(`
+name: bad-loop
+type: loop
+tools:
+  - name: search
+`)
+	_, err := config.Parse(data, "yaml")
+	if err == nil {
+		t.Fatal("expected error for tools on loop agent, got nil")
 	}
 }

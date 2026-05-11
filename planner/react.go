@@ -137,7 +137,7 @@ func (p *PlanReActPlanner) GeneratePlan(ctx context.Context, input *PlanRequest)
 		},
 	}
 
-	var responseText string
+	var responseText strings.Builder
 	var callErr error
 
 	for resp, err := range p.cfg.Model.GenerateContent(ctx, req, false) {
@@ -150,7 +150,7 @@ func (p *PlanReActPlanner) GeneratePlan(ctx context.Context, input *PlanRequest)
 		}
 		for _, part := range resp.Content.Parts {
 			if part.Text != "" {
-				responseText += part.Text
+				responseText.WriteString(part.Text)
 			}
 		}
 	}
@@ -158,7 +158,7 @@ func (p *PlanReActPlanner) GeneratePlan(ctx context.Context, input *PlanRequest)
 		return nil, fmt.Errorf("planner: model call failed: %w", callErr)
 	}
 
-	plan, err := parsePlanJSON(responseText)
+	plan, err := parsePlanJSON(responseText.String())
 	if err != nil {
 		return nil, fmt.Errorf("planner: failed to parse plan JSON: %w", err)
 	}

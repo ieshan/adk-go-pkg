@@ -76,11 +76,12 @@ func (b *RunnerBuilder) Build() (*runner.Runner, error) {
 		return nil, fmt.Errorf("testutil: RunnerBuilder requires an agent")
 	}
 	return runner.New(runner.Config{
-		AppName:         b.appName,
-		Agent:           b.ag,
-		SessionService:  b.sessionSvc,
-		ArtifactService: b.artifactSvc,
-		MemoryService:   b.memorySvc,
+		AppName:           b.appName,
+		Agent:             b.ag,
+		SessionService:    b.sessionSvc,
+		ArtifactService:   b.artifactSvc,
+		MemoryService:     b.memorySvc,
+		AutoCreateSession: b.autoCreate,
 	})
 }
 
@@ -119,9 +120,8 @@ type RunnerFakes struct {
 //
 // This is the simplest way to test an agent end-to-end with a FakeLLM.
 func RunAgent(ctx context.Context, ag agent.Agent, llm model.LLM, userMsg string, responses ...model.LLMResponse) ([]*session.Event, error) {
-	fakeLLM := llm.(*FakeLLM)
-	if fakeLLM == nil {
-		return nil, fmt.Errorf("testutil: RunAgent requires a *FakeLLM")
+	if _, ok := llm.(*FakeLLM); !ok {
+		return nil, fmt.Errorf("testutil: RunAgent requires a *FakeLLM, got %T", llm)
 	}
 
 	sessionSvc := NewFakeSessionService()

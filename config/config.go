@@ -34,7 +34,7 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	fmt.Println(cfg.Name)
+//	fmt.Println(cfg.Name())
 //
 // # Parsing bytes
 //
@@ -60,70 +60,75 @@ import (
 	"google.golang.org/genai"
 )
 
-// AgentConfig holds the declarative configuration for a single agent.
-// It supports hierarchical definitions via [AgentConfig.SubAgents] and now skill integration
-// via [AgentConfig.Skillsets].
-//
-// An agent with skills can discover and use specialized instruction sets
-// defined in SKILL.md files. Skills extend agent capabilities without
-// requiring code changes to the agent itself.
-//
-// Example YAML with skills:
-//
-//	name: my-agent
-//	type: llm
-//	model: gemini/gemini-2.5-flash
-//	instruction: "You are a helpful assistant."
-//	skillsets:
-//	  - name: filesystem
-//	    config:
-//	      path: "./skills"
-//	tools:
-//	  - name: search
-//
-// See [SkillsetRef] for skill configuration details.
-type AgentConfig struct {
-	// Name is the unique identifier for this agent.
-	Name string `json:"name" yaml:"name"`
-
-	// Type describes the agent kind: "llm", "sequential", "parallel", or "loop".
-	Type string `json:"type" yaml:"type"`
-
-	// Model is an optional model reference in the form "prefix/model-id".
-	// Required for "llm" type agents.
-	Model string `json:"model,omitempty" yaml:"model,omitempty"`
-
-	// Instruction is an optional system-level prompt for the agent.
-	Instruction string `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-
-	// Description provides a human-readable summary of the agent's purpose.
-	Description string `json:"description,omitempty" yaml:"description,omitempty"`
-
-	// Tools lists the tool references available to this agent.
-	Tools []ToolRef `json:"tools,omitempty" yaml:"tools,omitempty"`
-
-	// Skillsets lists skill source references available to this agent.
-	// Optional. Each skillset becomes a tool.Toolset via skilltoolset.New()
-	// and provides the agent with access to specialized instruction sets.
-	//
-	// Skillsets are resolved during Build() using the Registry's SkillFactory
-	// registrations. The built-in "filesystem" factory reads skills from disk.
-	// Custom factories can be registered for cloud storage sources.
-	//
-	// Skills and tools work together: tools provide executable capabilities,
-	// while skills provide domain-specific instructions and knowledge.
-	Skillsets []SkillsetRef `json:"skillsets,omitempty" yaml:"skillsets,omitempty"`
-
-	// SubAgents holds nested child agent configurations.
-	SubAgents []AgentConfig `json:"subAgents,omitempty" yaml:"subAgents,omitempty"`
-
-	// GenerateConfig contains arbitrary generation parameters (temperature, topP, etc.)
-	// that are translated to [genai.GenerateContentConfig] by [TranslateGenerateConfig].
-	GenerateConfig map[string]any `json:"generateConfig,omitempty" yaml:"generateConfig,omitempty"`
-
-	// MaxIterations limits the number of execution iterations for loop-type agents.
-	MaxIterations int `json:"maxIterations,omitempty" yaml:"maxIterations,omitempty"`
+// AgentConfig is the sealed interface for all declarative agent configurations.
+// Only types defined in this package can implement it.
+type AgentConfig interface {
+	Type() string
+	Name() string
+	Description() string
+	SubAgents() []AgentConfig
+	isAgentConfig() // sealed
 }
+
+// BaseAgentConfig holds fields common to every agent type.
+// It is embedded (with json/yaml inline) into each concrete config.
+type BaseAgentConfig struct {
+	Name        string        `json:"name" yaml:"name"`
+	Description string        `json:"description,omitempty" yaml:"description,omitempty"`
+	SubAgents   []AgentConfig `json:"subAgents,omitempty" yaml:"subAgents,omitempty"`
+}
+
+// LLMAgentConfig is the typed config for "llm" agents.
+type LLMAgentConfig struct {
+	BaseAgentConfig          `json:",inline" yaml:",inline"`
+	Model                    string         `json:"model,omitempty" yaml:"model,omitempty"`
+	Instruction              string         `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	Tools                    []ToolRef      `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Skillsets                []SkillsetRef  `json:"skillsets,omitempty" yaml:"skillsets,omitempty"`
+	GenerateConfig           map[string]any `json:"generateConfig,omitempty" yaml:"generateConfig,omitempty"`
+	DisallowTransferToParent bool           `json:"disallowTransferToParent,omitempty" yaml:"disallowTransferToParent,omitempty"`
+	DisallowTransferToPeers  bool           `json:"disallowTransferToPeers,omitempty" yaml:"disallowTransferToPeers,omitempty"`
+}
+
+func (c *LLMAgentConfig) Name() string             { return c.BaseAgentConfig.Name }
+func (c *LLMAgentConfig) Description() string      { return c.BaseAgentConfig.Description }
+func (c *LLMAgentConfig) SubAgents() []AgentConfig { return c.BaseAgentConfig.SubAgents }
+func (*LLMAgentConfig) Type() string               { return "llm" }
+func (*LLMAgentConfig) isAgentConfig()             {}
+
+// SequentialAgentConfig is the typed config for "sequential" agents.
+type SequentialAgentConfig struct {
+	BaseAgentConfig `json:",inline" yaml:",inline"`
+}
+
+func (c *SequentialAgentConfig) Name() string             { return c.BaseAgentConfig.Name }
+func (c *SequentialAgentConfig) Description() string      { return c.BaseAgentConfig.Description }
+func (c *SequentialAgentConfig) SubAgents() []AgentConfig { return c.BaseAgentConfig.SubAgents }
+func (*SequentialAgentConfig) Type() string               { return "sequential" }
+func (*SequentialAgentConfig) isAgentConfig()             {}
+
+// ParallelAgentConfig is the typed config for "parallel" agents.
+type ParallelAgentConfig struct {
+	BaseAgentConfig `json:",inline" yaml:",inline"`
+}
+
+func (c *ParallelAgentConfig) Name() string             { return c.BaseAgentConfig.Name }
+func (c *ParallelAgentConfig) Description() string      { return c.BaseAgentConfig.Description }
+func (c *ParallelAgentConfig) SubAgents() []AgentConfig { return c.BaseAgentConfig.SubAgents }
+func (*ParallelAgentConfig) Type() string               { return "parallel" }
+func (*ParallelAgentConfig) isAgentConfig()             {}
+
+// LoopAgentConfig is the typed config for "loop" agents.
+type LoopAgentConfig struct {
+	BaseAgentConfig `json:",inline" yaml:",inline"`
+	MaxIterations   int `json:"maxIterations,omitempty" yaml:"maxIterations,omitempty"`
+}
+
+func (c *LoopAgentConfig) Name() string             { return c.BaseAgentConfig.Name }
+func (c *LoopAgentConfig) Description() string      { return c.BaseAgentConfig.Description }
+func (c *LoopAgentConfig) SubAgents() []AgentConfig { return c.BaseAgentConfig.SubAgents }
+func (*LoopAgentConfig) Type() string               { return "loop" }
+func (*LoopAgentConfig) isAgentConfig()             {}
 
 // ToolRef identifies a tool by name and carries optional per-instance configuration.
 //
@@ -254,7 +259,7 @@ type SkillsetRef struct {
 // Example:
 //
 //	cfg, err := config.Load("config/agent.yaml")
-func Load(path string) (*AgentConfig, error) {
+func Load(path string) (AgentConfig, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	var format string
 	switch ext {
@@ -274,6 +279,114 @@ func Load(path string) (*AgentConfig, error) {
 	return Parse(data, format)
 }
 
+// rawAgentConfig captures every possible field from JSON/YAML for polymorphic parsing.
+type rawAgentConfig struct {
+	Type        string           `json:"type" yaml:"type"`
+	Name        string           `json:"name" yaml:"name"`
+	Description string           `json:"description,omitempty" yaml:"description,omitempty"`
+	SubAgents   []rawAgentConfig `json:"subAgents,omitempty" yaml:"subAgents,omitempty"`
+
+	// LLM-only fields
+	Model                    string         `json:"model,omitempty" yaml:"model,omitempty"`
+	Instruction              string         `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	Tools                    []ToolRef      `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Skillsets                []SkillsetRef  `json:"skillsets,omitempty" yaml:"skillsets,omitempty"`
+	GenerateConfig           map[string]any `json:"generateConfig,omitempty" yaml:"generateConfig,omitempty"`
+	DisallowTransferToParent bool           `json:"disallowTransferToParent,omitempty" yaml:"disallowTransferToParent,omitempty"`
+	DisallowTransferToPeers  bool           `json:"disallowTransferToPeers,omitempty" yaml:"disallowTransferToPeers,omitempty"`
+
+	// Loop-only fields
+	MaxIterations int `json:"maxIterations,omitempty" yaml:"maxIterations,omitempty"`
+}
+
+// toAgentConfig converts a raw config to its typed AgentConfig, validating type-specific restrictions.
+func toAgentConfig(raw rawAgentConfig) (AgentConfig, error) {
+	// Recursively convert sub-agents.
+	subAgents := make([]AgentConfig, len(raw.SubAgents))
+	for i, sub := range raw.SubAgents {
+		converted, err := toAgentConfig(sub)
+		if err != nil {
+			return nil, err
+		}
+		subAgents[i] = converted
+	}
+
+	base := BaseAgentConfig{
+		Name:        raw.Name,
+		Description: raw.Description,
+		SubAgents:   subAgents,
+	}
+
+	switch raw.Type {
+	case "llm":
+		if raw.MaxIterations != 0 {
+			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "maxIterations")
+		}
+		return &LLMAgentConfig{
+			BaseAgentConfig:          base,
+			Model:                    raw.Model,
+			Instruction:              raw.Instruction,
+			Tools:                    raw.Tools,
+			Skillsets:                raw.Skillsets,
+			GenerateConfig:           raw.GenerateConfig,
+			DisallowTransferToParent: raw.DisallowTransferToParent,
+			DisallowTransferToPeers:  raw.DisallowTransferToPeers,
+		}, nil
+	case "sequential":
+		if err := validateNoLLMFields(raw, "sequential"); err != nil {
+			return nil, err
+		}
+		if raw.MaxIterations != 0 {
+			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "maxIterations")
+		}
+		return &SequentialAgentConfig{BaseAgentConfig: base}, nil
+	case "parallel":
+		if err := validateNoLLMFields(raw, "parallel"); err != nil {
+			return nil, err
+		}
+		if raw.MaxIterations != 0 {
+			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "maxIterations")
+		}
+		return &ParallelAgentConfig{BaseAgentConfig: base}, nil
+	case "loop":
+		if err := validateNoLLMFields(raw, "loop"); err != nil {
+			return nil, err
+		}
+		return &LoopAgentConfig{
+			BaseAgentConfig: base,
+			MaxIterations:   raw.MaxIterations,
+		}, nil
+	default:
+		return nil, fmt.Errorf("config.Parse: unknown agent type %q", raw.Type)
+	}
+}
+
+// validateNoLLMFields returns an error if any LLM-only field is set on a non-LLM agent.
+func validateNoLLMFields(raw rawAgentConfig, typ string) error {
+	if raw.Model != "" {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "model")
+	}
+	if raw.Instruction != "" {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "instruction")
+	}
+	if len(raw.Tools) > 0 {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "tools")
+	}
+	if len(raw.Skillsets) > 0 {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "skillsets")
+	}
+	if len(raw.GenerateConfig) > 0 {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "generateConfig")
+	}
+	if raw.DisallowTransferToParent {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "disallowTransferToParent")
+	}
+	if raw.DisallowTransferToPeers {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "disallowTransferToPeers")
+	}
+	return nil
+}
+
 // Parse decodes raw bytes into an [AgentConfig].
 // The format parameter must be "json" or "yaml" (case-insensitive).
 // YAML parsing uses strict validation - unknown fields will produce errors.
@@ -285,23 +398,23 @@ func Load(path string) (*AgentConfig, error) {
 // Example — YAML:
 //
 //	cfg, err := config.Parse([]byte("name: bot\ntype: llm\n"), "yaml")
-func Parse(data []byte, format string) (*AgentConfig, error) {
-	var cfg AgentConfig
+func Parse(data []byte, format string) (AgentConfig, error) {
+	var raw rawAgentConfig
 	switch strings.ToLower(format) {
 	case "json":
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
 			return nil, fmt.Errorf("config.Parse JSON: %w", err)
 		}
 	case "yaml":
 		dec := yaml.NewDecoder(bytes.NewReader(data))
 		dec.KnownFields(true)
-		if err := dec.Decode(&cfg); err != nil {
+		if err := dec.Decode(&raw); err != nil {
 			return nil, fmt.Errorf("config.Parse YAML: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("config.Parse: unsupported format %q (use \"json\" or \"yaml\")", format)
 	}
-	return &cfg, nil
+	return toAgentConfig(raw)
 }
 
 // TranslateGenerateConfig converts a generic key–value map into a

@@ -11,10 +11,12 @@ import (
 // GenerateID generates a random hex ID of the given byte length.
 // For example, GenerateID(16) returns a 32-character hex string.
 // Uses crypto/rand for cryptographic randomness.
-func GenerateID(byteLen int) string {
+func GenerateID(byteLen int) (string, error) {
 	b := make([]byte, byteLen)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // MustMarshal marshals v to JSON, panicking on error.

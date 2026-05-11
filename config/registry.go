@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
@@ -67,6 +68,8 @@ type SkillFactory func(cfg map[string]any) (skill.Source, error)
 // tools, and skills are referenced by name in YAML/JSON files and resolved at
 // build time.
 //
+// Registry is safe for concurrent use.
+//
 // Example:
 //
 //	r := config.NewRegistry()
@@ -74,8 +77,9 @@ type SkillFactory func(cfg map[string]any) (skill.Source, error)
 //	r.RegisterTool("search", searchFactory)
 //	r.RegisterSkill("filesystem", filesystemSkillFactory) // NEW
 //
-//	agent, err := config.LoadAndBuild("agent.yaml", r)
+//	agent, err := config.LoadAndBuild(ctx, "agent.yaml", r)
 type Registry struct {
+	mu     sync.RWMutex
 	models map[string]ModelFactory
 	tools  map[string]ToolFactory
 	skills map[string]SkillFactory // Skill factories by registered name
@@ -111,6 +115,8 @@ func NewRegistry() *Registry {
 //
 // Registering the same prefix twice overwrites the previous factory.
 func (r *Registry) RegisterModel(prefix string, factory ModelFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.models[prefix] = factory
 }
 
@@ -119,6 +125,8 @@ func (r *Registry) RegisterModel(prefix string, factory ModelFactory) {
 //
 // Registering the same name twice overwrites the previous factory.
 func (r *Registry) RegisterTool(name string, factory ToolFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[name] = factory
 }
 
@@ -142,6 +150,8 @@ func (r *Registry) RegisterTool(name string, factory ToolFactory) {
 //	    return skill.NewFileSystemSource(os.DirFS(absPath)), nil
 //	})
 func (r *Registry) RegisterSkill(name string, factory SkillFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.skills[name] = factory
 }
 
@@ -161,7 +171,9 @@ func (r *Registry) RegisterSkill(name string, factory SkillFactory) {
 //	}
 //	// Use source with skilltoolset.New()
 func (r *Registry) ResolveSkill(name string, cfg map[string]any) (skill.Source, error) {
+	r.mu.RLock()
 	factory, ok := r.skills[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("config.Registry.ResolveSkill: no factory registered for skill %q", name)
 	}
@@ -189,7 +201,9 @@ func (r *Registry) ResolveModel(ref string, generateConfig map[string]any) (mode
 	prefix := ref[:idx]
 	remainder := ref[idx+1:]
 
+	r.mu.RLock()
 	factory, ok := r.models[prefix]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("config.Registry.ResolveModel: no factory registered for prefix %q", prefix)
 	}
@@ -210,7 +224,9 @@ func (r *Registry) ResolveModel(ref string, generateConfig map[string]any) (mode
 //
 //	t, err := r.ResolveTool("search", map[string]any{"maxResults": 5})
 func (r *Registry) ResolveTool(name string, cfg map[string]any) (tool.Tool, error) {
+	r.mu.RLock()
 	factory, ok := r.tools[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("config.Registry.ResolveTool: no factory registered for tool %q", name)
 	}

@@ -18,7 +18,7 @@ func TestRunnerBuilder_NoAgent(t *testing.T) {
 }
 
 func TestRunnerBuilder_BuildWithFakes(t *testing.T) {
-	ag := NewFakeAgent("test-agent")
+	ag := MustNewFakeAgent("test-agent")
 	r, fakes, err := NewRunnerBuilder().WithAgent(ag).BuildWithFakes()
 	if err != nil {
 		t.Fatalf("BuildWithFakes() error = %v", err)
@@ -38,7 +38,7 @@ func TestRunnerBuilder_BuildWithFakes(t *testing.T) {
 }
 
 func TestRunnerBuilder_CustomServices(t *testing.T) {
-	ag := NewFakeAgent("test-agent")
+	ag := MustNewFakeAgent("test-agent")
 	customSession := NewFakeSessionService()
 	customArtifact := NewFakeArtifactService()
 	customMemory := NewFakeMemoryService()
@@ -67,7 +67,7 @@ func TestRunnerBuilder_CustomServices(t *testing.T) {
 }
 
 func TestRunnerBuilder_NonFakeServices(t *testing.T) {
-	ag := NewFakeAgent("test-agent")
+	ag := MustNewFakeAgent("test-agent")
 
 	// Use a non-FakeSessionService (the real in-memory one).
 	realSessionSvc := session.InMemoryService()
@@ -85,7 +85,7 @@ func TestRunnerBuilder_NonFakeServices(t *testing.T) {
 }
 
 func TestRunnerBuilder_WithAppName(t *testing.T) {
-	ag := NewFakeAgent("test-agent")
+	ag := MustNewFakeAgent("test-agent")
 	r, _, err := NewRunnerBuilder().
 		WithAppName("custom-app").
 		WithAgent(ag).

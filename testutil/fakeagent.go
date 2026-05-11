@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"sync"
 
@@ -39,8 +40,8 @@ type FakeAgent struct {
 }
 
 // NewFakeAgent creates a FakeAgent with a name and a default no-op Run that
-// yields no events.
-func NewFakeAgent(name string) *FakeAgent {
+// yields no events. Returns an error if the underlying agent.New call fails.
+func NewFakeAgent(name string) (*FakeAgent, error) {
 	f := &FakeAgent{}
 	f.runFn = func(ic agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {}
@@ -51,15 +52,29 @@ func NewFakeAgent(name string) *FakeAgent {
 		Run:  f.trackedRun,
 	})
 	if err != nil {
-		panic("testutil: NewFakeAgent: " + err.Error())
+		return nil, fmt.Errorf("testutil: NewFakeAgent: %w", err)
 	}
 	f.Agent = ag
+	return f, nil
+}
+
+// MustNewFakeAgent is like NewFakeAgent but panics on error.
+// Use this in tests when an invalid name or config is a programmer error.
+func MustNewFakeAgent(name string) *FakeAgent {
+	f, err := NewFakeAgent(name)
+	if err != nil {
+		panic(err)
+	}
 	return f
 }
 
 // WithDescription sets the description (builder pattern).
 // This must be called before the agent is used; it creates a new underlying
 // agent with the description set.
+//
+// Panic on error is acceptable here because WithDescription reconstructs an
+// agent that was already successfully created; failure indicates an ADK
+// invariant violation rather than an expected caller error.
 func (f *FakeAgent) WithDescription(desc string) *FakeAgent {
 	ag, err := agent.New(agent.Config{
 		Name:        f.Agent.Name(),
@@ -76,6 +91,10 @@ func (f *FakeAgent) WithDescription(desc string) *FakeAgent {
 
 // WithSubAgents adds child agents (builder pattern).
 // This creates a new underlying agent with the sub-agents set.
+//
+// Panic on error is acceptable here because WithSubAgents reconstructs an
+// agent that was already successfully created; failure indicates an ADK
+// invariant violation rather than an expected caller error.
 func (f *FakeAgent) WithSubAgents(agents ...agent.Agent) *FakeAgent {
 	ag, err := agent.New(agent.Config{
 		Name:        f.Agent.Name(),
@@ -136,6 +155,10 @@ func (f *FakeAgent) Reset() {
 // ---------------------------------------------------------------------------
 
 // FakeInvocationContext implements agent.InvocationContext for testing.
+//
+// context.Context is embedded to satisfy the ADK InvocationContext interface,
+// which requires context methods. This is a documented compatibility reason
+// per Go best practices for interface satisfaction.
 type FakeInvocationContext struct {
 	context.Context
 	agentVal       agent.Agent
@@ -250,6 +273,10 @@ func (f *FakeInvocationContext) WithContext(ctx context.Context) agent.Invocatio
 // ---------------------------------------------------------------------------
 
 // FakeCallbackContext implements agent.CallbackContext for testing.
+//
+// context.Context is embedded to satisfy the ADK CallbackContext interface,
+// which requires context methods. This is a documented compatibility reason
+// per Go best practices for interface satisfaction.
 type FakeCallbackContext struct {
 	context.Context
 	agentNameVal     string
@@ -375,6 +402,10 @@ func (f *FakeCallbackContext) State() session.State { return f.stateVal }
 // ---------------------------------------------------------------------------
 
 // FakeReadonlyContext implements agent.ReadonlyContext for testing.
+//
+// context.Context is embedded to satisfy the ADK ReadonlyContext interface,
+// which requires context methods. This is a documented compatibility reason
+// per Go best practices for interface satisfaction.
 type FakeReadonlyContext struct {
 	context.Context
 	agentNameVal     string

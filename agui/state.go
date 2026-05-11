@@ -102,7 +102,10 @@ func (s *StateManager) Apply(patch []events.JSONPatchOperation) error {
 				return fmt.Errorf("copy from %s: %w", op.From, err)
 			}
 			// Deep copy the value
-			data, _ := json.Marshal(val)
+			data, err := json.Marshal(val)
+			if err != nil {
+				return fmt.Errorf("copy from %s: marshal failed: %w", op.From, err)
+			}
 			var copied any
 			if err = json.Unmarshal(data, &copied); err != nil {
 				return fmt.Errorf("copy from %s: %w", op.From, err)
@@ -115,8 +118,14 @@ func (s *StateManager) Apply(patch []events.JSONPatchOperation) error {
 			if err != nil {
 				return fmt.Errorf("test %s: %w", op.Path, err)
 			}
-			expected, _ := json.Marshal(op.Value)
-			actual, _ := json.Marshal(val)
+			expected, err := json.Marshal(op.Value)
+			if err != nil {
+				return fmt.Errorf("test %s: marshal expected value: %w", op.Path, err)
+			}
+			actual, err := json.Marshal(val)
+			if err != nil {
+				return fmt.Errorf("test %s: marshal actual value: %w", op.Path, err)
+			}
 			if string(expected) != string(actual) {
 				return fmt.Errorf("test %s: value mismatch", op.Path)
 			}
@@ -132,7 +141,10 @@ func (s *StateManager) Diff(newState any) ([]events.JSONPatchOperation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var target map[string]any
-	data, _ := json.Marshal(newState)
+	data, err := json.Marshal(newState)
+	if err != nil {
+		return nil, fmt.Errorf("marshal new state: %w", err)
+	}
 	if err := json.Unmarshal(data, &target); err != nil {
 		return nil, err
 	}
@@ -221,8 +233,12 @@ func diffMaps(prefix string, old, new map[string]any) []events.JSONPatchOperatio
 		if omOk && nmOk {
 			ops = append(ops, diffMaps(path, om, nm)...)
 		} else {
-			oj, _ := json.Marshal(ov)
-			nj, _ := json.Marshal(nv)
+			oj, oErr := json.Marshal(ov)
+			nj, nErr := json.Marshal(nv)
+			if oErr != nil || nErr != nil {
+				ops = append(ops, events.JSONPatchOperation{Op: "replace", Path: path, Value: nv})
+				continue
+			}
 			if string(oj) != string(nj) {
 				ops = append(ops, events.JSONPatchOperation{Op: "replace", Path: path, Value: nv})
 			}

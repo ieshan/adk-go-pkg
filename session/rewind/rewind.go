@@ -143,7 +143,11 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	replayedState := replayState(kept)
 
 	// --- Step 2: create a temporary session and fill it ---
-	tempID := "rewind-tmp-" + jsonutil.GenerateID(16)
+	id, err := jsonutil.GenerateID(16)
+	if err != nil {
+		return nil, fmt.Errorf("rewind: generate temp session id: %w", err)
+	}
+	tempID := "rewind-tmp-" + id
 	tmpResp, err := svc.Create(ctx, &session.CreateRequest{
 		AppName:   appName,
 		UserID:    userID,

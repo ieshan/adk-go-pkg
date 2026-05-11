@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -181,11 +182,11 @@ func extractText(c *genai.Content) string {
 	if c == nil {
 		return ""
 	}
-	result := ""
+	var sb strings.Builder
 	for _, p := range c.Parts {
-		result += p.Text
+		sb.WriteString(p.Text)
 	}
-	return result
+	return sb.String()
 }
 
 // contentsToMessagesErr converts a slice of [genai.Content] to OpenAI chat
@@ -331,11 +332,11 @@ func partsToContent(parts []*genai.Part) (any, error) {
 	if !isMultimodal {
 		// Multiple text-only parts are concatenated directly without separator.
 		// This preserves the exact text content from each part.
-		combined := ""
+		var sb strings.Builder
 		for _, p := range parts {
-			combined += p.Text
+			sb.WriteString(p.Text)
 		}
-		return combined, nil
+		return sb.String(), nil
 	}
 
 	// Multimodal: build content-part array.
@@ -454,7 +455,10 @@ func messageToContent(msg chatMessage) *genai.Content {
 
 		var args map[string]any
 		if argsStr != "" {
-			_ = json.Unmarshal([]byte(argsStr), &args)
+			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+				// Malformed JSON: preserve nil args so downstream code can handle it.
+				args = nil
+			}
 		}
 
 		content.Parts = append(content.Parts, &genai.Part{

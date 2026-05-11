@@ -209,6 +209,7 @@ func TestParseStream_ContextCancellation(t *testing.T) {
 	}, "\n"))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var results []streamResult
 	for resp, err := range parseStream(ctx, body) {

@@ -23,7 +23,7 @@ import (
 )
 
 func TestHandler_Success(t *testing.T) {
-	adkAgent := testutil.NewFakeAgent("test-handler")
+	adkAgent := testutil.MustNewFakeAgent("test-handler")
 
 	h, err := aguiadk.Handler(
 		aguiadk.Config{
@@ -67,7 +67,7 @@ func TestHandler_E2E_SSE(t *testing.T) {
 		Partial: false,
 	}
 
-	adkAgent := testutil.NewFakeAgent("e2e-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+	adkAgent := testutil.MustNewFakeAgent("e2e-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
 			if !yield(ev, nil) {
 				return

@@ -3,8 +3,14 @@ package jsonutil
 import "testing"
 
 func TestGenerateID(t *testing.T) {
-	id1 := GenerateID(16)
-	id2 := GenerateID(16)
+	id1, err := GenerateID(16)
+	if err != nil {
+		t.Fatalf("GenerateID error: %v", err)
+	}
+	id2, err := GenerateID(16)
+	if err != nil {
+		t.Fatalf("GenerateID error: %v", err)
+	}
 	if len(id1) != 32 {
 		t.Errorf("expected 32 chars, got %d", len(id1))
 	}

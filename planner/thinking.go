@@ -109,7 +109,7 @@ func (p *ThinkingPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) 
 		},
 	}
 
-	var responseText string
+	var responseText strings.Builder
 	var callErr error
 
 	for resp, err := range p.cfg.Model.GenerateContent(ctx, req, false) {
@@ -122,7 +122,7 @@ func (p *ThinkingPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) 
 		}
 		for _, part := range resp.Content.Parts {
 			if part.Text != "" {
-				responseText += part.Text
+				responseText.WriteString(part.Text)
 			}
 		}
 	}
@@ -130,12 +130,13 @@ func (p *ThinkingPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) 
 		return nil, fmt.Errorf("planner: thinking model call failed: %w", callErr)
 	}
 
+	respStr := responseText.String()
 	plan := &Plan{
-		Reasoning: responseText,
+		Reasoning: respStr,
 	}
 
 	// Try to extract and parse a JSON plan from the response.
-	if extracted, ok := extractJSONFromResponse(responseText); ok {
+	if extracted, ok := extractJSONFromResponse(respStr); ok {
 		if parsed, err := parsePlanJSON(extracted); err == nil {
 			plan.Steps = parsed.Steps
 			return plan, nil
@@ -144,7 +145,7 @@ func (p *ThinkingPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) 
 
 	// Fallback: create a single free-text step from the full response.
 	plan.Steps = []PlanStep{
-		{Description: responseText},
+		{Description: respStr},
 	}
 	return plan, nil
 }
@@ -182,7 +183,7 @@ func (p *ThinkingPlanner) buildPrompt(input *PlanRequest) string {
 
 	// Optional thinking budget hint.
 	if p.cfg.ThinkingBudget > 0 {
-		sb.WriteString(fmt.Sprintf("Think carefully, budget: %d tokens\n\n", p.cfg.ThinkingBudget))
+		fmt.Fprintf(&sb, "Think carefully, budget: %d tokens\n\n", p.cfg.ThinkingBudget)
 	}
 
 	// Tool descriptions section.

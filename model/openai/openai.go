@@ -203,12 +203,20 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			yield(nil, fmt.Errorf("openai: HTTP request: %w", err))
 			return
 		}
-		defer func() { _ = resp.Body.Close() }()
 
 		// 6. Check status code.
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errBody, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, string(errBody)))
+			errBody, readErr := io.ReadAll(resp.Body)
+			bodyStr := string(errBody)
+			if readErr != nil {
+				yield(nil, fmt.Errorf("openai: HTTP %d (body read failed: %v): %s", resp.StatusCode, readErr, bodyStr))
+				return
+			}
+			if cErr := resp.Body.Close(); cErr != nil {
+				yield(nil, fmt.Errorf("openai: HTTP %d (close body: %v): %s", resp.StatusCode, cErr, bodyStr))
+				return
+			}
+			yield(nil, fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, bodyStr))
 			return
 		}
 
@@ -216,8 +224,12 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		if stream {
 			for r, e := range parseStream(ctx, resp.Body) {
 				if !yield(r, e) {
+					_ = resp.Body.Close()
 					return
 				}
+			}
+			if cErr := resp.Body.Close(); cErr != nil {
+				yield(nil, fmt.Errorf("openai: close streaming body: %w", cErr))
 			}
 			return
 		}
@@ -225,18 +237,24 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		// 8. Non-streaming path — read body, unmarshal, translate, yield once.
 		rawBody, err := io.ReadAll(resp.Body)
 		if err != nil {
+			_ = resp.Body.Close()
 			yield(nil, fmt.Errorf("openai: read response body: %w", err))
 			return
 		}
 
 		var chatResp chatResponse
-		if err := json.Unmarshal(rawBody, &chatResp); err != nil {
+		if err = json.Unmarshal(rawBody, &chatResp); err != nil {
+			_ = resp.Body.Close()
 			yield(nil, fmt.Errorf("openai: unmarshal response: %w", err))
 			return
 		}
 
 		llmResp := translateResponse(&chatResp)
 		llmResp.TurnComplete = true
+		if cErr := resp.Body.Close(); cErr != nil {
+			yield(nil, fmt.Errorf("openai: close body: %w", cErr))
+			return
+		}
 		yield(llmResp, nil)
 	}
 }

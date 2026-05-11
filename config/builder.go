@@ -37,30 +37,32 @@ import (
 //	reg := config.NewRegistry()
 //	reg.RegisterModel("gemini", geminiFactory)
 //	reg.RegisterTool("search", searchFactory)
-//
-//	cfg, _ := config.Load("agent.yaml")
-//	a, err := config.Build(cfg, reg)
+//	//	cfg, _ := config.Load("agent.yaml")
+//	a, err := config.Build(ctx, cfg, reg)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func Build(cfg *AgentConfig, reg *Registry) (agent.Agent, error) {
+func Build(ctx context.Context, cfg AgentConfig, reg *Registry) (agent.Agent, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config.Build: nil config")
+	}
 	// Build sub-agents depth-first.
-	subAgents, err := buildSubAgents(cfg.SubAgents, reg)
+	subAgents, err := buildSubAgents(ctx, cfg.SubAgents(), reg)
 	if err != nil {
 		return nil, err
 	}
 
-	switch cfg.Type {
-	case "llm":
-		return buildLLMAgent(cfg, reg, subAgents)
-	case "sequential":
-		return buildSequentialAgent(cfg, subAgents)
-	case "parallel":
-		return buildParallelAgent(cfg, subAgents)
-	case "loop":
-		return buildLoopAgent(cfg, subAgents)
+	switch c := cfg.(type) {
+	case *LLMAgentConfig:
+		return buildLLMAgent(ctx, c, reg, subAgents)
+	case *SequentialAgentConfig:
+		return buildSequentialAgent(c, subAgents)
+	case *ParallelAgentConfig:
+		return buildParallelAgent(c, subAgents)
+	case *LoopAgentConfig:
+		return buildLoopAgent(c, subAgents)
 	default:
-		return nil, fmt.Errorf("config.Build: unknown agent type %q for agent %q", cfg.Type, cfg.Name)
+		return nil, fmt.Errorf("config.Build: unknown agent config type %T", cfg)
 	}
 }
 
@@ -73,26 +75,26 @@ func Build(cfg *AgentConfig, reg *Registry) (agent.Agent, error) {
 //	reg := config.NewRegistry()
 //	reg.RegisterModel("gemini", geminiFactory)
 //
-//	a, err := config.LoadAndBuild("agents/root.yaml", reg)
+//	a, err := config.LoadAndBuild(ctx, "agents/root.yaml", reg)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func LoadAndBuild(path string, reg *Registry) (agent.Agent, error) {
+func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, error) {
 	cfg, err := Load(path)
 	if err != nil {
 		return nil, fmt.Errorf("config.LoadAndBuild: %w", err)
 	}
-	return Build(cfg, reg)
+	return Build(ctx, cfg, reg)
 }
 
 // buildSubAgents recursively builds each entry in the configs slice.
-func buildSubAgents(configs []AgentConfig, reg *Registry) ([]agent.Agent, error) {
+func buildSubAgents(ctx context.Context, configs []AgentConfig, reg *Registry) ([]agent.Agent, error) {
 	if len(configs) == 0 {
 		return nil, nil
 	}
 	agents := make([]agent.Agent, 0, len(configs))
 	for i := range configs {
-		a, err := Build(&configs[i], reg)
+		a, err := Build(ctx, configs[i], reg)
 		if err != nil {
 			return nil, err
 		}
@@ -102,17 +104,17 @@ func buildSubAgents(configs []AgentConfig, reg *Registry) ([]agent.Agent, error)
 }
 
 // buildLLMAgent resolves the model, tools, and skillsets then delegates to llmagent.New.
-func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
+func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
 	llm, err := reg.ResolveModel(cfg.Model, cfg.GenerateConfig)
 	if err != nil {
-		return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name, err)
+		return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
 	}
 
 	tools := make([]tool.Tool, 0, len(cfg.Tools))
 	for _, ref := range cfg.Tools {
 		t, err := reg.ResolveTool(ref.Name, ref.Config)
 		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name, err)
+			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
 		}
 		tools = append(tools, t)
 	}
@@ -122,7 +124,7 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 	for _, ref := range cfg.Skillsets {
 		source, err := reg.ResolveSkill(ref.Name, ref.Config)
 		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name, ref.Name, err)
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
 		}
 
 		// Apply name-based filtering if specific skills are requested.
@@ -133,10 +135,9 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 
 		// Apply preload proxy if specified.
 		// When Names is set, only the selected skills are preloaded (more efficient).
-		ctx := context.Background() // Use background for init; consider making this configurable.
 		source, err = applyPreload(ctx, source, ref.Preload)
 		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name, ref.Name, err)
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name(), ref.Name, err)
 		}
 
 		skillToolset, err := skilltoolset.New(ctx, skilltoolset.Config{
@@ -144,7 +145,7 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 			SystemInstruction: ref.SystemInstruction,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name, ref.Name, err)
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
 		}
 		toolsets = append(toolsets, skillToolset)
 	}
@@ -154,19 +155,21 @@ func buildLLMAgent(cfg *AgentConfig, reg *Registry, subAgents []agent.Agent) (ag
 	if len(cfg.GenerateConfig) > 0 {
 		gc, err = TranslateGenerateConfig(cfg.GenerateConfig)
 		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name, err)
+			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
 		}
 	}
 
 	return llmagent.New(llmagent.Config{
-		Name:                  cfg.Name,
-		Description:           cfg.Description,
-		Model:                 llm,
-		Tools:                 tools,
-		Toolsets:              toolsets,
-		Instruction:           cfg.Instruction,
-		SubAgents:             subAgents,
-		GenerateContentConfig: gc,
+		Name:                     cfg.Name(),
+		Description:              cfg.Description(),
+		Model:                    llm,
+		Tools:                    tools,
+		Toolsets:                 toolsets,
+		Instruction:              cfg.Instruction,
+		SubAgents:                subAgents,
+		GenerateContentConfig:    gc,
+		DisallowTransferToParent: cfg.DisallowTransferToParent,
+		DisallowTransferToPeers:  cfg.DisallowTransferToPeers,
 	})
 }
 
@@ -205,48 +208,48 @@ func applyPreload(ctx context.Context, base skill.Source, strategy string) (skil
 }
 
 // buildSequentialAgent delegates to sequentialagent.New.
-func buildSequentialAgent(cfg *AgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildSequentialAgent(cfg *SequentialAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
 	a, err := sequentialagent.New(sequentialagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name,
+			Name:      cfg.Name(),
 			SubAgents: subAgents,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("config.Build [sequential %q]: %w", cfg.Name, err)
+		return nil, fmt.Errorf("config.Build [sequential %q]: %w", cfg.Name(), err)
 	}
 	return a, nil
 }
 
 // buildParallelAgent delegates to parallelagent.New.
-func buildParallelAgent(cfg *AgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildParallelAgent(cfg *ParallelAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
 	a, err := parallelagent.New(parallelagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name,
+			Name:      cfg.Name(),
 			SubAgents: subAgents,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("config.Build [parallel %q]: %w", cfg.Name, err)
+		return nil, fmt.Errorf("config.Build [parallel %q]: %w", cfg.Name(), err)
 	}
 	return a, nil
 }
 
 // buildLoopAgent validates MaxIterations then delegates to loopagent.New.
 // MaxIterations must be >= 0; a value of 0 means "run indefinitely".
-func buildLoopAgent(cfg *AgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildLoopAgent(cfg *LoopAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
 	if cfg.MaxIterations < 0 {
-		return nil, fmt.Errorf("config.Build [loop %q]: MaxIterations must be >= 0, got %d", cfg.Name, cfg.MaxIterations)
+		return nil, fmt.Errorf("config.Build [loop %q]: MaxIterations must be >= 0, got %d", cfg.Name(), cfg.MaxIterations)
 	}
 	a, err := loopagent.New(loopagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name,
+			Name:      cfg.Name(),
 			SubAgents: subAgents,
 		},
 		MaxIterations: uint(cfg.MaxIterations),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("config.Build [loop %q]: %w", cfg.Name, err)
+		return nil, fmt.Errorf("config.Build [loop %q]: %w", cfg.Name(), err)
 	}
 	return a, nil
 }

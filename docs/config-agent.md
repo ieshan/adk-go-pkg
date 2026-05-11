@@ -8,25 +8,72 @@ YAML or JSON and building them into live ADK-Go agents at runtime.
 Instead of constructing agents in code, you can describe them declaratively in
 a configuration file. The `config` package:
 
-1. Parses YAML/JSON into `AgentConfig` structs.
+1. Parses YAML/JSON into the sealed `AgentConfig` interface backed by type-specific structs (`LLMAgentConfig`, `SequentialAgentConfig`, `ParallelAgentConfig`, `LoopAgentConfig`).
 2. Uses a `Registry` of model and tool factories to resolve references.
 3. Recursively builds the full agent tree via `Build`.
 
 ## Schema Reference
 
-### AgentConfig
+### AgentConfig (Sealed Interface)
 
 ```go
-type AgentConfig struct {
-    Name           string            // Unique agent identifier.
-    Type           string            // "llm", "sequential", "parallel", or "loop".
-    Model          string            // Model ref: "prefix/model-id" (e.g. "openai/gpt-4o").
-    Instruction    string            // System prompt.
-    Description    string            // Human-readable description.
-    Tools          []ToolRef         // Tool references.
-    SubAgents      []AgentConfig     // Nested child agents.
-    GenerateConfig map[string]any    // Generation parameters (temperature, topP, etc.).
-    MaxIterations  int               // For loop-type agents.
+// AgentConfig is the sealed interface for all declarative agent configurations.
+type AgentConfig interface {
+    Type() string
+    Name() string
+    Description() string
+    SubAgents() []AgentConfig
+    isAgentConfig() // sealed — only package-defined types can implement it
+}
+```
+
+### BaseAgentConfig
+
+```go
+type BaseAgentConfig struct {
+    Name        string        // Unique agent identifier.
+    Description string        // Human-readable description.
+    SubAgents   []AgentConfig // Nested child agents.
+}
+```
+
+### LLMAgentConfig
+
+```go
+type LLMAgentConfig struct {
+    BaseAgentConfig
+    Model                    string         // Model ref: "prefix/model-id".
+    Instruction              string         // System prompt.
+    Tools                    []ToolRef      // Tool references.
+    Skillsets                []SkillsetRef  // Skill source references.
+    GenerateConfig           map[string]any // Generation parameters.
+    DisallowTransferToParent bool           // Prevent transfer to parent.
+    DisallowTransferToPeers  bool           // Prevent transfer to siblings.
+}
+```
+
+### SequentialAgentConfig
+
+```go
+type SequentialAgentConfig struct {
+    BaseAgentConfig
+}
+```
+
+### ParallelAgentConfig
+
+```go
+type ParallelAgentConfig struct {
+    BaseAgentConfig
+}
+```
+
+### LoopAgentConfig
+
+```go
+type LoopAgentConfig struct {
+    BaseAgentConfig
+    MaxIterations int // Maximum iterations (0 = unlimited).
 }
 ```
 
@@ -41,12 +88,12 @@ type ToolRef struct {
 
 ### Supported Agent Types
 
-| Type | ADK Agent | Description |
-|------|-----------|-------------|
-| `llm` | `llmagent.New` | LLM-backed agent with model, tools, and instruction. |
-| `sequential` | `sequentialagent.New` | Runs sub-agents one after another. |
-| `parallel` | `parallelagent.New` | Runs sub-agents concurrently. |
-| `loop` | `loopagent.New` | Runs sub-agents in a loop up to `MaxIterations`. |
+| Type | ADK Agent | Description | Valid Fields |
+|------|-----------|-------------|--------------|
+| `llm` | `llmagent.New` | LLM-backed agent with model, tools, and instruction. | Name, Description, SubAgents, Model, Instruction, Tools, Skillsets, GenerateConfig, DisallowTransferToParent, DisallowTransferToPeers |
+| `sequential` | `sequentialagent.New` | Runs sub-agents one after another. | Name, Description, SubAgents |
+| `parallel` | `parallelagent.New` | Runs sub-agents concurrently. | Name, Description, SubAgents |
+| `loop` | `loopagent.New` | Runs sub-agents in a loop up to `MaxIterations`. | Name, Description, SubAgents, MaxIterations |
 
 ### Generation Config Keys
 
@@ -184,31 +231,33 @@ reg.RegisterSkill("s3", func(cfg map[string]any) (skill.Source, error) {
 ### Load
 
 ```go
-func Load(path string) (*AgentConfig, error)
+func Load(path string) (AgentConfig, error)
 ```
 
 Reads a config file. Format is inferred from extension: `.json`, `.yaml`, `.yml`.
+Returns the sealed `AgentConfig` interface — type-assert to `*LLMAgentConfig`, `*SequentialAgentConfig`, etc. to access type-specific fields.
 
 ### Parse
 
 ```go
-func Parse(data []byte, format string) (*AgentConfig, error)
+func Parse(data []byte, format string) (AgentConfig, error)
 ```
 
 Parses raw bytes. `format` must be `"json"` or `"yaml"`.
+YAML parsing validates type-specific field restrictions — setting an LLM-only field on a non-LLM agent type returns an error.
 
 ### Build
 
 ```go
-func Build(cfg *AgentConfig, reg *Registry) (agent.Agent, error)
+func Build(ctx context.Context, cfg AgentConfig, reg *Registry) (agent.Agent, error)
 ```
 
-Recursively builds a live agent tree from the config and registry.
+Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor.
 
 ### LoadAndBuild
 
 ```go
-func LoadAndBuild(path string, reg *Registry) (agent.Agent, error)
+func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, error)
 ```
 
 Convenience function combining `Load` and `Build`.
@@ -267,6 +316,8 @@ name: root-agent
 type: llm
 model: openai/gpt-4o
 instruction: "You are a helpful assistant."
+disallowTransferToParent: true
+disallowTransferToPeers: true
 tools:
   - name: search
     config:
@@ -284,6 +335,8 @@ generateConfig:
   "type": "llm",
   "model": "openai/gpt-4o",
   "instruction": "You are a helpful assistant.",
+  "disallowTransferToParent": true,
+  "disallowTransferToPeers": true,
   "tools": [
     {"name": "search", "config": {"maxResults": 5}}
   ],
@@ -316,6 +369,7 @@ subAgents:
     type: llm
     model: openai/gpt-4o
     instruction: "Write a report based on the research."
+    disallowTransferToParent: true
     generateConfig:
       temperature: 0.7
       maxOutputTokens: 2048
@@ -338,9 +392,34 @@ reg.RegisterModel("openai", openaiFactory)
 reg.RegisterTool("search", searchFactory)
 reg.RegisterTool("scrape", scrapeFactory)
 
-agent, err := config.LoadAndBuild("agents/orchestrator.yaml", reg)
+agent, err := config.LoadAndBuild(ctx, "agents/orchestrator.yaml", reg)
 if err != nil {
     log.Fatal(err)
 }
 // Use agent with runner.New(...)
+```
+
+Programmatic construction with typed configs:
+
+```go
+root := &config.SequentialAgentConfig{
+    BaseAgentConfig: config.BaseAgentConfig{Name: "orchestrator"},
+}
+
+researcher := &config.LLMAgentConfig{
+    BaseAgentConfig: config.BaseAgentConfig{Name: "researcher"},
+    Model:           "openai/gpt-4o",
+    Instruction:     "Find information.",
+    Tools:           []config.ToolRef{{Name: "search"}},
+}
+
+writer := &config.LLMAgentConfig{
+    BaseAgentConfig:          config.BaseAgentConfig{Name: "writer"},
+    Model:                    "openai/gpt-4o",
+    Instruction:              "Write a report.",
+    DisallowTransferToParent: true,
+}
+
+root.SubAgents = []config.AgentConfig{researcher, writer}
+agent, err := config.Build(ctx, root, reg)
 ```
