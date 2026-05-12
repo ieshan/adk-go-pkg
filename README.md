@@ -122,18 +122,30 @@ func main() {
 package main
 
 import (
+	"iter"
 	"log"
 	"net/http"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"google.golang.org/adk/agent"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 func main() {
-	myAgent := agent.New("greeter", nil,
-		agent.WithInstruction("You are a friendly greeter."),
-	)
+	myAgent, err := agent.New(agent.Config{
+		Name: "greeter",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				content := genai.NewContentFromText("Hello from ADK!", genai.RoleModel)
+				yield(&session.Event{Author: "greeter", Content: content}, nil)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	handler, err := aguiadk.Handler(
 		aguiadk.Config{

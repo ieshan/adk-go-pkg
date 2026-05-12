@@ -52,6 +52,20 @@ func TestRegistry_RegisterModel(t *testing.T) {
 	}
 }
 
+// TestRegistry_HasModel verifies the presence check for registered model factories.
+func TestRegistry_HasModel(t *testing.T) {
+	r := config.NewRegistry()
+	if r.HasModel("openai") {
+		t.Error("expected HasModel(openai) = false before registration")
+	}
+	r.RegisterModel("openai", func(_ map[string]any) (model.LLM, error) {
+		return testutil.NewFakeLLM(), nil
+	})
+	if !r.HasModel("openai") {
+		t.Error("expected HasModel(openai) = true after registration")
+	}
+}
+
 // TestRegistry_RegisterTool verifies that a registered ToolFactory can be resolved by name
 // and that the factory receives the provided config.
 func TestRegistry_RegisterTool(t *testing.T) {

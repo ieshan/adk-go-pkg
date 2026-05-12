@@ -28,18 +28,30 @@ go get github.com/ieshan/adk-go-pkg/aguiadk
 package main
 
 import (
+	"iter"
 	"log"
 	"net/http"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"google.golang.org/adk/agent"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 func main() {
-	myAgent := agent.New("greeter", nil,
-		agent.WithInstruction("You are a friendly greeter."),
-	)
+	myAgent, err := agent.New(agent.Config{
+		Name: "greeter",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				content := genai.NewContentFromText("Hello from ADK!", genai.RoleModel)
+				yield(&session.Event{Author: "greeter", Content: content}, nil)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	handler, err := aguiadk.Handler(
 		aguiadk.Config{
@@ -122,16 +134,30 @@ the HTTP request (e.g., from headers or JWT claims):
 package main
 
 import (
+	"iter"
 	"log"
 	"net/http"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"google.golang.org/adk/agent"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 func main() {
-	myAgent := agent.New("assistant", nil)
+	myAgent, err := agent.New(agent.Config{
+		Name: "assistant",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				content := genai.NewContentFromText("Hello!", genai.RoleModel)
+				yield(&session.Event{Author: "assistant", Content: content}, nil)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	handler, err := aguiadk.Handler(
 		aguiadk.Config{
@@ -262,16 +288,17 @@ package main
 import (
 	"time"
 
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 )
 
 func main() {
-	ch := make(chan interface{}, 64) // placeholder
+	ch := make(chan events.Event, 64)
 	_ = ch
 
-	emitter := agui.NewEventEmitter(make(chan interface{}, 64))
+	emitter := agui.NewEventEmitter(make(chan events.Event, 64))
 	resultHandler := agui.NewToolResultHandler()
 
 	clientTools := []types.Tool{
@@ -321,16 +348,30 @@ middleware or additional logic, use `New` directly:
 package main
 
 import (
+	"iter"
 	"log"
 	"net/http"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"google.golang.org/adk/agent"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 func main() {
-	myAgent := agent.New("assistant", nil)
+	myAgent, err := agent.New(agent.Config{
+		Name: "assistant",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				content := genai.NewContentFromText("Hello!", genai.RoleModel)
+				yield(&session.Event{Author: "assistant", Content: content}, nil)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:   myAgent,
@@ -376,6 +417,7 @@ snapshots and message history:
 package main
 
 import (
+	"iter"
 	"log"
 	"net/http"
 	"time"
@@ -384,13 +426,24 @@ import (
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 func main() {
-	// Create an ADK agent with instructions.
-	myAgent := agent.New("travel-assistant", nil,
-		agent.WithInstruction("You are a helpful travel assistant. Help users plan trips."),
-	)
+	// Create a minimal ADK agent.
+	myAgent, err := agent.New(agent.Config{
+		Name:        "travel-assistant",
+		Description: "Helps users plan trips.",
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				content := genai.NewContentFromText("I'd be happy to help plan your trip!", genai.RoleModel)
+				yield(&session.Event{Author: "travel-assistant", Content: content}, nil)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Use a custom session service (or nil for in-memory).
 	sessSvc := session.InMemoryService()

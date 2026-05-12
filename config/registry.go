@@ -120,6 +120,14 @@ func (r *Registry) RegisterModel(prefix string, factory ModelFactory) {
 	r.models[prefix] = factory
 }
 
+// HasModel reports whether a factory has been registered for prefix.
+func (r *Registry) HasModel(prefix string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.models[prefix]
+	return ok
+}
+
 // RegisterTool associates a [ToolFactory] with the given name.
 // When [ResolveTool] is called with that name the factory is invoked.
 //
