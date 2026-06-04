@@ -1,4 +1,4 @@
-package config_test
+package config
 
 import (
 	"context"
@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/skilltoolset/skill"
 
-	"github.com/ieshan/adk-go-pkg/config"
 	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
@@ -21,7 +21,7 @@ import (
 // The registry splits the ref on the first "/" — "openai/gpt-4o" → prefix "openai",
 // remainder "gpt-4o". The factory receives {"model": "gpt-4o", ...generateConfig}.
 func TestRegistry_RegisterModel(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
@@ -54,7 +54,7 @@ func TestRegistry_RegisterModel(t *testing.T) {
 
 // TestRegistry_HasModel verifies the presence check for registered model factories.
 func TestRegistry_HasModel(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 	if r.HasModel("openai") {
 		t.Error("expected HasModel(openai) = false before registration")
 	}
@@ -67,9 +67,9 @@ func TestRegistry_HasModel(t *testing.T) {
 }
 
 // TestRegistry_RegisterTool verifies that a registered ToolFactory can be resolved by name
-// and that the factory receives the provided config.
+// and that the factory receives the provided
 func TestRegistry_RegisterTool(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
@@ -97,7 +97,7 @@ func TestRegistry_RegisterTool(t *testing.T) {
 
 // TestRegistry_ResolveModel_NotFound verifies an error is returned for an unregistered prefix.
 func TestRegistry_ResolveModel_NotFound(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 	_, err := r.ResolveModel("anthropic/claude-3", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown prefix, got nil")
@@ -106,7 +106,7 @@ func TestRegistry_ResolveModel_NotFound(t *testing.T) {
 
 // TestRegistry_ResolveTool_NotFound verifies an error is returned for an unregistered tool name.
 func TestRegistry_ResolveTool_NotFound(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 	_, err := r.ResolveTool("unknown-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
@@ -116,7 +116,7 @@ func TestRegistry_ResolveTool_NotFound(t *testing.T) {
 // TestRegistry_ResolveModel_NoPrefixSlash verifies that a ref with no "/" yields an
 // error when no matching prefix is registered.
 func TestRegistry_ResolveModel_NoPrefixSlash(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
 		return testutil.NewFakeLLM(), nil
 	})
@@ -130,7 +130,7 @@ func TestRegistry_ResolveModel_NoPrefixSlash(t *testing.T) {
 
 // TestRegistry_MultipleModels verifies multiple model prefixes can coexist and route correctly.
 func TestRegistry_MultipleModels(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	r.RegisterModel("gemini", func(cfg map[string]any) (model.LLM, error) {
 		return testutil.NewFakeLLM().WithName("gemini:" + cfg["model"].(string)), nil
@@ -158,7 +158,7 @@ func TestRegistry_MultipleModels(t *testing.T) {
 
 // TestRegistry_MultipleTools verifies multiple tool factories can coexist.
 func TestRegistry_MultipleTools(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
 		return testutil.NewFakeTool("search"), nil
@@ -186,7 +186,7 @@ func TestRegistry_MultipleTools(t *testing.T) {
 
 // TestRegistry_RegisterSkill verifies skill factory registration and resolution.
 func TestRegistry_RegisterSkill(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
@@ -211,7 +211,7 @@ func TestRegistry_RegisterSkill(t *testing.T) {
 
 // TestRegistry_RegisterSkill_Overwrite verifies overwriting existing skill factory.
 func TestRegistry_RegisterSkill_Overwrite(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	var firstCalled, secondCalled bool
 	r.RegisterSkill("test", func(cfg map[string]any) (skill.Source, error) {
@@ -238,7 +238,7 @@ func TestRegistry_RegisterSkill_Overwrite(t *testing.T) {
 
 // TestRegistry_ResolveSkill_NotFound verifies error for unregistered skill name.
 func TestRegistry_ResolveSkill_NotFound(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 	_, err := r.ResolveSkill("unknown-skill", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown skill, got nil")
@@ -247,7 +247,7 @@ func TestRegistry_ResolveSkill_NotFound(t *testing.T) {
 
 // TestRegistry_ResolveSkill_FactoryError verifies error propagation from factory.
 func TestRegistry_ResolveSkill_FactoryError(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	r.RegisterSkill("failing", func(cfg map[string]any) (skill.Source, error) {
 		return stubSkillSource{}, fmt.Errorf("factory error")
@@ -261,7 +261,7 @@ func TestRegistry_ResolveSkill_FactoryError(t *testing.T) {
 
 // TestRegistry_ResolveSkill_MultipleSkills verifies multiple skill factories coexist.
 func TestRegistry_ResolveSkill_MultipleSkills(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
 		return stubSkillSource{name: "memory"}, nil
@@ -289,7 +289,7 @@ func TestRegistry_ResolveSkill_MultipleSkills(t *testing.T) {
 
 // TestNewRegistry_BuiltinSkills verifies built-in filesystem factory is registered.
 func TestNewRegistry_BuiltinSkills(t *testing.T) {
-	r := config.NewRegistry()
+	r := NewRegistry()
 
 	// The filesystem factory should be registered by default.
 	// It will fail without a valid path, but we can verify it's registered
@@ -325,4 +325,145 @@ func (s stubSkillSource) LoadInstructions(ctx context.Context, name string) (str
 }
 func (s stubSkillSource) LoadResource(ctx context.Context, name, resourcePath string) (io.ReadCloser, error) {
 	return nil, nil
+}
+
+func TestRegistry_ResolveAndInvoke(t *testing.T) {
+	r := NewRegistry()
+
+	// Register a callback and verify it resolves to the same function value.
+	var beforeCalled bool
+	beforeCB := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+		beforeCalled = true
+		return nil, nil
+	}
+	r.RegisterBeforeModelCallback("my.cb", beforeCB)
+
+	resolved, err := r.ResolveBeforeModelCallback("my.cb")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	// Invoke the resolved callback directly to verify it's the same function.
+	_, _ = resolved(nil, nil)
+	if !beforeCalled {
+		t.Error("resolved callback was not the registered function")
+	}
+
+	// Register and resolve ModelCode factory.
+	fakeLLM := testutil.NewFakeLLM()
+	r.RegisterModelCode("my.model", func(args map[string]any) (model.LLM, error) {
+		return fakeLLM, nil
+	})
+	llm, err := r.ResolveModelCode("my.model", nil)
+	if err != nil {
+		t.Fatalf("resolve modelCode: %v", err)
+	}
+	if llm != fakeLLM {
+		t.Error("resolved LLM mismatch")
+	}
+
+	// Register and resolve Agent.
+	fakeAgent, _ := testutil.NewFakeAgent("sub")
+	r.RegisterAgent("my.agent", fakeAgent)
+	a, err := r.ResolveAgent("my.agent")
+	if err != nil {
+		t.Fatalf("resolve agent: %v", err)
+	}
+	if a.Name() != "sub" {
+		t.Errorf("expected name sub, got %q", a.Name())
+	}
+}
+
+func TestRegistry_MissingResolutions(t *testing.T) {
+	r := NewRegistry()
+
+	tests := []struct {
+		name    string
+		resolve func() error
+	}{
+		{
+			name: "BeforeModelCallback",
+			resolve: func() error {
+				_, err := r.ResolveBeforeModelCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "AfterModelCallback",
+			resolve: func() error {
+				_, err := r.ResolveAfterModelCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "OnModelErrorCallback",
+			resolve: func() error {
+				_, err := r.ResolveOnModelErrorCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "BeforeToolCallback",
+			resolve: func() error {
+				_, err := r.ResolveBeforeToolCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "AfterToolCallback",
+			resolve: func() error {
+				_, err := r.ResolveAfterToolCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "OnToolErrorCallback",
+			resolve: func() error {
+				_, err := r.ResolveOnToolErrorCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "BeforeAgentCallback",
+			resolve: func() error {
+				_, err := r.ResolveBeforeAgentCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "AfterAgentCallback",
+			resolve: func() error {
+				_, err := r.ResolveAfterAgentCallback("missing")
+				return err
+			},
+		},
+		{
+			name: "ModelCode",
+			resolve: func() error {
+				_, err := r.ResolveModelCode("missing", nil)
+				return err
+			},
+		},
+		{
+			name: "Agent",
+			resolve: func() error {
+				_, err := r.ResolveAgent("missing")
+				return err
+			},
+		},
+		{
+			name: "Schema",
+			resolve: func() error {
+				_, err := r.ResolveSchema("missing", nil)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.resolve(); err == nil {
+				t.Fatal("expected error for unregistered key")
+			}
+		})
+	}
 }

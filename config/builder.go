@@ -9,6 +9,7 @@ import (
 	"google.golang.org/adk/agent/workflowagents/loopagent"
 	"google.golang.org/adk/agent/workflowagents/parallelagent"
 	"google.golang.org/adk/agent/workflowagents/sequentialagent"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/skilltoolset"
 	"google.golang.org/adk/tool/skilltoolset/skill"
@@ -42,59 +43,121 @@ import (
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// For sub-agent file references to resolve correctly, use BuildWithPath.
 func Build(ctx context.Context, cfg AgentConfig, reg *Registry) (agent.Agent, error) {
+	return BuildWithPath(ctx, cfg, reg, "")
+}
+
+// BuildWithPath is like Build but also accepts the config file path so that
+// relative config_path references in sub-agents can be resolved.
+func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPath string) (agent.Agent, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config.Build: nil config")
 	}
-	// Build sub-agents depth-first.
-	subAgents, err := buildSubAgents(ctx, cfg.SubAgents(), reg)
-	if err != nil {
-		return nil, err
+
+	// Resolve sub-agent entries (inline + refs).
+	var subAgents []agent.Agent
+	entries := cfg.SubAgentEntries()
+	if len(entries) > 0 {
+		var err error
+		subAgents, err = buildSubAgentEntries(ctx, entries, reg, configPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	switch c := cfg.(type) {
 	case *LLMAgentConfig:
 		return buildLLMAgent(ctx, c, reg, subAgents)
 	case *SequentialAgentConfig:
-		return buildSequentialAgent(c, subAgents)
+		return buildSequentialAgent(c, reg, subAgents)
 	case *ParallelAgentConfig:
-		return buildParallelAgent(c, subAgents)
+		return buildParallelAgent(c, reg, subAgents)
 	case *LoopAgentConfig:
-		return buildLoopAgent(c, subAgents)
+		return buildLoopAgent(c, reg, subAgents)
 	default:
 		return nil, fmt.Errorf("config.Build: unknown agent config type %T", cfg)
 	}
 }
 
-// LoadAndBuild is a convenience function that combines [Load] and [Build].
-// It reads the agent configuration from path and immediately constructs the
-// live agent tree using the provided [Registry].
-//
-// Example:
-//
-//	reg := config.NewRegistry()
-//	reg.RegisterModel("gemini", geminiFactory)
-//
-//	a, err := config.LoadAndBuild(ctx, "agents/root.yaml", reg)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, error) {
-	cfg, err := Load(path)
-	if err != nil {
-		return nil, fmt.Errorf("config.LoadAndBuild: %w", err)
+func toAgentRunConfig(cfg *RunConfig) *agent.RunConfig {
+	if cfg == nil {
+		return nil
 	}
-	return Build(ctx, cfg, reg)
+	return &agent.RunConfig{
+		StreamingMode:             agent.StreamingMode(cfg.StreamingMode),
+		SaveInputBlobsAsArtifacts: cfg.SaveLiveBlob,
+	}
 }
 
-// buildSubAgents recursively builds each entry in the configs slice.
-func buildSubAgents(ctx context.Context, configs []AgentConfig, reg *Registry) ([]agent.Agent, error) {
-	if len(configs) == 0 {
+func toAgentLiveRunConfig(cfg *LiveRunConfig) *agent.LiveRunConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &agent.LiveRunConfig{
+		MaxLLMCalls: cfg.MaxLLMCalls,
+	}
+}
+
+// BuildApp is like Build but accepts an AppConfig and returns runtime configs
+// ([agent.RunConfig], [agent.LiveRunConfig], and [ContextCacheConfig])
+// alongside the built agent. It delegates to BuildAppWithPath with an empty path.
+func BuildApp(ctx context.Context, appCfg *AppConfig, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	return BuildAppWithPath(ctx, appCfg, reg, "")
+}
+
+// BuildAppWithPath is like BuildApp but accepts the config file path so that
+// relative config_path references in sub-agents can be resolved.
+// It returns the built agent together with [agent.RunConfig], [agent.LiveRunConfig],
+// and [ContextCacheConfig].
+func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	ag, err := BuildWithPath(ctx, appCfg.AgentConfig, reg, configPath)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return ag, toAgentRunConfig(appCfg.RunConfig), toAgentLiveRunConfig(appCfg.LiveRunConfig), appCfg.ContextCacheConfig, nil
+}
+
+// LoadAndBuild is a convenience function that combines Load and BuildAppWithPath.
+// It reads the agent configuration from path, constructs the live agent tree,
+// and returns runtime configs ([agent.RunConfig], [agent.LiveRunConfig],
+// and [ContextCacheConfig]) alongside the agent.
+func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	appCfg, err := Load(path)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("config.LoadAndBuild: %w", err)
+	}
+	return BuildAppWithPath(ctx, appCfg, reg, path)
+}
+
+func buildSubAgentEntries(ctx context.Context, entries []SubAgentEntry, reg *Registry, parentPath string) ([]agent.Agent, error) {
+	if len(entries) == 0 {
 		return nil, nil
 	}
-	agents := make([]agent.Agent, 0, len(configs))
-	for i := range configs {
-		a, err := Build(ctx, configs[i], reg)
+	agents := make([]agent.Agent, 0, len(entries))
+	for _, entry := range entries {
+		var cfg AgentConfig
+		if entry.Inline != nil {
+			cfg = entry.Inline
+		} else if entry.Ref != nil {
+			if entry.Ref.Code != "" {
+				a, err := reg.ResolveAgent(entry.Ref.Code)
+				if err != nil {
+					return nil, fmt.Errorf("config.Build: resolve sub-agent code ref %q: %w", entry.Ref.Code, err)
+				}
+				agents = append(agents, a)
+				continue
+			}
+			var err error
+			cfg, err = ResolveAgentRef(entry.Ref, parentPath)
+			if err != nil {
+				return nil, fmt.Errorf("config.Build: resolve sub-agent ref: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("config.Build: empty SubAgentEntry")
+		}
+		a, err := BuildWithPath(ctx, cfg, reg, parentPath)
 		if err != nil {
 			return nil, err
 		}
@@ -103,43 +166,47 @@ func buildSubAgents(ctx context.Context, configs []AgentConfig, reg *Registry) (
 	return agents, nil
 }
 
-// buildLLMAgent resolves the model, tools, and skillsets then delegates to llmagent.New.
 func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
-	llm, err := reg.ResolveModel(cfg.Model, cfg.GenerateConfig)
-	if err != nil {
-		return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
+	var llm model.LLM
+	var err error
+
+	if cfg.ModelCode != nil {
+		if cfg.Model != "" {
+			return nil, fmt.Errorf("config.Build [llm %q]: only one of model or model_code may be set", cfg.Name())
+		}
+		llm, err = reg.ResolveModelCode(cfg.ModelCode.Name, cfg.ModelCode.Args)
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: resolve model_code: %w", cfg.Name(), err)
+		}
+	} else {
+		llm, err = reg.ResolveModel(cfg.Model, cfg.GenerateConfig)
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
+		}
 	}
 
 	tools := make([]tool.Tool, 0, len(cfg.Tools))
 	for _, ref := range cfg.Tools {
-		t, err := reg.ResolveTool(ref.Name, ref.Config)
+		t, err := reg.ResolveTool(ref.Name, ref.Args)
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
 		}
 		tools = append(tools, t)
 	}
 
-	// Resolve skillsets to tool.Toolset instances.
 	var toolsets []tool.Toolset
 	for _, ref := range cfg.Skillsets {
 		source, err := reg.ResolveSkill(ref.Name, ref.Config)
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
 		}
-
-		// Apply name-based filtering if specific skills are requested.
-		// This happens before preload so filtered skills are not loaded.
 		if len(ref.Names) > 0 {
 			source = NewFilteredSource(source, ref.Names)
 		}
-
-		// Apply preload proxy if specified.
-		// When Names is set, only the selected skills are preloaded (more efficient).
 		source, err = applyPreload(ctx, source, ref.Preload)
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name(), ref.Name, err)
 		}
-
 		skillToolset, err := skilltoolset.New(ctx, skilltoolset.Config{
 			Source:            source,
 			SystemInstruction: ref.SystemInstruction,
@@ -150,12 +217,68 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 		toolsets = append(toolsets, skillToolset)
 	}
 
-	// Translate the optional generate config map.
 	var gc *genai.GenerateContentConfig
 	if len(cfg.GenerateConfig) > 0 {
 		gc, err = TranslateGenerateConfig(cfg.GenerateConfig)
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
+		}
+	}
+
+	// Resolve callbacks via typed registry
+	beforeModelCBs, err := resolveCallbacks(reg.ResolveBeforeModelCallback, cfg.BeforeModelCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: beforeModelCallbacks: %w", cfg.Name(), err)
+	}
+	afterModelCBs, err := resolveCallbacks(reg.ResolveAfterModelCallback, cfg.AfterModelCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: afterModelCallbacks: %w", cfg.Name(), err)
+	}
+	onModelErrorCBs, err := resolveCallbacks(reg.ResolveOnModelErrorCallback, cfg.OnModelErrorCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: onModelErrorCallbacks: %w", cfg.Name(), err)
+	}
+	beforeToolCBs, err := resolveCallbacks(reg.ResolveBeforeToolCallback, cfg.BeforeToolCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: beforeToolCallbacks: %w", cfg.Name(), err)
+	}
+	afterToolCBs, err := resolveCallbacks(reg.ResolveAfterToolCallback, cfg.AfterToolCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: afterToolCallbacks: %w", cfg.Name(), err)
+	}
+	onToolErrorCBs, err := resolveCallbacks(reg.ResolveOnToolErrorCallback, cfg.OnToolErrorCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: onToolErrorCallbacks: %w", cfg.Name(), err)
+	}
+
+	beforeAgentCBs, err := resolveCallbacks(reg.ResolveBeforeAgentCallback, cfg.BeforeAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: beforeAgentCallbacks: %w", cfg.Name(), err)
+	}
+	afterAgentCBs, err := resolveCallbacks(reg.ResolveAfterAgentCallback, cfg.AfterAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [llm %q]: afterAgentCallbacks: %w", cfg.Name(), err)
+	}
+
+	var inputSchema, outputSchema *genai.Schema
+	if cfg.InputSchema != nil {
+		if cfg.InputSchema.Inline != nil {
+			inputSchema = cfg.InputSchema.Inline
+		} else if cfg.InputSchema.Ref != nil {
+			inputSchema, err = reg.ResolveSchema(cfg.InputSchema.Ref.Name, cfg.InputSchema.Ref.Args)
+			if err != nil {
+				return nil, fmt.Errorf("config.Build [llm %q]: inputSchema: %w", cfg.Name(), err)
+			}
+		}
+	}
+	if cfg.OutputSchema != nil {
+		if cfg.OutputSchema.Inline != nil {
+			outputSchema = cfg.OutputSchema.Inline
+		} else if cfg.OutputSchema.Ref != nil {
+			outputSchema, err = reg.ResolveSchema(cfg.OutputSchema.Ref.Name, cfg.OutputSchema.Ref.Args)
+			if err != nil {
+				return nil, fmt.Errorf("config.Build [llm %q]: outputSchema: %w", cfg.Name(), err)
+			}
 		}
 	}
 
@@ -166,11 +289,40 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 		Tools:                    tools,
 		Toolsets:                 toolsets,
 		Instruction:              cfg.Instruction,
+		GlobalInstruction:        cfg.StaticInstruction,
 		SubAgents:                subAgents,
 		GenerateContentConfig:    gc,
 		DisallowTransferToParent: cfg.DisallowTransferToParent,
 		DisallowTransferToPeers:  cfg.DisallowTransferToPeers,
+		InputSchema:              inputSchema,
+		OutputSchema:             outputSchema,
+		OutputKey:                cfg.OutputKey,
+		IncludeContents:          llmagent.IncludeContents(cfg.IncludeContents),
+		BeforeModelCallbacks:     beforeModelCBs,
+		AfterModelCallbacks:      afterModelCBs,
+		OnModelErrorCallbacks:    onModelErrorCBs,
+		BeforeToolCallbacks:      beforeToolCBs,
+		AfterToolCallbacks:       afterToolCBs,
+		OnToolErrorCallbacks:     onToolErrorCBs,
+		BeforeAgentCallbacks:     beforeAgentCBs,
+		AfterAgentCallbacks:      afterAgentCBs,
 	})
+}
+
+// resolveCallbacks maps a list of CodeConfig names to resolved callbacks via a resolver function.
+func resolveCallbacks[T any](resolveFn func(string) (T, error), configs []CodeConfig) ([]T, error) {
+	if len(configs) == 0 {
+		return nil, nil
+	}
+	result := make([]T, 0, len(configs))
+	for _, cc := range configs {
+		cb, err := resolveFn(cc.Name)
+		if err != nil {
+			return nil, fmt.Errorf("resolve callback %q: %w", cc.Name, err)
+		}
+		result = append(result, cb)
+	}
+	return result, nil
 }
 
 // applyPreload wraps a skill.Source with a preload proxy based on the strategy.
@@ -207,12 +359,21 @@ func applyPreload(ctx context.Context, base skill.Source, strategy string) (skil
 	}
 }
 
-// buildSequentialAgent delegates to sequentialagent.New.
-func buildSequentialAgent(cfg *SequentialAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildSequentialAgent(cfg *SequentialAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
+	beforeCBs, err := resolveCallbacks(reg.ResolveBeforeAgentCallback, cfg.BeforeAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [sequential %q]: beforeAgentCallbacks: %w", cfg.Name(), err)
+	}
+	afterCBs, err := resolveCallbacks(reg.ResolveAfterAgentCallback, cfg.AfterAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [sequential %q]: afterAgentCallbacks: %w", cfg.Name(), err)
+	}
 	a, err := sequentialagent.New(sequentialagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name(),
-			SubAgents: subAgents,
+			Name:                 cfg.Name(),
+			SubAgents:            subAgents,
+			BeforeAgentCallbacks: beforeCBs,
+			AfterAgentCallbacks:  afterCBs,
 		},
 	})
 	if err != nil {
@@ -221,12 +382,21 @@ func buildSequentialAgent(cfg *SequentialAgentConfig, subAgents []agent.Agent) (
 	return a, nil
 }
 
-// buildParallelAgent delegates to parallelagent.New.
-func buildParallelAgent(cfg *ParallelAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildParallelAgent(cfg *ParallelAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
+	beforeCBs, err := resolveCallbacks(reg.ResolveBeforeAgentCallback, cfg.BeforeAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [parallel %q]: beforeAgentCallbacks: %w", cfg.Name(), err)
+	}
+	afterCBs, err := resolveCallbacks(reg.ResolveAfterAgentCallback, cfg.AfterAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [parallel %q]: afterAgentCallbacks: %w", cfg.Name(), err)
+	}
 	a, err := parallelagent.New(parallelagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name(),
-			SubAgents: subAgents,
+			Name:                 cfg.Name(),
+			SubAgents:            subAgents,
+			BeforeAgentCallbacks: beforeCBs,
+			AfterAgentCallbacks:  afterCBs,
 		},
 	})
 	if err != nil {
@@ -235,16 +405,24 @@ func buildParallelAgent(cfg *ParallelAgentConfig, subAgents []agent.Agent) (agen
 	return a, nil
 }
 
-// buildLoopAgent validates MaxIterations then delegates to loopagent.New.
-// MaxIterations must be >= 0; a value of 0 means "run indefinitely".
-func buildLoopAgent(cfg *LoopAgentConfig, subAgents []agent.Agent) (agent.Agent, error) {
+func buildLoopAgent(cfg *LoopAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
 	if cfg.MaxIterations < 0 {
 		return nil, fmt.Errorf("config.Build [loop %q]: MaxIterations must be >= 0, got %d", cfg.Name(), cfg.MaxIterations)
 	}
+	beforeCBs, err := resolveCallbacks(reg.ResolveBeforeAgentCallback, cfg.BeforeAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [loop %q]: beforeAgentCallbacks: %w", cfg.Name(), err)
+	}
+	afterCBs, err := resolveCallbacks(reg.ResolveAfterAgentCallback, cfg.AfterAgentCallbacks)
+	if err != nil {
+		return nil, fmt.Errorf("config.Build [loop %q]: afterAgentCallbacks: %w", cfg.Name(), err)
+	}
 	a, err := loopagent.New(loopagent.Config{
 		AgentConfig: agent.Config{
-			Name:      cfg.Name(),
-			SubAgents: subAgents,
+			Name:                 cfg.Name(),
+			SubAgents:            subAgents,
+			BeforeAgentCallbacks: beforeCBs,
+			AfterAgentCallbacks:  afterCBs,
 		},
 		MaxIterations: uint(cfg.MaxIterations),
 	})

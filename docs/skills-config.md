@@ -107,7 +107,7 @@ Load all skills from a directory:
 
 ```yaml
 name: my-agent
-type: llm
+agent_class: LlmAgent
 model: gemini/gemini-2.5-flash
 instruction: "You are a helpful assistant with access to specialized skills."
 skillsets:
@@ -122,7 +122,7 @@ Restrict agent to specific skills from a larger set:
 
 ```yaml
 name: restricted-agent
-type: llm
+agent_class: LlmAgent
 skillsets:
   - name: filesystem
     config:
@@ -144,7 +144,7 @@ Load all skills into memory for fastest access:
 
 ```yaml
 name: fast-agent
-type: llm
+agent_class: LlmAgent
 skillsets:
   - name: filesystem
     config:
@@ -158,7 +158,7 @@ Override the default skill guidance:
 
 ```yaml
 name: custom-skills-agent
-type: llm
+agent_class: LlmAgent
 skillsets:
   - name: filesystem
     config:
@@ -174,7 +174,7 @@ Combine skills from different sources:
 
 ```yaml
 name: multi-source-agent
-type: llm
+agent_class: LlmAgent
 skillsets:
   - name: filesystem
     config:

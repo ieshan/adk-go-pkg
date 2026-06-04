@@ -161,16 +161,16 @@ event := sess.Events().At(0)
 
 ```go
 // Simple fake agent
-agent := testutil.NewFakeAgent("my-agent")
+agent := testutil.MustNewFakeAgent("my-agent")
 
 // With description and sub-agents
-subAgent := testutil.NewFakeAgent("sub-agent")
-agent := testutil.NewFakeAgent("parent").
+subAgent := testutil.MustNewFakeAgent("sub-agent")
+agent := testutil.MustNewFakeAgent("parent").
     WithDescription("A test agent").
     WithSubAgents(subAgent)
 
 // With custom run function
-agent := testutil.NewFakeAgent("custom").
+agent := testutil.MustNewFakeAgent("custom").
     WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
         return func(yield func(*session.Event, error) bool) {
             e := testutil.NewTextEvent("model", "Custom response")
@@ -635,16 +635,22 @@ func TestSearchTool_Run(t *testing.T) {
 ```go
 func TestAgent_Delegation(t *testing.T) {
     // Create sub-agent
-    subAgent := testutil.NewFakeAgent("specialist").
+    subAgent := testutil.MustNewFakeAgent("specialist").
         WithDescription("A specialist agent")
 
     // Create parent with sub-agent
-    parent := testutil.NewFakeAgent("coordinator").
+    parent := testutil.MustNewFakeAgent("coordinator").
         WithDescription("Coordinates work").
         WithSubAgents(subAgent)
 
     // Test hierarchy
-    found := parent.FindSubAgent("specialist")
+    var found agent.Agent
+    for _, sub := range parent.SubAgents() {
+        if sub.Name() == "specialist" {
+            found = sub
+            break
+        }
+    }
     require.NotNil(t, found)
     assert.Equal(t, "specialist", found.Name())
     assert.Equal(t, "A specialist agent", found.Description())

@@ -1,5 +1,3 @@
-// Package config provides types and utilities for loading, parsing, and
-// translating agent configuration files in JSON or YAML format.
 package config
 
 import (
