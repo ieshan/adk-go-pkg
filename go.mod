@@ -3,10 +3,10 @@ module github.com/ieshan/adk-go-pkg
 go 1.26
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260618183306-a3e7cac39277
-	go.yaml.in/yaml/v4 v4.0.0-rc.5
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260626140745-677dfca132c9
+	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	google.golang.org/adk v1.4.0
-	google.golang.org/genai v1.61.0
+	google.golang.org/genai v1.62.0
 )
 
 require (
@@ -22,7 +22,7 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.16 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.17 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
@@ -37,8 +37,8 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	google.golang.org/api v0.285.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
+	google.golang.org/api v0.286.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
