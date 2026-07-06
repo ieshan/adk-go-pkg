@@ -1,8 +1,10 @@
 package agui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
@@ -24,11 +26,13 @@ func Handler(cfg Config) (http.Handler, error) {
 
 	sseWriter := agsse.NewSSEWriter()
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodySize)
 
 		var input types.RunAgentInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -48,26 +52,49 @@ func Handler(cfg Config) (http.Handler, error) {
 		}
 
 		ctx := r.Context()
+		session := newSSESession(w, flusher, sseWriter)
+
+		// Start keepalive goroutine if configured.
+		if cfg.KeepaliveInterval > 0 {
+			keepaliveCtx, cancelKeepalive := context.WithCancel(ctx)
+			defer cancelKeepalive()
+
+			go func() {
+				ticker := time.NewTicker(cfg.KeepaliveInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-keepaliveCtx.Done():
+						return
+					case <-ticker.C:
+						session.WritePing()
+					}
+				}
+			}()
+		}
 
 		for ev, err := range agent.Run(ctx, input) {
 			if err != nil {
-				// Emit RUN_ERROR event.
-				errEv := events.NewRunErrorEvent(err.Error())
-				_ = sseWriter.WriteEvent(ctx, w, errEv)
-				flusher.Flush()
+				errEv := events.NewRunErrorEvent(err.Error(), events.WithRunID(input.RunID))
+				_ = session.WriteEvent(ctx, errEv)
 				if cfg.OnError != nil {
 					cfg.OnError(err)
 				}
 				return
 			}
-
-			if writeErr := sseWriter.WriteEvent(ctx, w, ev); writeErr != nil {
+			if writeErr := session.WriteEvent(ctx, ev); writeErr != nil {
 				if cfg.OnError != nil {
 					cfg.OnError(writeErr)
 				}
 				return
 			}
-			flusher.Flush()
 		}
-	}), nil
+	})
+
+	// Apply CORS middleware if configured.
+	if cfg.CORS != nil {
+		handler = CORSMiddleware(cfg.CORS)(handler)
+	}
+
+	return handler, nil
 }

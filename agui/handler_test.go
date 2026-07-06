@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 
@@ -43,7 +44,36 @@ func parseSSEEvents(t *testing.T, body io.Reader) []string {
 			eventTypes = append(eventTypes, typ)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
 	return eventTypes
+}
+
+// parseSSEEventsRaw reads SSE data lines and returns the raw JSON maps.
+func parseSSEEventsRaw(t *testing.T, body io.Reader) []map[string]any {
+	t.Helper()
+	var result []map[string]any
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		data = strings.ReplaceAll(data, "\\n", "\n")
+		data = strings.ReplaceAll(data, "\\r", "\r")
+		var m map[string]any
+		if err := json.Unmarshal([]byte(data), &m); err != nil {
+			t.Logf("skipping non-JSON data line: %s", data)
+			continue
+		}
+		result = append(result, m)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+	return result
 }
 
 func TestHandler_BasicRun(t *testing.T) {
@@ -177,17 +207,20 @@ func TestHandler_RunError(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	eventTypes := parseSSEEvents(t, resp.Body)
+	rawEvents := parseSSEEventsRaw(t, resp.Body)
 
 	// Should contain RUN_STARTED and RUN_ERROR.
 	hasRunError := false
-	for _, et := range eventTypes {
-		if et == "RUN_ERROR" {
+	for _, m := range rawEvents {
+		if m["type"] == "RUN_ERROR" {
 			hasRunError = true
+			if runID, _ := m["runId"].(string); runID != "r1" {
+				t.Errorf("RUN_ERROR runId = %q, want %q", runID, "r1")
+			}
 		}
 	}
 	if !hasRunError {
-		t.Errorf("expected RUN_ERROR event in stream, got: %v", eventTypes)
+		t.Errorf("expected RUN_ERROR event in stream, got: %v", rawEvents)
 	}
 	if gotErr == nil {
 		t.Error("expected OnError callback to be called")
@@ -246,5 +279,161 @@ func TestHandler_NilAgent(t *testing.T) {
 	_, err := agui.Handler(agui.Config{})
 	if err == nil {
 		t.Fatal("expected error for nil Agent")
+	}
+}
+
+func TestHandler_CORS(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil)
+			yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+		}
+	})
+
+	h, err := agui.Handler(agui.Config{
+		Agent: agent,
+		CORS:  &agui.CORSConfig{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	t.Run("POST with CORS default", func(t *testing.T) {
+		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+		body, _ := json.Marshal(input)
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Errorf("Allow-Origin = %q, want *", got)
+		}
+	})
+
+	t.Run("OPTIONS preflight", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodOptions, srv.URL, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Errorf("expected 204, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Errorf("Allow-Origin = %q, want *", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
+			t.Errorf("Allow-Methods = %q, want to contain POST", got)
+		}
+	})
+
+	t.Run("specific origin", func(t *testing.T) {
+		h2, err := agui.Handler(agui.Config{
+			Agent: agent,
+			CORS:  &agui.CORSConfig{AllowOrigins: []string{"https://myapp.com"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv2 := httptest.NewServer(h2)
+		defer srv2.Close()
+
+		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+		body, _ := json.Marshal(input)
+		resp, err := http.Post(srv2.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://myapp.com" {
+			t.Errorf("Allow-Origin = %q, want https://myapp.com", got)
+		}
+	})
+}
+
+func TestHandler_Keepalive(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			time.Sleep(200 * time.Millisecond)
+			if !yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil) {
+				return
+			}
+			yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+		}
+	})
+
+	h, err := agui.Handler(agui.Config{
+		Agent:             agent,
+		KeepaliveInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+	body, _ := json.Marshal(input)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	scanner := bufio.NewScanner(resp.Body)
+	hasPing := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, ": ping") {
+			hasPing = true
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+	if !hasPing {
+		t.Error("expected at least one keepalive ping before events")
+	}
+}
+
+func TestHandler_MaxBodySize(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {}
+	})
+
+	h, err := agui.Handler(agui.Config{
+		Agent:       agent,
+		MaxBodySize: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// Body > 100 bytes.
+	bigBody := strings.Repeat("x", 200)
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(bigBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }

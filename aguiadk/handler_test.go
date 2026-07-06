@@ -142,3 +142,51 @@ func TestHandler_E2E_SSE(t *testing.T) {
 		t.Error("expected text content in SSE response")
 	}
 }
+
+func TestHandler_InlineToolMode(t *testing.T) {
+	adkAgent := testutil.MustNewFakeAgent("inline-agent")
+
+	h, err := aguiadk.Handler(
+		aguiadk.Config{
+			Agent:   adkAgent,
+			AppName: "inline-app",
+			UserID:  "user-1",
+		},
+		agui.Config{
+			ToolMode: agui.ToolModeInline,
+		},
+	)
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// POST a tool result — the handler should accept it at /tool-result.
+	resultBody, _ := json.Marshal(map[string]string{
+		"toolCallId": "tc-test-1",
+		"content":    "result data",
+	})
+	resp, err := http.Post(srv.URL+"/tool-result", "application/json", bytes.NewReader(resultBody))
+	if err != nil {
+		t.Fatalf("POST /tool-result: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// 404 is expected since no agent run is waiting for this tool call ID,
+	// but the endpoint should exist and respond (not 405 or connection refused).
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 (no pending tool call), got %d", resp.StatusCode)
+	}
+
+	// Verify GET to /tool-result returns 405 (method not allowed via Go 1.22+ pattern).
+	getResp, err := http.Get(srv.URL + "/tool-result")
+	if err != nil {
+		t.Fatalf("GET /tool-result: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET /tool-result: expected 405, got %d", getResp.StatusCode)
+	}
+}

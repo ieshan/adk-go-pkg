@@ -389,3 +389,62 @@ func TestActivitySnapshotAndDelta(t *testing.T) {
 		t.Errorf("event[1] type = %s, want ACTIVITY_DELTA", got[1].Type())
 	}
 }
+
+func TestRunErrorWithOptions_RunID(t *testing.T) {
+	ch := make(chan events.Event, 16)
+	em := agui.NewEventEmitter(ch)
+
+	if err := em.RunErrorWithOptions("boom", events.WithRunID("run-42")); err != nil {
+		t.Fatalf("RunErrorWithOptions: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(got))
+	}
+
+	errEvt, ok := got[0].(*events.RunErrorEvent)
+	if !ok {
+		t.Fatalf("expected *events.RunErrorEvent, got %T", got[0])
+	}
+	if errEvt.RunID() != "run-42" {
+		t.Errorf("RunID = %q, want %q", errEvt.RunID(), "run-42")
+	}
+	if errEvt.Message != "boom" {
+		t.Errorf("Message = %q, want %q", errEvt.Message, "boom")
+	}
+}
+
+func TestRunFinishedWithOptions_Interrupt(t *testing.T) {
+	ch := make(chan events.Event, 16)
+	em := agui.NewEventEmitter(ch)
+
+	interrupts := []types.Interrupt{
+		{ID: "int-1", Reason: "tool_call", ToolCallID: "tc-1"},
+	}
+	if err := em.RunFinishedWithOptions("thread-1", "run-1", events.WithInterruptOutcome(interrupts)); err != nil {
+		t.Fatalf("RunFinishedWithOptions: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(got))
+	}
+
+	finEvt, ok := got[0].(*events.RunFinishedEvent)
+	if !ok {
+		t.Fatalf("expected *events.RunFinishedEvent, got %T", got[0])
+	}
+	if finEvt.Outcome == nil {
+		t.Fatal("expected non-nil Outcome")
+	}
+	if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
+		t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
+	}
+	if len(finEvt.Outcome.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
+	}
+	if finEvt.Outcome.Interrupts[0].ID != "int-1" {
+		t.Errorf("Interrupts[0].ID = %q, want %q", finEvt.Outcome.Interrupts[0].ID, "int-1")
+	}
+}

@@ -6,6 +6,7 @@ package aguiadk
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/artifact"
 	"google.golang.org/adk/memory"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -129,6 +131,7 @@ func New(cfg Config) (agui.Agent, error) {
 		cfg:     cfg,
 		runner:  r,
 		sessMgr: sm,
+		sessSvc: sessSvc,
 	}
 	return agui.AgentFunc(b.run), nil
 }
@@ -138,6 +141,7 @@ type bridge struct {
 	cfg     Config
 	runner  *runner.Runner
 	sessMgr *SessionManager
+	sessSvc session.Service
 }
 
 // resolveAppName returns the app name for the current request.
@@ -182,6 +186,14 @@ func (b *bridge) run(ctx context.Context, input types.RunAgentInput) iter.Seq2[e
 
 	go func() {
 		defer close(ch)
+		defer func() {
+			if r := recover(); r != nil {
+				_ = emitter.RunErrorWithOptions(
+					fmt.Sprintf("internal panic: %v", r),
+					events.WithRunID(input.RunID),
+				)
+			}
+		}()
 		b.runInternal(ctx, input, emitter)
 	}()
 
@@ -196,7 +208,10 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	// Resolve or create an ADK session for this AG-UI thread.
 	adkSession, err := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
 	if err != nil {
-		_ = emitter.RunError(fmt.Sprintf("session resolve failed: %v", err), nil)
+		_ = emitter.RunErrorWithOptions(
+			fmt.Sprintf("session resolve failed: %v", err),
+			events.WithRunID(input.RunID),
+		)
 		return
 	}
 
@@ -219,6 +234,48 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	// Translate the last user message to genai.Content.
 	msg := lastUserMessage(input.Messages)
 
+	// Process resume entries: append FunctionResponse events to the ADK
+	// session for each resolved interrupt so the agent can continue.
+	if len(input.Resume) > 0 {
+		for _, entry := range input.Resume {
+			if entry.Status == types.ResumeStatusResolved {
+				respEvent := session.NewEvent("resume")
+				respEvent.Author = "user"
+				respEvent.LLMResponse = model.LLMResponse{
+					Content: &genai.Content{
+						Role: "user",
+						Parts: []*genai.Part{{
+							FunctionResponse: &genai.FunctionResponse{
+								ID: entry.InterruptID,
+								Response: map[string]any{
+									"result": entry.Payload,
+								},
+							},
+						}},
+					},
+				}
+				_ = b.sessSvc.AppendEvent(ctx, adkSession, respEvent)
+			}
+		}
+	}
+
+	// Build run options from input.State.
+	var runOpts []runner.RunOption
+	if input.State != nil {
+		if stateMap, ok := input.State.(map[string]any); ok {
+			if len(stateMap) > 0 {
+				runOpts = append(runOpts, runner.WithStateDelta(stateMap))
+			}
+		} else {
+			if data, err := json.Marshal(input.State); err == nil {
+				var stateMap map[string]any
+				if json.Unmarshal(data, &stateMap) == nil && len(stateMap) > 0 {
+					runOpts = append(runOpts, runner.WithStateDelta(stateMap))
+				}
+			}
+		}
+	}
+
 	// Run the ADK agent.
 	runCfg := agent.RunConfig{
 		StreamingMode: agent.StreamingModeSSE,
@@ -226,9 +283,12 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 
 	translator := newEventTranslator(emitter)
 
-	for adkEvent, err := range b.runner.Run(ctx, userID, adkSession.ID(), msg, runCfg) {
+	for adkEvent, err := range b.runner.Run(ctx, userID, adkSession.ID(), msg, runCfg, runOpts...) {
 		if err != nil {
-			_ = emitter.RunError(fmt.Sprintf("agent error: %v", err), nil)
+			_ = emitter.RunErrorWithOptions(
+				fmt.Sprintf("agent error: %v", err),
+				events.WithRunID(input.RunID),
+			)
 			return
 		}
 		if adkEvent == nil {
@@ -236,6 +296,26 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 		}
 
 		translator.translate(adkEvent)
+
+		// Check for long-running tool interrupts.
+		if len(adkEvent.LongRunningToolIDs) > 0 {
+			translator.closeOpenMessage()
+
+			var interrupts []types.Interrupt
+			for _, id := range adkEvent.LongRunningToolIDs {
+				interrupts = append(interrupts, types.Interrupt{
+					ID:         id,
+					Reason:     "tool_call",
+					ToolCallID: id,
+				})
+			}
+
+			_ = emitter.RunFinishedWithOptions(
+				input.ThreadID, input.RunID,
+				events.WithInterruptOutcome(interrupts),
+			)
+			return
+		}
 	}
 
 	// Close any open text message.
@@ -262,11 +342,12 @@ type eventTranslator struct {
 	emitter      *agui.EventEmitter
 	currentMsgID string
 	msgOpen      bool
-	prevText     string // accumulated text for computing deltas
+	prevText     string            // accumulated text for computing deltas
+	toolCallIDs  map[string]string // ADK function call ID/name → AG-UI tool call ID
 }
 
 func newEventTranslator(emitter *agui.EventEmitter) *eventTranslator {
-	return &eventTranslator{emitter: emitter}
+	return &eventTranslator{emitter: emitter, toolCallIDs: make(map[string]string)}
 }
 
 // translate converts a single ADK event into one or more AG-UI events.
@@ -294,10 +375,12 @@ func (t *eventTranslator) translate(ev *session.Event) {
 			t.closeOpenMessage()
 			t.emitFunctionCall(part.FunctionCall)
 
+		case part.FunctionResponse != nil:
+			t.closeOpenMessage()
+			t.emitFunctionResponse(part.FunctionResponse)
+
 		case part.Text != "":
 			t.emitText(part.Text, ev.Partial)
-
-			// FunctionResponse parts are internal to ADK, skip them.
 		}
 	}
 }
@@ -359,6 +442,29 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall) {
 	}
 
 	_ = t.emitter.ToolCallEnd(toolCallID)
+
+	// Map ADK function call ID and name to AG-UI tool call ID for later
+	// correlation with FunctionResponse parts.
+	if fc.ID != "" {
+		t.toolCallIDs[fc.ID] = toolCallID
+	}
+	t.toolCallIDs[fc.Name] = toolCallID
+}
+
+// emitFunctionResponse translates an ADK FunctionResponse to a AG-UI
+// TOOL_CALL_RESULT event, correlating it to the earlier FunctionCall
+// via the toolCallIDs map.
+func (t *eventTranslator) emitFunctionResponse(fr *genai.FunctionResponse) {
+	toolCallID, ok := t.toolCallIDs[fr.ID]
+	if !ok {
+		toolCallID, ok = t.toolCallIDs[fr.Name]
+	}
+	if !ok {
+		return // no matching tool call, skip
+	}
+	content, _ := json.Marshal(fr.Response)
+	msgID := t.emitter.GenerateMessageID()
+	_ = t.emitter.ToolCallResult(msgID, toolCallID, string(content))
 }
 
 // emitThought translates a thought part to AG-UI reasoning events.
@@ -391,26 +497,80 @@ func (t *eventTranslator) emitStateDelta(delta map[string]any) {
 // --- Helper functions ---
 
 // lastUserMessage extracts the last user message from AG-UI messages and
-// converts it to a genai.Content suitable for the ADK runner.
+// converts it to a genai.Content suitable for the ADK runner. Supports both
+// plain text (ContentString) and multimodal content (ContentInputContents).
 func lastUserMessage(messages []types.Message) *genai.Content {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if msg.Role != types.RoleUser {
 			continue
 		}
-		text, ok := msg.ContentString()
-		if !ok {
-			continue
+
+		// Try plain text first.
+		if text, ok := msg.ContentString(); ok {
+			return &genai.Content{
+				Role:  "user",
+				Parts: []*genai.Part{{Text: text}},
+			}
 		}
-		return &genai.Content{
-			Role:  "user",
-			Parts: []*genai.Part{{Text: text}},
+
+		// Try multimodal content.
+		if contents, ok := msg.ContentInputContents(); ok {
+			parts := inputContentsToGenaiParts(contents)
+			if len(parts) > 0 {
+				return &genai.Content{Role: "user", Parts: parts}
+			}
 		}
 	}
 	return &genai.Content{
 		Role:  "user",
 		Parts: []*genai.Part{{Text: ""}},
 	}
+}
+
+// inputContentsToGenaiParts converts AG-UI InputContent entries to genai.Part
+// instances for the ADK runner.
+func inputContentsToGenaiParts(contents []types.InputContent) []*genai.Part {
+	var parts []*genai.Part
+	for _, c := range contents {
+		switch c.Type {
+		case types.InputContentTypeText:
+			if c.Text != "" {
+				parts = append(parts, &genai.Part{Text: c.Text})
+			}
+
+		case types.InputContentTypeBinary:
+			if c.Data != "" {
+				if data, err := base64.StdEncoding.DecodeString(c.Data); err == nil {
+					parts = append(parts, &genai.Part{
+						InlineData: &genai.Blob{Data: data, MIMEType: c.MimeType},
+					})
+				}
+			} else if c.URL != "" {
+				parts = append(parts, &genai.Part{
+					FileData: &genai.FileData{FileURI: c.URL, MIMEType: c.MimeType},
+				})
+			}
+
+		case types.InputContentTypeImage, types.InputContentTypeAudio,
+			types.InputContentTypeVideo, types.InputContentTypeDocument:
+			if c.Source != nil {
+				switch c.Source.Type {
+				case types.InputContentSourceTypeData:
+					if data, err := base64.StdEncoding.DecodeString(c.Source.Value); err == nil {
+						parts = append(parts, &genai.Part{
+							InlineData: &genai.Blob{Data: data, MIMEType: c.Source.MimeType},
+						})
+					}
+				case types.InputContentSourceTypeURL:
+					parts = append(parts, &genai.Part{
+						FileData: &genai.FileData{FileURI: c.Source.Value, MIMEType: c.Source.MimeType},
+					})
+				}
+			}
+		}
+	}
+	return parts
 }
 
 // sessionStateToMap converts ADK session state to a plain map.

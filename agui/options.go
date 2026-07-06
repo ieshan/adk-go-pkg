@@ -24,6 +24,16 @@ type Config struct {
 
 	// OnError is an optional callback for handler errors.
 	OnError func(err error)
+
+	// CORS configures cross-origin resource sharing. If nil, no CORS headers are set.
+	CORS *CORSConfig
+
+	// KeepaliveInterval controls SSE ping frequency. Default: 0 (disabled).
+	// Recommended: 15-30 seconds behind proxies.
+	KeepaliveInterval time.Duration
+
+	// MaxBodySize limits request body size in bytes. Default: 10 MB (10 << 20).
+	MaxBodySize int64
 }
 
 func (c *Config) validate() error {
@@ -39,5 +49,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ToolMode == ToolModeInline && c.ToolResultHandler == nil {
 		c.ToolResultHandler = NewToolResultHandler()
+	}
+	if c.MaxBodySize == 0 {
+		c.MaxBodySize = 10 << 20
 	}
 }

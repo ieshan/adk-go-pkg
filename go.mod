@@ -3,9 +3,9 @@ module github.com/ieshan/adk-go-pkg
 go 1.26
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260626140745-677dfca132c9
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260706070813-ab0ea7cedf5b
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
-	google.golang.org/adk v1.4.0
+	google.golang.org/adk v1.5.0
 	google.golang.org/genai v1.62.0
 )
 
@@ -36,10 +36,10 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
-	google.golang.org/api v0.286.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
-	google.golang.org/grpc v1.81.1 // indirect
+	golang.org/x/text v0.39.0 // indirect
+	google.golang.org/api v0.287.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706174457-84412dbb4a06 // indirect
+	google.golang.org/grpc v1.82.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/omap v1.2.0 // indirect
