@@ -46,7 +46,7 @@ func (s *StateManager) Snapshot() any {
 		return nil
 	}
 	var deepCopy map[string]any
-	if err := json.Unmarshal(data, &deepCopy); err != nil {
+	if err = json.Unmarshal(data, &deepCopy); err != nil {
 		return nil
 	}
 	return deepCopy

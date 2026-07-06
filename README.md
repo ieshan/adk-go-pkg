@@ -101,7 +101,7 @@ func main() {
 			emitter.TextMessageStart(msgID, &role)
 			emitter.TextMessageContent(msgID, "Hello from AG-UI!")
 			emitter.TextMessageEnd(msgID)
-			emitter.RunFinished(input.ThreadID, input.RunID)
+			emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 		}()
 		return agui.ChanToIter(ctx, ch)
 	})
@@ -416,22 +416,22 @@ func TestMyAgent(t *testing.T) {
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
-- **ADK-Go v1.2.0+** (`google.golang.org/adk`) — Required for Agent Skills support
-- **GenAI v1.54.0** (`google.golang.org/genai`)
+- **ADK-Go v1.5.0+** (`google.golang.org/adk`) — Required for Agent Skills support
+- **GenAI v1.62.0** (`google.golang.org/genai`)
 
 ## Recent Changes
 
 - **Test Utilities**: New `testutil` package with fake implementations of all ADK-Go interfaces (FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, RunnerBuilder). Enables fast, deterministic testing without external LLM providers. See [docs/testutil.md](docs/testutil.md).
-- **Agent Skills Config**: New skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name). Requires ADK-Go v1.2.0+.
-- **OpenAI Model Provider**: Updated to support genai v1.54.0 `FunctionResponse.Parts` structure for function calling compatibility
-- **File Artifact Service**: Added `GetArtifactVersion` method for ADK-Go v1.1.0 compatibility, enabling metadata retrieval without loading full content
+- **Agent Skills Config**: Skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name).
+- **OpenAI Model Provider**: Supports genai `FunctionResponse.Parts` structure for function calling.
+- **File Artifact Service**: `GetArtifactVersion` method for metadata retrieval without loading full content.
 
 ## Dependencies
 
 Beyond ADK-Go and `google.golang.org/genai`, the only additional direct dependencies are:
 
 - [`github.com/ag-ui-protocol/ag-ui/sdks/community/go`](https://github.com/ag-ui-protocol/ag-ui) -- AG-UI event types and helpers
-- [`sigs.k8s.io/yaml`](https://github.com/kubernetes-sigs/yaml) -- YAML parsing for the config loader
+- [`go.yaml.in/yaml/v4`](https://github.com/go-yaml/yaml) -- YAML parsing for the config loader
 
 ## License
 

@@ -2,6 +2,7 @@ package aguiadk_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"iter"
@@ -57,7 +58,7 @@ func TestHandler_InvalidConfig(t *testing.T) {
 
 func TestHandler_E2E_SSE(t *testing.T) {
 	// Create a mock ADK agent that returns a simple text response.
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "e2e-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{

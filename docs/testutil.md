@@ -135,8 +135,8 @@ sess := testutil.NewFakeSession().
         "theme":   "dark",
     }).
     WithEvents(
-        testutil.NewTextEvent("user", "Hello"),
-        testutil.NewTextEvent("model", "Hi there!"),
+        testutil.NewTextEvent(context.Background(), "user", "Hello"),
+        testutil.NewTextEvent(context.Background(), "model", "Hi there!"),
     )
 
 // Access state
@@ -173,7 +173,7 @@ agent := testutil.MustNewFakeAgent("parent").
 agent := testutil.MustNewFakeAgent("custom").
     WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
         return func(yield func(*session.Event, error) bool) {
-            e := testutil.NewTextEvent("model", "Custom response")
+            e := testutil.NewTextEvent(context.Background(), "model", "Custom response")
             yield(e, nil)
         }
     })
@@ -248,7 +248,7 @@ tool := testutil.NewFakeTool("search").
         Name:        "search",
         Description: "Search the web",
     }).
-    WithRunFunc(func(ctx tool.Context, args map[string]any) (any, error) {
+    WithRunFunc(func(ctx agent.ToolContext, args map[string]any) (any, error) {
         return map[string]any{"results": []string{"result1", "result2"}}, nil
     })
 
@@ -375,7 +375,7 @@ getResp, err := svc.Get(ctx, &session.GetRequest{
 })
 
 // Append event (handles temp: key removal)
-event := testutil.NewTextEvent("model", "Hello")
+event := testutil.NewTextEvent(context.Background(), "model", "Hello")
 err := svc.AppendEvent(ctx, sess, event)
 
 // Assertions
@@ -483,24 +483,24 @@ imgPart := testutil.NewInlineDataPart("image/png", pngBytes)
 
 ```go
 // Basic events
-event := testutil.NewEvent("model", content)
-textEvent := testutil.NewTextEvent("model", "Hello!")
+event := testutil.NewEvent(context.Background(), "model", content)
+textEvent := testutil.NewTextEvent(context.Background(), "model", "Hello!")
 
 // Function call events
-fcEvent := testutil.NewFunctionCallEvent("model",
+fcEvent := testutil.NewFunctionCallEvent(context.Background(), "model",
     testutil.NewFunctionCall("search", map[string]any{"query": "test"}),
 )
 
 // Function response events
-frEvent := testutil.NewFunctionResponseEvent("user",
+frEvent := testutil.NewFunctionResponseEvent(context.Background(), "user",
     testutil.NewFunctionResponseForCall("search", map[string]any{"results": []string{}}),
 )
 
 // Transfer events
-transferEvent := testutil.NewTransferEvent("model", "sub-agent")
+transferEvent := testutil.NewTransferEvent(context.Background(), "model", "sub-agent")
 
 // With invocation ID
-invEvent := testutil.NewEventWithInvocationID("inv-123", "model", content)
+invEvent := testutil.NewEventWithInvocationID(context.Background(), "inv-123", "model", content)
 ```
 
 ### LLM Response Builders
@@ -783,5 +783,5 @@ This allows `FakeAgent` to be passed anywhere `agent.Agent` is expected.
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func
-- **ADK-Go v1.2.0+** (`google.golang.org/adk`)
-- **GenAI v1.54.0+** (`google.golang.org/genai`)
+- **ADK-Go v1.5.0+** (`google.golang.org/adk`)
+- **GenAI v1.62.0** (`google.golang.org/genai`)

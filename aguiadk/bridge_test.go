@@ -101,7 +101,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 }
 
 func TestBridge_TextParts(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -144,7 +144,7 @@ func TestBridge_TextParts(t *testing.T) {
 }
 
 func TestBridge_StreamingTextParts(t *testing.T) {
-	ev1 := session.NewEvent("inv-1")
+	ev1 := session.NewEventWithContext(context.Background(), "inv-1")
 	ev1.Author = "test-agent"
 	ev1.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -154,7 +154,7 @@ func TestBridge_StreamingTextParts(t *testing.T) {
 		Partial: true,
 	}
 
-	ev2 := session.NewEvent("inv-1")
+	ev2 := session.NewEventWithContext(context.Background(), "inv-1")
 	ev2.Author = "test-agent"
 	ev2.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -200,7 +200,7 @@ func TestBridge_StreamingTextParts(t *testing.T) {
 }
 
 func TestBridge_FunctionCallParts(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -249,7 +249,7 @@ func TestBridge_FunctionCallParts(t *testing.T) {
 }
 
 func TestBridge_FunctionResponseParts(t *testing.T) {
-	ev1 := session.NewEvent("inv-1")
+	ev1 := session.NewEventWithContext(context.Background(), "inv-1")
 	ev1.Author = "test-agent"
 	ev1.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -267,7 +267,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 		Partial: false,
 	}
 
-	ev2 := session.NewEvent("inv-2")
+	ev2 := session.NewEventWithContext(context.Background(), "inv-2")
 	ev2.Author = "test-agent"
 	ev2.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -343,7 +343,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 }
 
 func TestBridge_ThoughtParts(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -439,7 +439,7 @@ func TestBridge_StateSnapshot(t *testing.T) {
 }
 
 func TestBridge_StateDelta(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -483,7 +483,7 @@ func TestBridge_StateDelta(t *testing.T) {
 }
 
 func TestBridge_MessagesSnapshot(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -528,7 +528,7 @@ func TestBridge_MessagesSnapshot(t *testing.T) {
 
 func TestBridge_MixedParts(t *testing.T) {
 	// Event with text followed by function call.
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -680,7 +680,7 @@ func TestBridge_RunErrorHasRunID(t *testing.T) {
 }
 
 func TestBridge_InputState(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -729,7 +729,7 @@ func TestBridge_InputState(t *testing.T) {
 }
 
 func TestBridge_MultimodalMessage(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -809,7 +809,7 @@ func TestBridge_MultimodalMessage(t *testing.T) {
 }
 
 func TestBridge_LongRunningToolInterrupt(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
@@ -882,7 +882,7 @@ func TestBridge_LongRunningToolInterrupt(t *testing.T) {
 }
 
 func TestBridge_ResumeEntries(t *testing.T) {
-	ev := session.NewEvent("inv-1")
+	ev := session.NewEventWithContext(context.Background(), "inv-1")
 	ev.Author = "test-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{

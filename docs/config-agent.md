@@ -544,5 +544,5 @@ root.SubAgentEntries = []config.SubAgentEntry{
     {Inline: researcher},
     {Inline: writer},
 }
-agent, err := config.Build(ctx, root, reg)
+agent, err := config.BuildWithPath(ctx, root, reg, "")
 ```

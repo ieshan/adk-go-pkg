@@ -16,8 +16,8 @@ import (
 	"google.golang.org/genai"
 )
 
-// Build constructs a live [agent.Agent] tree from a declarative [AgentConfig]
-// and a [Registry] that provides model and tool factories.
+// BuildWithPath constructs a live [agent.Agent] tree from a declarative
+// [AgentConfig] and a [Registry] that provides model and tool factories.
 //
 // The function is recursive: sub-agents are built depth-first before the parent
 // so that the fully initialised child [agent.Agent] values are available when
@@ -33,24 +33,19 @@ import (
 // An error is returned for any unknown type, unresolvable model prefix,
 // unresolvable tool name, or invalid MaxIterations value.
 //
+// The configPath parameter is used to resolve relative config_path references
+// in sub-agents. Pass an empty string when not loading from a file.
+//
 // Example:
 //
 //	reg := config.NewRegistry()
 //	reg.RegisterModel("gemini", geminiFactory)
 //	reg.RegisterTool("search", searchFactory)
 //	//	cfg, _ := config.Load("agent.yaml")
-//	a, err := config.Build(ctx, cfg, reg)
+//	a, err := config.BuildWithPath(ctx, cfg, reg, "")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//
-// For sub-agent file references to resolve correctly, use BuildWithPath.
-func Build(ctx context.Context, cfg AgentConfig, reg *Registry) (agent.Agent, error) {
-	return BuildWithPath(ctx, cfg, reg, "")
-}
-
-// BuildWithPath is like Build but also accepts the config file path so that
-// relative config_path references in sub-agents can be resolved.
 func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPath string) (agent.Agent, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config.Build: nil config")
@@ -100,17 +95,12 @@ func toAgentLiveRunConfig(cfg *LiveRunConfig) *agent.LiveRunConfig {
 	}
 }
 
-// BuildApp is like Build but accepts an AppConfig and returns runtime configs
+// BuildAppWithPath accepts an AppConfig and returns runtime configs
 // ([agent.RunConfig], [agent.LiveRunConfig], and [ContextCacheConfig])
-// alongside the built agent. It delegates to BuildAppWithPath with an empty path.
-func BuildApp(ctx context.Context, appCfg *AppConfig, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
-	return BuildAppWithPath(ctx, appCfg, reg, "")
-}
-
-// BuildAppWithPath is like BuildApp but accepts the config file path so that
-// relative config_path references in sub-agents can be resolved.
-// It returns the built agent together with [agent.RunConfig], [agent.LiveRunConfig],
-// and [ContextCacheConfig].
+// alongside the built agent.
+//
+// The configPath parameter is used to resolve relative config_path references
+// in sub-agents. Pass an empty string when not loading from a file.
 func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
 	ag, err := BuildWithPath(ctx, appCfg.AgentConfig, reg, configPath)
 	if err != nil {

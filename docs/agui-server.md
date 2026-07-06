@@ -50,7 +50,7 @@ func main() {
 			emitter.TextMessageStart(msgID, &role)
 			emitter.TextMessageContent(msgID, "Hello from AG-UI!")
 			emitter.TextMessageEnd(msgID)
-			emitter.RunFinished(input.ThreadID, input.RunID)
+			emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 		}()
 		return agui.ChanToIter(ctx, ch)
 	})
@@ -107,7 +107,7 @@ func myAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Ev
 		defer close(ch)
 		emitter.RunStarted(input.ThreadID, input.RunID)
 		// ... emit events ...
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -164,7 +164,7 @@ func streamingAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[ev
 		}
 
 		emitter.TextMessageEnd(msgID)
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 
 	return agui.ChanToIter(ctx, ch)
@@ -199,8 +199,8 @@ always `nil` for channel sends, but the signature is future-proof).
 | Method | Description |
 |--------|-------------|
 | `RunStarted(threadID, runID string) error` | Emits `RUN_STARTED` |
-| `RunFinished(threadID, runID string) error` | Emits `RUN_FINISHED` |
-| `RunError(message string, code *string) error` | Emits `RUN_ERROR` |
+| `RunFinishedWithOptions(threadID, runID string, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with optional configuration (e.g., `events.WithSuccessOutcome`, `events.WithInterruptOutcome`) |
+| `RunErrorWithOptions(message string, opts ...events.RunErrorOption) error` | Emits `RUN_ERROR` with optional configuration (e.g., `events.WithRunID`, `events.WithErrorCode`) |
 
 ### Text Messages
 
@@ -329,7 +329,7 @@ func main() {
 			sm.Apply(directPatch)
 			emitter.StateDelta(directPatch)
 
-			emitter.RunFinished(input.ThreadID, input.RunID)
+			emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 		}()
 		return agui.ChanToIter(ctx, ch)
 	})
@@ -380,7 +380,7 @@ func toolAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.
 		emitter.ToolCallEnd(toolCallID)
 
 		// End the run; the frontend will call back with the result.
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -430,7 +430,7 @@ func main() {
 			// Wait for the frontend to submit the result.
 			result, err := toolHandler.Wait(ctx, toolCallID, 5*time.Minute)
 			if err != nil {
-				emitter.RunError("tool timed out: "+err.Error(), nil)
+				emitter.RunErrorWithOptions("tool timed out: " + err.Error())
 				return
 			}
 
@@ -441,7 +441,7 @@ func main() {
 			emitter.TextMessageContent(msgID, "The weather is: "+result)
 			emitter.TextMessageEnd(msgID)
 
-			emitter.RunFinished(input.ThreadID, input.RunID)
+			emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 		}()
 		return agui.ChanToIter(ctx, ch)
 	})
@@ -531,7 +531,7 @@ func authMiddleware(next agui.Agent) agui.Agent {
 			go func() {
 				defer close(ch)
 				code := "AUTH_FAILED"
-				emitter.RunError("invalid thread ID", &code)
+				emitter.RunErrorWithOptions("invalid thread ID", events.WithErrorCode(code))
 			}()
 			return agui.ChanToIter(ctx, ch)
 		}
@@ -550,7 +550,7 @@ func myAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Ev
 		emitter.TextMessageStart(msgID, &role)
 		emitter.TextMessageContent(msgID, "Authenticated!")
 		emitter.TextMessageEnd(msgID)
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -608,7 +608,7 @@ func steppedAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[even
 			return nil
 		})
 
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -668,7 +668,7 @@ func activityAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[eve
 		replace := true
 		tracker.Snapshot(map[string]any{"percent": 100, "status": "done"}, &replace)
 
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -731,7 +731,7 @@ func reasoningAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[ev
 		emitter.TextMessageContent(msgID, "Let me check the weather for you.")
 		emitter.TextMessageEnd(msgID)
 
-		emitter.RunFinished(input.ThreadID, input.RunID)
+		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 	}()
 	return agui.ChanToIter(ctx, ch)
 }
@@ -765,6 +765,16 @@ type Config struct {
 
     // OnError is an optional callback for handler errors.
     OnError func(err error)
+
+    // CORS configures cross-origin resource sharing. If nil, no CORS headers are set.
+    CORS *CORSConfig
+
+    // KeepaliveInterval controls SSE ping frequency. Default: 0 (disabled).
+    // Recommended: 15-30 seconds behind proxies.
+    KeepaliveInterval time.Duration
+
+    // MaxBodySize limits request body size in bytes. Default: 10 MB (10 << 20).
+    MaxBodySize int64
 }
 ```
 
@@ -781,6 +791,61 @@ func Handler(cfg Config) (http.Handler, error)
 3. Applies the middleware chain to the agent
 4. Iterates the agent's event stream, writing each event as an SSE message
 5. On error, emits a `RUN_ERROR` event and calls `OnError` if configured
+
+## CORS
+
+The handler supports optional cross-origin resource sharing via the `CORS` field
+on `Config`. When set, CORS headers are applied and OPTIONS preflight requests
+are handled automatically.
+
+```go
+type CORSConfig struct {
+    // AllowOrigins lists permitted origin URIs. Default: ["*"].
+    AllowOrigins []string
+
+    // AllowMethods lists permitted HTTP methods. Default: ["POST", "OPTIONS"].
+    AllowMethods []string
+
+    // AllowHeaders lists permitted request headers. Default: ["Content-Type", "Cache-Control"].
+    AllowHeaders []string
+
+    // ExposeHeaders lists response headers exposed to the client. Optional.
+    ExposeHeaders []string
+
+    // AllowCredentials permits cookies and credentials. Optional.
+    AllowCredentials bool
+
+    // MaxAge is the preflight cache duration. Default: 300s.
+    MaxAge time.Duration
+}
+```
+
+### CORSMiddleware
+
+```go
+func CORSMiddleware(cfg *CORSConfig) func(http.Handler) http.Handler
+```
+
+Returns an `http.Handler` middleware that sets CORS headers and handles OPTIONS
+preflight requests. If `cfg` is nil, defaults are applied. This middleware is
+applied automatically when `Config.CORS` is set, but can also be used
+standalone.
+
+### Example: CORS-Enabled Handler
+
+```go
+handler, err := agui.Handler(agui.Config{
+    Agent: agent,
+    CORS: &agui.CORSConfig{
+        AllowOrigins:     []string{"https://myapp.example.com"},
+        AllowCredentials: true,
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+log.Fatal(http.ListenAndServe(":8080", handler))
+```
 
 ## Full Example
 
@@ -856,7 +921,7 @@ func main() {
 			sm.Apply(patch)
 			emitter.StateDelta(patch)
 
-			emitter.RunFinished(input.ThreadID, input.RunID)
+			emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 		}()
 
 		return agui.ChanToIter(ctx, ch)

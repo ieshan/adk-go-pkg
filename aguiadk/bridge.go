@@ -239,7 +239,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	if len(input.Resume) > 0 {
 		for _, entry := range input.Resume {
 			if entry.Status == types.ResumeStatusResolved {
-				respEvent := session.NewEvent("resume")
+				respEvent := session.NewEventWithContext(ctx, "resume")
 				respEvent.Author = "user"
 				respEvent.LLMResponse = model.LLMResponse{
 					Content: &genai.Content{
@@ -332,7 +332,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	}
 
 	// Emit RUN_FINISHED.
-	if err := emitter.RunFinished(input.ThreadID, input.RunID); err != nil {
+	if err := emitter.RunFinishedWithOptions(input.ThreadID, input.RunID); err != nil {
 		return
 	}
 }

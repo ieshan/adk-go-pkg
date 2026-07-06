@@ -39,7 +39,7 @@ func TestBuild_LLMAgent(t *testing.T) {
 		Tools:           []ToolRef{{Name: "search"}},
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestBuild_SequentialAgent(t *testing.T) {
 		},
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestBuild_ParallelAgent(t *testing.T) {
 		},
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBuild_LoopAgent(t *testing.T) {
 		MaxIterations: 3,
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestBuild_NestedTree(t *testing.T) {
 		Model: "mock/fast",
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestBuild_NestedTree(t *testing.T) {
 
 // TestBuild_NilConfig verifies that Build returns an error for nil
 func TestBuild_NilConfig(t *testing.T) {
-	_, err := Build(context.Background(), nil, testRegistry())
+	_, err := BuildWithPath(context.Background(), nil, testRegistry(), "")
 	if err == nil {
 		t.Fatal("expected an error for nil config, got nil")
 	}
@@ -178,7 +178,7 @@ func TestBuild_ModelNotFound(t *testing.T) {
 		BaseAgentConfig: BaseAgentConfig{Name: "bot"},
 		Model:           "unregistered/gpt-x",
 	}
-	_, err := Build(context.Background(), cfg, testRegistry())
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err == nil {
 		t.Fatal("expected an error for unregistered model prefix, got nil")
 	}
@@ -192,7 +192,7 @@ func TestBuild_ToolNotFound(t *testing.T) {
 		Model:           "mock/fast",
 		Tools:           []ToolRef{{Name: "nonexistent-tool"}},
 	}
-	_, err := Build(context.Background(), cfg, testRegistry())
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err == nil {
 		t.Fatal("expected an error for unregistered tool, got nil")
 	}
@@ -207,7 +207,7 @@ func TestBuild_LLMAgent_WithTransferFlags(t *testing.T) {
 		DisallowTransferToPeers:  true,
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestBuild_LLMAgent_DefaultTransferFlags(t *testing.T) {
 		Model:           "mock/fast",
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestBuild_SubAgentFromCode(t *testing.T) {
 		},
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestBuild_LLMAgent_WithModelCode(t *testing.T) {
 		Instruction:     "hi",
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestBuild_LLMAgent_ModelAndModelCodeError(t *testing.T) {
 		ModelCode:       &CodeConfig{Name: "myapp.models.custom"},
 		Instruction:     "hi",
 	}
-	_, err := Build(context.Background(), cfg, testRegistry())
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err == nil {
 		t.Fatal("expected error when both model and modelCode set")
 	}
@@ -378,7 +378,7 @@ func TestBuild_LLMAgent_WithCallbacks(t *testing.T) {
 		BeforeModelCallbacks: []CodeConfig{{Name: "my.cb"}},
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestBuild_LLMAgent_WithOutputKey(t *testing.T) {
 		OutputKey:       "result",
 		IncludeContents: "none",
 	}
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestBuild_LLMAgent_WithSchemaRefs(t *testing.T) {
 		OutputSchema:    &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.output"}},
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestBuild_LLMAgent_WithInlineSchema(t *testing.T) {
 		}},
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestBuild_LLMAgent_WithSchemaShorthand(t *testing.T) {
 		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.input"}},
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestBuild_LLMAgent_MissingSchemaRef(t *testing.T) {
 		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.missing"}},
 	}
 
-	_, err := Build(context.Background(), cfg, testRegistry())
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err == nil {
 		t.Fatal("expected error for missing schema registration, got nil")
 	}
@@ -527,7 +527,7 @@ func TestBuild_Sequential_WithCallbacks(t *testing.T) {
 		},
 	}
 
-	a, err := Build(context.Background(), cfg, reg)
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestBuildApp_ReturnsAgent(t *testing.T) {
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildApp(context.Background(), appCfg, testRegistry())
+	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestBuildApp_ReturnsRunConfig(t *testing.T) {
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildApp(context.Background(), appCfg, testRegistry())
+	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestBuildApp_NilRunConfig(t *testing.T) {
 		},
 	}
 
-	_, runCfg, _, _, err := BuildApp(context.Background(), appCfg, testRegistry())
+	_, runCfg, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -633,7 +633,7 @@ func TestBuildApp_ReturnsLiveRunConfig(t *testing.T) {
 		},
 	}
 
-	_, _, liveRunCfg, _, err := BuildApp(context.Background(), appCfg, testRegistry())
+	_, _, liveRunCfg, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestBuildApp_ReturnsContextCacheConfig(t *testing.T) {
 		},
 	}
 
-	_, _, _, cacheCfg, err := BuildApp(context.Background(), appCfg, testRegistry())
+	_, _, _, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
 		},
 	}
 
-	a, err := Build(context.Background(), cfg, testRegistry())
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}

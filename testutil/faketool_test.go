@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
 
@@ -28,7 +28,7 @@ func TestFakeTool_Basic(t *testing.T) {
 
 func TestFakeTool_Run(t *testing.T) {
 	ft := NewFakeTool("adder").
-		WithRunFunc(func(ctx tool.Context, args map[string]any) (any, error) {
+		WithRunFunc(func(ctx agent.ToolContext, args map[string]any) (any, error) {
 			a, _ := args["a"].(float64)
 			b, _ := args["b"].(float64)
 			return map[string]any{"sum": a + b}, nil
@@ -55,7 +55,7 @@ func TestFakeTool_Run(t *testing.T) {
 
 func TestFakeTool_RunError(t *testing.T) {
 	ft := NewFakeTool("failer").
-		WithRunFunc(func(ctx tool.Context, args map[string]any) (any, error) {
+		WithRunFunc(func(ctx agent.ToolContext, args map[string]any) (any, error) {
 			return nil, errors.New("tool failed")
 		})
 

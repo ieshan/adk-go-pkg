@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"iter"
 	"strings"
 	"time"
@@ -57,8 +58,8 @@ func NewInlineDataPart(mimeType string, data []byte) *genai.Part {
 
 // NewEvent creates a session.Event with the given author and content.
 // The event ID and timestamp are auto-generated.
-func NewEvent(author string, content *genai.Content) *session.Event {
-	e := session.NewEvent("")
+func NewEvent(ctx context.Context, author string, content *genai.Content) *session.Event {
+	e := session.NewEventWithContext(ctx, "")
 	e.Author = author
 	e.LLMResponse = model.LLMResponse{Content: content}
 	return e
@@ -66,39 +67,39 @@ func NewEvent(author string, content *genai.Content) *session.Event {
 
 // NewEventWithInvocationID creates a session.Event with a specific invocation
 // ID, author, and content.
-func NewEventWithInvocationID(invID, author string, content *genai.Content) *session.Event {
-	e := session.NewEvent(invID)
+func NewEventWithInvocationID(ctx context.Context, invID, author string, content *genai.Content) *session.Event {
+	e := session.NewEventWithContext(ctx, invID)
 	e.Author = author
 	e.LLMResponse = model.LLMResponse{Content: content}
 	return e
 }
 
 // NewTextEvent creates a session.Event with a text content for the given author.
-func NewTextEvent(author, text string) *session.Event {
-	return NewEvent(author, genai.NewContentFromText(text, genai.Role(author)))
+func NewTextEvent(ctx context.Context, author, text string) *session.Event {
+	return NewEvent(ctx, author, genai.NewContentFromText(text, genai.Role(author)))
 }
 
 // NewFunctionCallEvent creates a session.Event containing function calls.
-func NewFunctionCallEvent(author string, calls ...*genai.FunctionCall) *session.Event {
+func NewFunctionCallEvent(ctx context.Context, author string, calls ...*genai.FunctionCall) *session.Event {
 	parts := make([]*genai.Part, len(calls))
 	for i, fc := range calls {
 		parts[i] = &genai.Part{FunctionCall: fc}
 	}
-	return NewEvent(author, &genai.Content{Role: author, Parts: parts})
+	return NewEvent(ctx, author, &genai.Content{Role: author, Parts: parts})
 }
 
 // NewFunctionResponseEvent creates a session.Event containing function responses.
-func NewFunctionResponseEvent(author string, responses ...*genai.FunctionResponse) *session.Event {
+func NewFunctionResponseEvent(ctx context.Context, author string, responses ...*genai.FunctionResponse) *session.Event {
 	parts := make([]*genai.Part, len(responses))
 	for i, fr := range responses {
 		parts[i] = &genai.Part{FunctionResponse: fr}
 	}
-	return NewEvent(author, &genai.Content{Role: author, Parts: parts})
+	return NewEvent(ctx, author, &genai.Content{Role: author, Parts: parts})
 }
 
 // NewTransferEvent creates a session.Event that transfers to another agent.
-func NewTransferEvent(author, targetAgent string) *session.Event {
-	e := NewEvent(author, genai.NewContentFromText("", genai.Role(author)))
+func NewTransferEvent(ctx context.Context, author, targetAgent string) *session.Event {
+	e := NewEvent(ctx, author, genai.NewContentFromText("", genai.Role(author)))
 	e.Actions.TransferToAgent = targetAgent
 	return e
 }

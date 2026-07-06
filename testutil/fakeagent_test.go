@@ -60,7 +60,7 @@ func TestFakeAgent_WithRunFunc(t *testing.T) {
 	f := MustNewFakeAgent("custom").
 		WithRunFunc(func(ic agent.InvocationContext) iter.Seq2[*session.Event, error] {
 			return func(yield func(*session.Event, error) bool) {
-				yield(NewTextEvent("custom", "hello"), nil)
+				yield(NewTextEvent(context.Background(), "custom", "hello"), nil)
 			}
 		})
 

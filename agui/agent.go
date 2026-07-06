@@ -21,7 +21,7 @@
 //	        emitter.TextMessageStart(msgID, &role)
 //	        emitter.TextMessageContent(msgID, "Hello from AG-UI!")
 //	        emitter.TextMessageEnd(msgID)
-//	        emitter.RunFinished(input.ThreadID, input.RunID)
+//	        emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
 //	    }()
 //	    return agui.ChanToIter(ctx, ch)
 //	})

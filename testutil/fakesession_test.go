@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"testing"
 
 	"google.golang.org/adk/session"
@@ -46,8 +47,8 @@ func TestFakeSession_State(t *testing.T) {
 }
 
 func TestFakeSession_Events(t *testing.T) {
-	e1 := NewTextEvent("user", "hello")
-	e2 := NewTextEvent("model", "hi there")
+	e1 := NewTextEvent(context.Background(), "user", "hello")
+	e2 := NewTextEvent(context.Background(), "model", "hi there")
 	s := NewFakeSession().WithEvents(e1, e2)
 
 	if s.Events().Len() != 2 {
@@ -61,7 +62,7 @@ func TestFakeSession_Events(t *testing.T) {
 	}
 
 	// AddEvent
-	e3 := NewTextEvent("user", "more")
+	e3 := NewTextEvent(context.Background(), "user", "more")
 	s.AddEvent(e3)
 	if s.Events().Len() != 3 {
 		t.Errorf("after AddEvent, Len() = %d, want 3", s.Events().Len())
@@ -86,8 +87,8 @@ func TestFakeState_All(t *testing.T) {
 }
 
 func TestFakeEvents_All(t *testing.T) {
-	e1 := NewTextEvent("user", "a")
-	e2 := NewTextEvent("model", "b")
+	e1 := NewTextEvent(context.Background(), "user", "a")
+	e2 := NewTextEvent(context.Background(), "model", "b")
 	fe := NewFakeEvents([]*session.Event{e1, e2})
 
 	count := 0

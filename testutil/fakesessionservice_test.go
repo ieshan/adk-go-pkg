@@ -111,7 +111,7 @@ func TestFakeSessionService_AppendEvent(t *testing.T) {
 		AppName: "app", UserID: "user1", SessionID: "sess1",
 	})
 
-	event := NewTextEvent("model", "hello")
+	event := NewTextEvent(context.Background(), "model", "hello")
 	err := svc.AppendEvent(ctx, createResp.Session, event)
 	if err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
@@ -135,7 +135,7 @@ func TestFakeSessionService_AppendEventTempKeyRemoval(t *testing.T) {
 		AppName: "app", UserID: "user1", SessionID: "sess1",
 	})
 
-	event := NewTextEvent("model", "hello")
+	event := NewTextEvent(context.Background(), "model", "hello")
 	event.Actions.StateDelta = map[string]any{
 		"temp:cache": "will be removed",
 		"persistent": "kept",

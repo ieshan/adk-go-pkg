@@ -42,31 +42,14 @@ func (e *EventEmitter) RunStarted(threadID, runID string) error {
 	return e.emit(events.NewRunStartedEvent(threadID, runID))
 }
 
-// RunFinished emits a RUN_FINISHED event.
-func (e *EventEmitter) RunFinished(threadID, runID string) error {
-	return e.emit(events.NewRunFinishedEvent(threadID, runID))
-}
-
 // RunFinishedWithOptions emits a RUN_FINISHED event with optional configuration
-// (e.g., events.WithSuccessOutcome, events.WithInterruptOutcome). Non-breaking:
-// existing RunFinished method is preserved.
+// (e.g., events.WithSuccessOutcome, events.WithInterruptOutcome).
 func (e *EventEmitter) RunFinishedWithOptions(threadID, runID string, opts ...events.RunFinishedOption) error {
 	return e.emit(events.NewRunFinishedEventWithOptions(threadID, runID, opts...))
 }
 
-// RunError emits a RUN_ERROR event with an optional error code.
-// Deprecated: use RunErrorWithOptions for new code.
-func (e *EventEmitter) RunError(message string, code *string) error {
-	var opts []events.RunErrorOption
-	if code != nil {
-		opts = append(opts, events.WithErrorCode(*code))
-	}
-	return e.RunErrorWithOptions(message, opts...)
-}
-
 // RunErrorWithOptions emits a RUN_ERROR event with optional configuration
-// (e.g., events.WithRunID, events.WithErrorCode). Non-breaking: existing
-// RunError method is preserved.
+// (e.g., events.WithRunID, events.WithErrorCode).
 func (e *EventEmitter) RunErrorWithOptions(message string, opts ...events.RunErrorOption) error {
 	return e.emit(events.NewRunErrorEvent(message, opts...))
 }

@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestNewInlineDataPart(t *testing.T) {
 }
 
 func TestNewEvent(t *testing.T) {
-	e := NewEvent("user", NewUserContent("hi"))
+	e := NewEvent(context.Background(), "user", NewUserContent("hi"))
 	if e.Author != "user" {
 		t.Errorf("Author = %q, want %q", e.Author, "user")
 	}
@@ -61,7 +62,7 @@ func TestNewEvent(t *testing.T) {
 }
 
 func TestNewTextEvent(t *testing.T) {
-	e := NewTextEvent("model", "hello")
+	e := NewTextEvent(context.Background(), "model", "hello")
 	if e.Author != "model" {
 		t.Errorf("Author = %q, want %q", e.Author, "model")
 	}
@@ -69,7 +70,7 @@ func TestNewTextEvent(t *testing.T) {
 
 func TestNewFunctionCallEvent(t *testing.T) {
 	fc := NewFunctionCall("search", map[string]any{"query": "test"})
-	e := NewFunctionCallEvent("model", fc)
+	e := NewFunctionCallEvent(context.Background(), "model", fc)
 	if e.Author != "model" {
 		t.Errorf("Author = %q, want %q", e.Author, "model")
 	}
@@ -80,14 +81,14 @@ func TestNewFunctionCallEvent(t *testing.T) {
 
 func TestNewFunctionResponseEvent(t *testing.T) {
 	fr := NewFunctionResponseForCall("search", map[string]any{"result": "found"})
-	e := NewFunctionResponseEvent("user", fr)
+	e := NewFunctionResponseEvent(context.Background(), "user", fr)
 	if e.Content.Parts[0].FunctionResponse.Name != "search" {
 		t.Errorf("FunctionResponse name = %q, want %q", e.Content.Parts[0].FunctionResponse.Name, "search")
 	}
 }
 
 func TestNewTransferEvent(t *testing.T) {
-	e := NewTransferEvent("model", "sub-agent")
+	e := NewTransferEvent(context.Background(), "model", "sub-agent")
 	if e.Actions.TransferToAgent != "sub-agent" {
 		t.Errorf("TransferToAgent = %q, want %q", e.Actions.TransferToAgent, "sub-agent")
 	}
@@ -172,8 +173,8 @@ func TestNewFunctionResponseWithID(t *testing.T) {
 }
 
 func TestCollectEvents(t *testing.T) {
-	e1 := NewTextEvent("user", "hello")
-	e2 := NewTextEvent("model", "hi")
+	e1 := NewTextEvent(context.Background(), "user", "hello")
+	e2 := NewTextEvent(context.Background(), "model", "hi")
 
 	seq := func(yield func(*session.Event, error) bool) {
 		yield(e1, nil)
@@ -191,7 +192,7 @@ func TestCollectEvents(t *testing.T) {
 
 func TestCollectEvents_WithError(t *testing.T) {
 	seq := func(yield func(*session.Event, error) bool) {
-		yield(NewTextEvent("user", "hi"), nil)
+		yield(NewTextEvent(context.Background(), "user", "hi"), nil)
 		yield(nil, errors.New("boom"))
 	}
 
@@ -205,9 +206,9 @@ func TestCollectEvents_WithError(t *testing.T) {
 }
 
 func TestCollectFinalEvents(t *testing.T) {
-	e1 := NewTextEvent("model", "partial")
+	e1 := NewTextEvent(context.Background(), "model", "partial")
 	e1.LLMResponse.Partial = true
-	e2 := NewTextEvent("model", "final")
+	e2 := NewTextEvent(context.Background(), "model", "final")
 
 	seq := func(yield func(*session.Event, error) bool) {
 		yield(e1, nil)
@@ -226,9 +227,9 @@ func TestCollectFinalEvents(t *testing.T) {
 
 func TestFindEventsByAuthor(t *testing.T) {
 	events := []*session.Event{
-		NewTextEvent("user", "a"),
-		NewTextEvent("model", "b"),
-		NewTextEvent("user", "c"),
+		NewTextEvent(context.Background(), "user", "a"),
+		NewTextEvent(context.Background(), "model", "b"),
+		NewTextEvent(context.Background(), "user", "c"),
 	}
 	filtered := FindEventsByAuthor(events, "user")
 	if len(filtered) != 2 {
@@ -238,9 +239,9 @@ func TestFindEventsByAuthor(t *testing.T) {
 
 func TestFindFunctionCallEvents(t *testing.T) {
 	events := []*session.Event{
-		NewTextEvent("user", "hello"),
-		NewFunctionCallEvent("model", NewFunctionCall("search", nil)),
-		NewTextEvent("model", "results"),
+		NewTextEvent(context.Background(), "user", "hello"),
+		NewFunctionCallEvent(context.Background(), "model", NewFunctionCall("search", nil)),
+		NewTextEvent(context.Background(), "model", "results"),
 	}
 	filtered := FindFunctionCallEvents(events)
 	if len(filtered) != 1 {
@@ -250,8 +251,8 @@ func TestFindFunctionCallEvents(t *testing.T) {
 
 func TestFindFunctionResponseEvents(t *testing.T) {
 	events := []*session.Event{
-		NewFunctionCallEvent("model", NewFunctionCall("search", nil)),
-		NewFunctionResponseEvent("user", NewFunctionResponseForCall("search", nil)),
+		NewFunctionCallEvent(context.Background(), "model", NewFunctionCall("search", nil)),
+		NewFunctionResponseEvent(context.Background(), "user", NewFunctionResponseForCall("search", nil)),
 	}
 	filtered := FindFunctionResponseEvents(events)
 	if len(filtered) != 1 {
@@ -261,8 +262,8 @@ func TestFindFunctionResponseEvents(t *testing.T) {
 
 func TestExtractTextFromEvents(t *testing.T) {
 	events := []*session.Event{
-		NewTextEvent("user", "hello"),
-		NewTextEvent("model", "world"),
+		NewTextEvent(context.Background(), "user", "hello"),
+		NewTextEvent(context.Background(), "model", "world"),
 	}
 	text := ExtractTextFromEvents(events)
 	if text == "" {
@@ -307,7 +308,7 @@ func TestNewContentWithParts(t *testing.T) {
 }
 
 func TestNewEventWithInvocationID(t *testing.T) {
-	e := NewEventWithInvocationID("inv-42", "user", NewUserContent("hi"))
+	e := NewEventWithInvocationID(context.Background(), "inv-42", "user", NewUserContent("hi"))
 	if e.InvocationID != "inv-42" {
 		t.Errorf("InvocationID = %q, want %q", e.InvocationID, "inv-42")
 	}

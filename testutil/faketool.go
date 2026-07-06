@@ -16,7 +16,7 @@ import (
 
 // Compile-time interface checks.
 var _ tool.Tool = (*FakeTool)(nil)
-var _ tool.Context = (*FakeToolContext)(nil)
+var _ agent.ToolContext = (*FakeToolContext)(nil)
 var _ tool.Toolset = (*FakeToolset)(nil)
 
 // ---------------------------------------------------------------------------
@@ -33,11 +33,11 @@ type FakeTool struct {
 	descriptionVal   string
 	isLongRunning    bool
 	declarationVal   *genai.FunctionDeclaration
-	runFn            func(tool.Context, map[string]any) (any, error)
-	processRequestFn func(tool.Context, *model.LLMRequest) error
+	runFn            func(agent.ToolContext, map[string]any) (any, error)
+	processRequestFn func(agent.ToolContext, *model.LLMRequest) error
 	callCount        int
 	lastArgs         map[string]any
-	lastCtx          tool.Context
+	lastCtx          agent.ToolContext
 }
 
 // NewFakeTool creates a FakeTool with the given name.
@@ -74,7 +74,7 @@ func (f *FakeTool) WithDeclaration(decl *genai.FunctionDeclaration) *FakeTool {
 // WithRunFunc configures the Run behavior (builder pattern).
 // The function receives the tool context and the deserialized args map,
 // and returns the result and an error.
-func (f *FakeTool) WithRunFunc(fn func(tool.Context, map[string]any) (any, error)) *FakeTool {
+func (f *FakeTool) WithRunFunc(fn func(agent.ToolContext, map[string]any) (any, error)) *FakeTool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runFn = fn
@@ -83,7 +83,7 @@ func (f *FakeTool) WithRunFunc(fn func(tool.Context, map[string]any) (any, error
 
 // WithProcessRequestFunc configures the ProcessRequest behavior (builder
 // pattern).
-func (f *FakeTool) WithProcessRequestFunc(fn func(tool.Context, *model.LLMRequest) error) *FakeTool {
+func (f *FakeTool) WithProcessRequestFunc(fn func(agent.ToolContext, *model.LLMRequest) error) *FakeTool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.processRequestFn = fn
@@ -114,7 +114,7 @@ func (f *FakeTool) IsLongRunning() bool {
 // ProcessRequest implements the request processor interface.
 // If no ProcessRequestFunc is set, it packs the tool declaration into the
 // request if a declaration is configured. Otherwise it is a no-op.
-func (f *FakeTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) error {
+func (f *FakeTool) ProcessRequest(ctx agent.ToolContext, req *model.LLMRequest) error {
 	f.mu.RLock()
 	fn := f.processRequestFn
 	decl := f.declarationVal
@@ -158,7 +158,7 @@ func (f *FakeTool) Declaration() *genai.FunctionDeclaration {
 }
 
 // Run executes the tool. If no RunFunc is set, it returns an empty result.
-func (f *FakeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
+func (f *FakeTool) Run(ctx agent.ToolContext, args any) (map[string]any, error) {
 	f.mu.Lock()
 	f.callCount++
 	margs, _ := args.(map[string]any)
@@ -195,8 +195,8 @@ func (f *FakeTool) LastArgs() map[string]any {
 	return f.lastArgs
 }
 
-// LastCtx returns the tool.Context from the most recent Run call.
-func (f *FakeTool) LastCtx() tool.Context {
+// LastCtx returns the agent.ToolContext from the most recent Run call.
+func (f *FakeTool) LastCtx() agent.ToolContext {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.lastCtx
@@ -215,7 +215,7 @@ func (f *FakeTool) Reset() {
 // FakeToolContext
 // ---------------------------------------------------------------------------
 
-// FakeToolContext implements tool.Context for testing.
+// FakeToolContext implements agent.ToolContext for testing.
 type FakeToolContext struct {
 	agent.CallbackContext // embedded for base context methods
 	functionCallIDVal     string
@@ -262,13 +262,13 @@ func (f *FakeToolContext) WithToolConfirmation(tc *toolconfirmation.ToolConfirma
 	return f
 }
 
-// FunctionCallID implements tool.Context.
+// FunctionCallID implements agent.ToolContext.
 func (f *FakeToolContext) FunctionCallID() string { return f.functionCallIDVal }
 
-// Actions implements tool.Context.
+// Actions implements agent.ToolContext.
 func (f *FakeToolContext) Actions() *session.EventActions { return f.actionsVal }
 
-// SearchMemory implements tool.Context.
+// SearchMemory implements agent.ToolContext.
 func (f *FakeToolContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
 	if f.memorySvc == nil {
 		return nil, fmt.Errorf("memory service is not set")
@@ -280,12 +280,12 @@ func (f *FakeToolContext) SearchMemory(ctx context.Context, query string) (*memo
 	})
 }
 
-// ToolConfirmation implements tool.Context.
+// ToolConfirmation implements agent.ToolContext.
 func (f *FakeToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
 	return f.toolConf
 }
 
-// RequestConfirmation implements tool.Context.
+// RequestConfirmation implements agent.ToolContext.
 func (f *FakeToolContext) RequestConfirmation(hint string, payload any) error {
 	if f.actionsVal == nil {
 		f.actionsVal = &session.EventActions{}

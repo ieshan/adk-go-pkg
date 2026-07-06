@@ -9,6 +9,7 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 
+	"google.golang.org/adk/agent"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -72,7 +73,7 @@ func makeProxyTool(
 		IsLongRunning: true,
 	}
 
-	handler := func(ctx tool.Context, args map[string]any) (map[string]any, error) {
+	handler := func(ctx agent.ToolContext, args map[string]any) (map[string]any, error) {
 		return proxyToolHandler(ctx, args, t.Name, emitter, resultHandler, timeout)
 	}
 
@@ -81,7 +82,7 @@ func makeProxyTool(
 
 // proxyToolHandler emits tool call events and waits for the client result.
 func proxyToolHandler(
-	ctx tool.Context,
+	ctx agent.ToolContext,
 	args map[string]any,
 	toolName string,
 	emitter *agui.EventEmitter,

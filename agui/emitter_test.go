@@ -16,7 +16,7 @@ func TestRunLifecycle(t *testing.T) {
 	if err := em.RunStarted("thread-1", "run-1"); err != nil {
 		t.Fatalf("RunStarted: %v", err)
 	}
-	if err := em.RunFinished("thread-1", "run-1"); err != nil {
+	if err := em.RunFinishedWithOptions("thread-1", "run-1"); err != nil {
 		t.Fatalf("RunFinished: %v", err)
 	}
 
@@ -167,8 +167,8 @@ func TestRunErrorWithCode(t *testing.T) {
 	ch := make(chan events.Event, 16)
 	em := agui.NewEventEmitter(ch)
 
-	if err := em.RunError("too many requests", new("RATE_LIMITED")); err != nil {
-		t.Fatalf("RunError: %v", err)
+	if err := em.RunErrorWithOptions("too many requests", events.WithErrorCode("RATE_LIMITED")); err != nil {
+		t.Fatalf("RunErrorWithOptions: %v", err)
 	}
 
 	got := drain(ch)
@@ -195,8 +195,8 @@ func TestRunErrorWithoutCode(t *testing.T) {
 	ch := make(chan events.Event, 16)
 	em := agui.NewEventEmitter(ch)
 
-	if err := em.RunError("internal error", nil); err != nil {
-		t.Fatalf("RunError: %v", err)
+	if err := em.RunErrorWithOptions("internal error"); err != nil {
+		t.Fatalf("RunErrorWithOptions: %v", err)
 	}
 
 	got := drain(ch)
