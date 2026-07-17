@@ -34,8 +34,8 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -140,8 +140,8 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -193,6 +193,7 @@ The bridge translates ADK session events into AG-UI events as follows:
 | State delta | `STATE_DELTA` | Each key becomes a `replace` operation at `/<key>` |
 | (run start) | `RUN_STARTED` | Emitted before the ADK runner starts |
 | (run end) | `RUN_FINISHED` | Emitted after the ADK runner completes |
+| Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) | Run ends with interrupts; client resumes with `Resume` entries |
 | (session state) | `STATE_SNAPSHOT` | Emitted at run start if `EmitStateSnapshot` is true |
 | (session events) | `MESSAGES_SNAPSHOT` | Emitted at run end if `EmitMessagesSnapshot` is true |
 | Runner error | `RUN_ERROR` | Error message included |
@@ -203,6 +204,24 @@ For streaming (partial) text events, the bridge computes deltas by comparing
 each new text with the previously accumulated text. If the new text starts with
 the old text, only the new suffix is emitted as `TEXT_MESSAGE_CONTENT`. This
 avoids duplicate content when the ADK runner sends cumulative text.
+
+### Resume and Interrupt Handling
+
+The bridge supports AG-UI's interrupt/resume flow for long-running tools:
+
+1. **Interrupt detection:** When an ADK event carries `LongRunningToolIDs`,
+   the bridge closes any open text message and emits `RUN_FINISHED` with
+   `events.WithInterruptOutcome(interrupts)`, where each interrupt carries the
+   tool call ID, reason `"tool_call"`, and `ToolCallID`. The run then ends.
+
+2. **Resume processing:** On the next `RunAgentInput`, the client sends
+   `Resume` entries (one per resolved interrupt). For each entry with
+   `Status == types.ResumeStatusResolved`, the bridge appends a
+   `FunctionResponse` event to the ADK session with the interrupt ID and the
+   resolved payload, so the agent can continue from where it left off.
+
+This allows human-in-the-loop workflows where a tool requires user confirmation
+or input before proceeding.
 
 ## Session Management
 
@@ -354,8 +373,8 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -424,8 +443,8 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 

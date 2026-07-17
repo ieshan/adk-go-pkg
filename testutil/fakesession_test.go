@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 func TestFakeSession_Builder(t *testing.T) {

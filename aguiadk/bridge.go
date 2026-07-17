@@ -18,12 +18,12 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/artifact"
-	"google.golang.org/adk/memory"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/runner"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -239,7 +239,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	if len(input.Resume) > 0 {
 		for _, entry := range input.Resume {
 			if entry.Status == types.ResumeStatusResolved {
-				respEvent := session.NewEventWithContext(ctx, "resume")
+				respEvent := session.NewEvent(ctx, "resume")
 				respEvent.Author = "user"
 				respEvent.LLMResponse = model.LLMResponse{
 					Content: &genai.Content{

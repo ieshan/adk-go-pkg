@@ -9,7 +9,7 @@ Agent Skills are specialized instruction sets that extend agent capabilities wit
 - **SKILL.md** (required): Contains YAML frontmatter with metadata and markdown instructions
 - **references/** (optional): Additional documentation files
 - **assets/** (optional): Templates, scripts, or other resources
-- **scripts/** (optional): Executable scripts for automation
+- **scripts/** (optional): Executable scripts (future support)
 
 ## Directory Structure
 
@@ -196,7 +196,7 @@ package main
 
 import (
     "github.com/ieshan/adk-go-pkg/config"
-    "google.golang.org/adk/tool/skilltoolset/skill"
+    "google.golang.org/adk/v2/tool/skilltoolset/skill"
 )
 
 func main() {
@@ -254,13 +254,14 @@ func main() {
     reg := config.NewRegistry()
 
     // Load agent with skills from YAML
-    agent, err := config.LoadAndBuild(ctx, "agents/skills-agent.yaml", reg)
+    agent, _, _, _, err := config.LoadAndBuild(ctx, "agents/skills-agent.yaml", reg)
     if err != nil {
         log.Fatal(err)
     }
 
     // Agent now has access to skills defined in ./skills/
     // Use with runner or aguiadk bridge...
+    _ = agent
 }
 ```
 

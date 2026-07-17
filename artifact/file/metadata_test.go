@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sampleMeta returns a fully-populated VersionMetadata for use in tests.
@@ -14,7 +15,7 @@ func sampleMeta() *VersionMetadata {
 		Version:      3,
 		FileName:     "report.pdf",
 		MimeType:     "application/pdf",
-		CreateTime:   1_700_000_000.123,
+		CreateTime:   time.Date(2023, 11, 14, 22, 13, 20, 123000000, time.UTC),
 		CanonicalURI: "gs://my-bucket/app/user/session/report.pdf/3",
 		CustomMetadata: map[string]any{
 			"author": "alice",
@@ -45,7 +46,7 @@ func TestVersionMetadata_MarshalJSON(t *testing.T) {
 		{"version", float64(3)},
 		{"fileName", "report.pdf"},
 		{"mimeType", "application/pdf"},
-		{"createTime", float64(1_700_000_000.123)},
+		{"createTime", "2023-11-14T22:13:20.123Z"},
 		{"canonicalUri", "gs://my-bucket/app/user/session/report.pdf/3"},
 	}
 	for _, c := range checks {
@@ -66,7 +67,7 @@ func TestVersionMetadata_MarshalJSON_OmitEmpty(t *testing.T) {
 	meta := &VersionMetadata{
 		Version:      1,
 		FileName:     "empty.txt",
-		CreateTime:   1_000_000.0,
+		CreateTime:   time.Unix(1000000, 0),
 		CanonicalURI: "gs://bucket/empty.txt/1",
 	}
 	data, err := json.Marshal(meta)
@@ -89,7 +90,7 @@ func TestVersionMetadata_UnmarshalJSON(t *testing.T) {
 		"version": 5,
 		"fileName": "data.csv",
 		"mimeType": "text/csv",
-		"createTime": 1234567890.5,
+		"createTime": "2009-02-13T23:31:30.5Z",
 		"canonicalUri": "gs://bucket/data.csv/5",
 		"customMetadata": {"owner": "bob"}
 	}`
@@ -108,8 +109,8 @@ func TestVersionMetadata_UnmarshalJSON(t *testing.T) {
 	if meta.MimeType != "text/csv" {
 		t.Errorf("MimeType: got %q, want %q", meta.MimeType, "text/csv")
 	}
-	if meta.CreateTime != 1234567890.5 {
-		t.Errorf("CreateTime: got %f, want %f", meta.CreateTime, 1234567890.5)
+	if !meta.CreateTime.Equal(time.Date(2009, 2, 13, 23, 31, 30, 500000000, time.UTC)) {
+		t.Errorf("CreateTime: got %v, want %v", meta.CreateTime, time.Date(2009, 2, 13, 23, 31, 30, 500000000, time.UTC))
 	}
 	if meta.CanonicalURI != "gs://bucket/data.csv/5" {
 		t.Errorf("CanonicalURI: got %q, want %q", meta.CanonicalURI, "gs://bucket/data.csv/5")
@@ -143,8 +144,8 @@ func TestVersionMetadata_RoundTrip(t *testing.T) {
 	if restored.MimeType != original.MimeType {
 		t.Errorf("MimeType mismatch: got %q, want %q", restored.MimeType, original.MimeType)
 	}
-	if restored.CreateTime != original.CreateTime {
-		t.Errorf("CreateTime mismatch: got %f, want %f", restored.CreateTime, original.CreateTime)
+	if !restored.CreateTime.Equal(original.CreateTime) {
+		t.Errorf("CreateTime mismatch: got %v, want %v", restored.CreateTime, original.CreateTime)
 	}
 	if restored.CanonicalURI != original.CanonicalURI {
 		t.Errorf("CanonicalURI mismatch: got %q, want %q", restored.CanonicalURI, original.CanonicalURI)
@@ -201,7 +202,7 @@ func TestReadMetadata(t *testing.T) {
   "version": 7,
   "fileName": "image.png",
   "mimeType": "image/png",
-  "createTime": 9876543210.0,
+  "createTime": "2286-11-20T17:33:30Z",
   "canonicalUri": "gs://bucket/image.png/7",
   "customMetadata": {"label": "cover"}
 }`
@@ -223,8 +224,8 @@ func TestReadMetadata(t *testing.T) {
 	if meta.MimeType != "image/png" {
 		t.Errorf("MimeType: got %q, want image/png", meta.MimeType)
 	}
-	if meta.CreateTime != 9876543210.0 {
-		t.Errorf("CreateTime: got %f, want 9876543210.0", meta.CreateTime)
+	if !meta.CreateTime.Equal(time.Date(2286, 11, 20, 17, 33, 30, 0, time.UTC)) {
+		t.Errorf("CreateTime: got %v, want %v", meta.CreateTime, time.Date(2286, 11, 20, 17, 33, 30, 0, time.UTC))
 	}
 	if meta.CanonicalURI != "gs://bucket/image.png/7" {
 		t.Errorf("CanonicalURI: got %q", meta.CanonicalURI)

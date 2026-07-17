@@ -220,6 +220,22 @@ type ModelCodeFactory func(args map[string]any) (model.LLM, error)
 
 Creates a model from configuration arguments. Used when `model_code` is specified instead of `model`.
 
+### StaticSchema
+
+```go
+func StaticSchema(s *genai.Schema) SchemaFactory
+```
+
+A convenience helper that wraps a pre-built `*genai.Schema` as a `SchemaFactory` for registration via `Registry.RegisterSchema`. Useful when you have a schema constructed in code rather than from config arguments.
+
+### NewFilteredSource
+
+```go
+func NewFilteredSource(base skill.Source, names []string) skill.Source
+```
+
+Wraps an existing `skill.Source` and restricts the visible skills to those listed in `names`. Used internally by the builder when a `SkillsetRef` specifies `Names`; you can also use it directly when composing skill sources programmatically.
+
 ### Callback Registration
 
 The Registry provides typed registration and resolution for all callback types:
@@ -344,21 +360,21 @@ func Parse(data []byte, format string) (*AppConfig, error)
 Parses raw bytes. `format` must be `"json"` or `"yaml"`.
 YAML parsing validates type-specific field restrictions — setting an LLM-only field on a non-LLM agent type returns an error.
 
-### Build
-
-```go
-func Build(ctx context.Context, cfg AgentConfig, reg *Registry) (agent.Agent, error)
-```
-
-Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor.
-
 ### BuildWithPath
 
 ```go
 func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPath string) (agent.Agent, error)
 ```
 
-Like `Build`, but accepts the config file path so that relative `config_path` references in `AgentRefConfig` can be resolved correctly.
+Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor. The `configPath` parameter is used to resolve relative `config_path` references in `AgentRefConfig`; pass an empty string when not loading from a file.
+
+### BuildAppWithPath
+
+```go
+func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
+```
+
+Like `BuildWithPath`, but accepts a full `*AppConfig` (which wraps an `AgentConfig` alongside optional `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig`) and returns the resolved runtime configs alongside the built agent. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
 
 ### LoadAndBuild
 
@@ -366,7 +382,7 @@ Like `Build`, but accepts the config file path so that relative `config_path` re
 func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
 ```
 
-Convenience function combining `Load` and `BuildWithPath`.
+Convenience function combining `Load` and `BuildAppWithPath`. Reads the config file at `path`, builds the agent tree, and returns the runtime configs. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
 
 ## TranslateGenerateConfig
 
@@ -505,11 +521,15 @@ reg.RegisterModel("openai", openaiFactory)
 reg.RegisterTool("search", searchFactory)
 reg.RegisterTool("scrape", scrapeFactory)
 
-agent, err := config.LoadAndBuild(ctx, "agents/orchestrator.yaml", reg)
+agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(ctx, "agents/orchestrator.yaml", reg)
 if err != nil {
     log.Fatal(err)
 }
-// Use agent with runner.New(...)
+// Use agent with runner.New(...).
+// runCfg, liveRunCfg, and ctxCacheCfg may be nil if not specified in the YAML.
+_ = runCfg
+_ = liveRunCfg
+_ = ctxCacheCfg
 ```
 
 ## Parse-Only Types

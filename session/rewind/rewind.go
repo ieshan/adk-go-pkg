@@ -32,7 +32,7 @@ import (
 	"strings"
 
 	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 // Rewind truncates a session to the event with the given ID, discarding all

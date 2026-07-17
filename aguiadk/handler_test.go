@@ -17,9 +17,9 @@ import (
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"github.com/ieshan/adk-go-pkg/testutil"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -58,7 +58,7 @@ func TestHandler_InvalidConfig(t *testing.T) {
 
 func TestHandler_E2E_SSE(t *testing.T) {
 	// Create a mock ADK agent that returns a simple text response.
-	ev := session.NewEventWithContext(context.Background(), "inv-1")
+	ev := session.NewEvent(context.Background(), "inv-1")
 	ev.Author = "e2e-agent"
 	ev.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{

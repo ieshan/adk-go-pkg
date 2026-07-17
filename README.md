@@ -6,7 +6,7 @@
 Extension library for Google's ADK-Go.
 
 `adk-go-pkg` provides production-ready building blocks that complement
-[ADK-Go](https://google.golang.org/adk) with capabilities it does not ship
+[ADK-Go](https://google.golang.org/adk/v2) with capabilities it does not ship
 out of the box.
 
 ## Features
@@ -14,6 +14,7 @@ out of the box.
 | Feature | Description |
 |---------|-------------|
 | **OpenAI Model Provider** | Drop-in `model.LLM` adapter for any OpenAI-compatible API (OpenAI, Ollama, LiteLLM, OpenRouter, vLLM, Together AI). |
+| **Anthropic Model Provider** | Drop-in `model.LLM` adapter for Anthropic's Messages API and compatible providers (Claude, Amazon Bedrock, Google Vertex AI). Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. |
 | **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management, tool orchestration, middleware, and SSE handler. Zero ADK dependency. |
 | **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, and client tool proxy. |
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
@@ -22,6 +23,7 @@ out of the box.
 | **Config Agent Loader** | Declare entire agent trees in YAML/JSON and build them at runtime via a factory registry. Now includes Agent Skills support. |
 | **Agent Skills Config** | Declarative skill integration via YAML/JSON. Supports filesystem sources with preload optimization and specific skill loading (wildcard or filtered by name). |
 | **Test Utilities** | Complete fake implementations of all ADK-Go interfaces for deterministic testing without external LLM providers. Includes FakeLLM, FakeAgent, FakeSession, and RunnerBuilder. |
+| **Evaluation Framework** | Evaluate agent performance with eval sets, built-in metrics (trajectory, response match, rubrics, safety, hallucinations), LLM-as-judge auto-raters, user simulation, and a local eval service. Mirrors ADK Python's eval package. |
 
 ## Installation
 
@@ -43,7 +45,7 @@ import (
 	"os"
 
 	"github.com/ieshan/adk-go-pkg/model/openai"
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
@@ -72,6 +74,48 @@ func main() {
 ```
 
 [Detailed docs &rarr;](docs/openai-model.md)
+
+### Anthropic Model Provider
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/ieshan/adk-go-pkg/model/anthropic"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
+)
+
+func main() {
+	m, err := anthropic.New(anthropic.Config{
+		Model:  "claude-sonnet-4-20250514",
+		APIKey: os.Getenv("ANTHROPIC_API_KEY"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText("Hello!", "user"),
+		},
+	}
+
+	for resp, err := range m.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(resp.Content.Parts[0].Text)
+	}
+}
+```
+
+[Detailed docs &rarr;](docs/anthropic-model.md)
 
 ### Generic AG-UI Server (`agui/`)
 
@@ -128,8 +172,8 @@ import (
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -176,7 +220,7 @@ import (
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/planner"
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 func main() {
@@ -216,7 +260,7 @@ import (
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/artifact/file"
-	"google.golang.org/adk/artifact"
+	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/genai"
 )
 
@@ -266,7 +310,7 @@ import (
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/session/rewind"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 func main() {
@@ -295,8 +339,8 @@ import (
 	"log"
 
 	"github.com/ieshan/adk-go-pkg/config"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
 )
 
 func main() {
@@ -311,11 +355,14 @@ func main() {
 		return nil, nil
 	})
 
-	agent, err := config.LoadAndBuild(context.Background(), "agents/root.yaml", reg)
+	agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(context.Background(), "agents/root.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	_ = agent
+	_ = runCfg       // *agent.RunConfig (may be nil)
+	_ = liveRunCfg   // *agent.LiveRunConfig (may be nil)
+	_ = ctxCacheCfg  // *config.ContextCacheConfig (may be nil)
 }
 ```
 
@@ -338,11 +385,12 @@ func main() {
 	// Filesystem skill factory is built-in, no registration needed
 
 	// Load agent with skills from YAML
-	agent, err := config.LoadAndBuild(context.Background(), "agents/skills-agent.yaml", reg)
+	agent, _, _, _, err := config.LoadAndBuild(context.Background(), "agents/skills-agent.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	// Agent now has access to skills defined in ./skills/
+	_ = agent
 }
 ```
 
@@ -373,9 +421,9 @@ import (
     "testing"
 
     "github.com/ieshan/adk-go-pkg/testutil"
-    "google.golang.org/adk/agent"
-    "google.golang.org/adk/llmagent"
-    "google.golang.org/adk/runner"
+    "google.golang.org/adk/v2/agent"
+    "google.golang.org/adk/v2/agent/llmagent"
+    "google.golang.org/adk/v2/runner"
     "google.golang.org/genai"
 )
 
@@ -413,14 +461,73 @@ func TestMyAgent(t *testing.T) {
 
 [Detailed docs &rarr;](docs/testutil.md)
 
+### Evaluation Framework
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+
+	"github.com/ieshan/adk-go-pkg/eval"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Create an in-memory eval sets manager and add a case.
+	setsMgr := eval.NewInMemoryEvalSetsManager()
+	setsMgr.CreateEvalSet(ctx, "my-app", "basic-eval")
+	setsMgr.AddEvalCase(ctx, "my-app", "basic-eval", eval.EvalCase{
+		EvalID: "case-1",
+		Conversation: []eval.Invocation{
+			{UserContent: genai.NewContentFromText("Hello", "user")},
+		},
+	})
+
+	// Create an agent evaluator with your agent runner and LLM.
+	var agentRunner eval.AgentRunner // your agent runner
+	var llm model.LLM               // your judge LLM (optional)
+
+	evaluator := eval.NewAgentEvaluator(
+		agentRunner, setsMgr, nil, eval.DefaultMetricEvaluatorRegistry(),
+		llm,
+	)
+
+	// Configure metrics with thresholds.
+	config := eval.EvalConfig{
+		Criteria: map[string]json.RawMessage{
+			"tool_trajectory_avg_score": json.RawMessage(`{"threshold": 0.8}`),
+		},
+	}
+
+	result, err := evaluator.Evaluate(ctx, "my-app", "basic-eval", config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, cr := range result.EvalCaseResults {
+		fmt.Printf("Case %s: %s\n", cr.EvalID, cr.FinalEvalStatus)
+	}
+}
+```
+
+[Detailed docs &rarr;](docs/eval.md)
+
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
-- **ADK-Go v1.5.0+** (`google.golang.org/adk`) — Required for Agent Skills support
-- **GenAI v1.62.0** (`google.golang.org/genai`)
+- **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`) — Required for Agent Skills support
+- **GenAI v1.64.0** (`google.golang.org/genai`)
 
 ## Recent Changes
 
+- **Evaluation Framework**: New `eval` package with eval sets, 13 built-in metrics, LLM-as-judge evaluators, user simulation, and local eval service. Mirrors ADK Python eval package. See [docs/eval.md](docs/eval.md).
+- **Anthropic Model Provider**: Drop-in `model.LLM` adapter for Anthropic's Messages API. Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. See [docs/anthropic-model.md](docs/anthropic-model.md).
 - **Test Utilities**: New `testutil` package with fake implementations of all ADK-Go interfaces (FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, RunnerBuilder). Enables fast, deterministic testing without external LLM providers. See [docs/testutil.md](docs/testutil.md).
 - **Agent Skills Config**: Skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name).
 - **OpenAI Model Provider**: Supports genai `FunctionResponse.Parts` structure for function calling.
@@ -431,6 +538,7 @@ func TestMyAgent(t *testing.T) {
 Beyond ADK-Go and `google.golang.org/genai`, the only additional direct dependencies are:
 
 - [`github.com/ag-ui-protocol/ag-ui/sdks/community/go`](https://github.com/ag-ui-protocol/ag-ui) -- AG-UI event types and helpers
+- [`github.com/google/uuid`](https://github.com/google/uuid) -- UUID generation for eval session IDs
 - [`go.yaml.in/yaml/v4`](https://github.com/go-yaml/yaml) -- YAML parsing for the config loader
 
 ## License

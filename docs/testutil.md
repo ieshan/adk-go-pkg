@@ -214,7 +214,7 @@ iter := agent.Run(ctx)
 
 #### FakeCallbackContext
 
-Implements `agent.CallbackContext`:
+Implements `agent.Context`:
 
 ```go
 ctx := testutil.NewFakeCallbackContext().
@@ -248,7 +248,7 @@ tool := testutil.NewFakeTool("search").
         Name:        "search",
         Description: "Search the web",
     }).
-    WithRunFunc(func(ctx agent.ToolContext, args map[string]any) (any, error) {
+    WithRunFunc(func(ctx agent.Context, args map[string]any) (any, error) {
         return map[string]any{"results": []string{"result1", "result2"}}, nil
     })
 
@@ -309,10 +309,14 @@ assert.Equal(t, 1, svc.LoadCount())
 ```
 
 **Features:**
-- Automatic versioning (each save increments version)
+- Automatic versioning (each save increments version, starting at 1)
 - Supports user-scoped artifacts (filenames starting with "user:")
 - Validates requests like the real service
 - Records all operations for assertions
+
+> **Note:** Unlike the real `artifact/file` service (which starts versioning
+> at 0), `FakeArtifactService` starts versioning at 1. The first `Save` call
+> returns `Version: 1`.
 
 ### FakeMemoryService
 
@@ -783,5 +787,5 @@ This allows `FakeAgent` to be passed anywhere `agent.Agent` is expected.
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func
-- **ADK-Go v1.5.0+** (`google.golang.org/adk`)
-- **GenAI v1.62.0** (`google.golang.org/genai`)
+- **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`)
+- **GenAI v1.64.0** (`google.golang.org/genai`)

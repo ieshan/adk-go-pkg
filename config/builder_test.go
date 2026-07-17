@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/testutil"
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 )
 
@@ -367,7 +367,7 @@ func TestBuild_LLMAgent_ModelAndModelCodeError(t *testing.T) {
 // TestBuild_LLMAgent_WithCallbacks verifies callbacks are resolved and wired.
 func TestBuild_LLMAgent_WithCallbacks(t *testing.T) {
 	reg := testRegistry()
-	reg.RegisterBeforeModelCallback("my.cb", func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+	reg.RegisterBeforeModelCallback("my.cb", func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 		return nil, nil
 	})
 
@@ -513,7 +513,7 @@ func TestRegistry_SchemaResolution(t *testing.T) {
 // TestBuild_Sequential_WithCallbacks verifies agent-level callbacks.
 func TestBuild_Sequential_WithCallbacks(t *testing.T) {
 	reg := testRegistry()
-	reg.RegisterBeforeAgentCallback("seq.cb", func(ctx agent.CallbackContext) (*genai.Content, error) {
+	reg.RegisterBeforeAgentCallback("seq.cb", func(ctx agent.Context) (*genai.Content, error) {
 		return nil, nil
 	})
 

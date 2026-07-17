@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"google.golang.org/adk/tool/skilltoolset/skill"
+	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 )
 
 // FilteredSource wraps a skill.Source to expose only specific skill names.

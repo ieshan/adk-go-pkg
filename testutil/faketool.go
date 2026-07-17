@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"sync"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/memory"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
 // Compile-time interface checks.
 var _ tool.Tool = (*FakeTool)(nil)
-var _ agent.ToolContext = (*FakeToolContext)(nil)
+var _ agent.Context = (*FakeToolContext)(nil)
 var _ tool.Toolset = (*FakeToolset)(nil)
 
 // ---------------------------------------------------------------------------
@@ -33,11 +33,11 @@ type FakeTool struct {
 	descriptionVal   string
 	isLongRunning    bool
 	declarationVal   *genai.FunctionDeclaration
-	runFn            func(agent.ToolContext, map[string]any) (any, error)
-	processRequestFn func(agent.ToolContext, *model.LLMRequest) error
+	runFn            func(agent.Context, map[string]any) (any, error)
+	processRequestFn func(agent.Context, *model.LLMRequest) error
 	callCount        int
 	lastArgs         map[string]any
-	lastCtx          agent.ToolContext
+	lastCtx          agent.Context
 }
 
 // NewFakeTool creates a FakeTool with the given name.
@@ -74,7 +74,7 @@ func (f *FakeTool) WithDeclaration(decl *genai.FunctionDeclaration) *FakeTool {
 // WithRunFunc configures the Run behavior (builder pattern).
 // The function receives the tool context and the deserialized args map,
 // and returns the result and an error.
-func (f *FakeTool) WithRunFunc(fn func(agent.ToolContext, map[string]any) (any, error)) *FakeTool {
+func (f *FakeTool) WithRunFunc(fn func(agent.Context, map[string]any) (any, error)) *FakeTool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runFn = fn
@@ -83,7 +83,7 @@ func (f *FakeTool) WithRunFunc(fn func(agent.ToolContext, map[string]any) (any, 
 
 // WithProcessRequestFunc configures the ProcessRequest behavior (builder
 // pattern).
-func (f *FakeTool) WithProcessRequestFunc(fn func(agent.ToolContext, *model.LLMRequest) error) *FakeTool {
+func (f *FakeTool) WithProcessRequestFunc(fn func(agent.Context, *model.LLMRequest) error) *FakeTool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.processRequestFn = fn
@@ -114,7 +114,7 @@ func (f *FakeTool) IsLongRunning() bool {
 // ProcessRequest implements the request processor interface.
 // If no ProcessRequestFunc is set, it packs the tool declaration into the
 // request if a declaration is configured. Otherwise it is a no-op.
-func (f *FakeTool) ProcessRequest(ctx agent.ToolContext, req *model.LLMRequest) error {
+func (f *FakeTool) ProcessRequest(ctx agent.Context, req *model.LLMRequest) error {
 	f.mu.RLock()
 	fn := f.processRequestFn
 	decl := f.declarationVal
@@ -158,7 +158,7 @@ func (f *FakeTool) Declaration() *genai.FunctionDeclaration {
 }
 
 // Run executes the tool. If no RunFunc is set, it returns an empty result.
-func (f *FakeTool) Run(ctx agent.ToolContext, args any) (map[string]any, error) {
+func (f *FakeTool) Run(ctx agent.Context, args any) (map[string]any, error) {
 	f.mu.Lock()
 	f.callCount++
 	margs, _ := args.(map[string]any)
@@ -195,8 +195,8 @@ func (f *FakeTool) LastArgs() map[string]any {
 	return f.lastArgs
 }
 
-// LastCtx returns the agent.ToolContext from the most recent Run call.
-func (f *FakeTool) LastCtx() agent.ToolContext {
+// LastCtx returns the agent.Context from the most recent Run call.
+func (f *FakeTool) LastCtx() agent.Context {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.lastCtx
@@ -215,22 +215,22 @@ func (f *FakeTool) Reset() {
 // FakeToolContext
 // ---------------------------------------------------------------------------
 
-// FakeToolContext implements agent.ToolContext for testing.
+// FakeToolContext implements agent.Context for testing.
 type FakeToolContext struct {
-	agent.CallbackContext // embedded for base context methods
-	functionCallIDVal     string
-	actionsVal            *session.EventActions
-	memorySvc             memory.Service
-	memoryUserID          string
-	memoryAppName         string
-	toolConf              *toolconfirmation.ToolConfirmation
+	agent.Context     // embedded for base context methods
+	functionCallIDVal string
+	actionsVal        *session.EventActions
+	memorySvc         memory.Service
+	memoryUserID      string
+	memoryAppName     string
+	toolConf          *toolconfirmation.ToolConfirmation
 }
 
 // NewFakeToolContext creates a FakeToolContext wrapping the given
-// CallbackContext.
-func NewFakeToolContext(cbCtx agent.CallbackContext) *FakeToolContext {
+// Context.
+func NewFakeToolContext(cbCtx agent.Context) *FakeToolContext {
 	return &FakeToolContext{
-		CallbackContext:   cbCtx,
+		Context:           cbCtx,
 		functionCallIDVal: "test-fc-id",
 		actionsVal:        &session.EventActions{StateDelta: make(map[string]any), ArtifactDelta: make(map[string]int64)},
 	}
@@ -262,13 +262,13 @@ func (f *FakeToolContext) WithToolConfirmation(tc *toolconfirmation.ToolConfirma
 	return f
 }
 
-// FunctionCallID implements agent.ToolContext.
+// FunctionCallID implements agent.Context.
 func (f *FakeToolContext) FunctionCallID() string { return f.functionCallIDVal }
 
-// Actions implements agent.ToolContext.
+// Actions implements agent.Context.
 func (f *FakeToolContext) Actions() *session.EventActions { return f.actionsVal }
 
-// SearchMemory implements agent.ToolContext.
+// SearchMemory implements agent.Context.
 func (f *FakeToolContext) SearchMemory(ctx context.Context, query string) (*memory.SearchResponse, error) {
 	if f.memorySvc == nil {
 		return nil, fmt.Errorf("memory service is not set")
@@ -280,12 +280,12 @@ func (f *FakeToolContext) SearchMemory(ctx context.Context, query string) (*memo
 	})
 }
 
-// ToolConfirmation implements agent.ToolContext.
+// ToolConfirmation implements agent.Context.
 func (f *FakeToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
 	return f.toolConf
 }
 
-// RequestConfirmation implements agent.ToolContext.
+// RequestConfirmation implements agent.Context.
 func (f *FakeToolContext) RequestConfirmation(hint string, payload any) error {
 	if f.actionsVal == nil {
 		f.actionsVal = &session.EventActions{}

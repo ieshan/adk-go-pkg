@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ieshan/adk-go-pkg/aguiadk"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 )
 
 func newTestManager(t *testing.T) (*aguiadk.SessionManager, session.Service) {

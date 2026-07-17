@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/session"
 
 	"github.com/ieshan/adk-go-pkg/session/rewind"
 	"github.com/ieshan/adk-go-pkg/testutil"
@@ -33,7 +33,7 @@ func createSession(t *testing.T, ctx context.Context, svc session.Service, sessi
 // appendEventWithDelta appends an event with the given state delta to the session and returns the event ID.
 func appendEventWithDelta(t *testing.T, ctx context.Context, svc session.Service, sess session.Session, delta map[string]any) string {
 	t.Helper()
-	ev := session.NewEventWithContext(ctx, "inv-"+sess.ID())
+	ev := session.NewEvent(ctx, "inv-"+sess.ID())
 	ev.Actions.StateDelta = delta
 	if err := svc.AppendEvent(ctx, sess, ev); err != nil {
 		t.Fatalf("failed to append event: %v", err)

@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"iter"
 	"sync"
+	"time"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/artifact"
-	"google.golang.org/adk/memory"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
 // Compile-time interface checks.
 var _ agent.InvocationContext = (*FakeInvocationContext)(nil)
-var _ agent.CallbackContext = (*FakeCallbackContext)(nil)
+var _ agent.Context = (*FakeCallbackContext)(nil)
 var _ agent.ReadonlyContext = (*FakeReadonlyContext)(nil)
 var _ agent.Artifacts = (*FakeArtifacts)(nil)
 var _ agent.Memory = (*FakeMemory)(nil)
@@ -268,13 +270,41 @@ func (f *FakeInvocationContext) WithContext(ctx context.Context) agent.Invocatio
 	return &cp
 }
 
+// IsolationScope implements agent.InvocationContext.
+func (f *FakeInvocationContext) IsolationScope() string { return "" }
+
+// ResumedInput implements agent.InvocationContext.
+func (f *FakeInvocationContext) ResumedInput(_ string) (any, bool) { return nil, false }
+
+// WithICDelta implements agent.InvocationContext.
+func (f *FakeInvocationContext) WithICDelta(d *agent.InvocationContextDelta) agent.InvocationContext {
+	if d == nil {
+		return f
+	}
+	cp := *f
+	if d.Agent != nil {
+		cp.agentVal = *d.Agent
+	}
+	if d.Branch != nil {
+		cp.branchVal = *d.Branch
+	}
+	// d.IsolationScope is ignored: FakeInvocationContext has no isolationScope field.
+	if d.UserContent != nil {
+		cp.userContentVal = *d.UserContent
+	}
+	if d.Context != nil {
+		cp.Context = *d.Context
+	}
+	return &cp
+}
+
 // ---------------------------------------------------------------------------
 // FakeCallbackContext
 // ---------------------------------------------------------------------------
 
-// FakeCallbackContext implements agent.CallbackContext for testing.
+// FakeCallbackContext implements agent.Context for testing.
 //
-// context.Context is embedded to satisfy the ADK CallbackContext interface,
+// context.Context is embedded to satisfy the ADK Context interface,
 // which requires context methods. This is a documented compatibility reason
 // per Go best practices for interface satisfaction.
 type FakeCallbackContext struct {
@@ -391,11 +421,114 @@ func (f *FakeCallbackContext) SessionID() string { return f.sessionIDVal }
 // Branch implements agent.ReadonlyContext.
 func (f *FakeCallbackContext) Branch() string { return f.branchVal }
 
-// Artifacts implements agent.CallbackContext.
+// Artifacts implements agent.Context.
 func (f *FakeCallbackContext) Artifacts() agent.Artifacts { return f.artifactsVal }
 
-// State implements agent.CallbackContext.
+// State implements agent.Context.
 func (f *FakeCallbackContext) State() session.State { return f.stateVal }
+
+// Agent implements agent.InvocationContext.
+func (f *FakeCallbackContext) Agent() agent.Agent { return nil }
+
+// Memory implements agent.InvocationContext.
+func (f *FakeCallbackContext) Memory() agent.Memory { return nil }
+
+// Session implements agent.InvocationContext.
+func (f *FakeCallbackContext) Session() session.Session { return nil }
+
+// RunConfig implements agent.InvocationContext.
+func (f *FakeCallbackContext) RunConfig() *agent.RunConfig { return nil }
+
+// EndInvocation implements agent.InvocationContext.
+func (f *FakeCallbackContext) EndInvocation() {}
+
+// Ended implements agent.InvocationContext.
+func (f *FakeCallbackContext) Ended() bool { return false }
+
+// IsolationScope implements agent.InvocationContext.
+func (f *FakeCallbackContext) IsolationScope() string { return "" }
+
+// WithContext implements agent.InvocationContext.
+func (f *FakeCallbackContext) WithContext(ctx context.Context) agent.InvocationContext {
+	cp := *f
+	cp.Context = ctx
+	return &cp
+}
+
+// WithICDelta implements agent.InvocationContext.
+func (f *FakeCallbackContext) WithICDelta(d *agent.InvocationContextDelta) agent.InvocationContext {
+	if d == nil {
+		return f
+	}
+	cp := *f
+	// d.Agent is ignored: FakeCallbackContext has no agent field.
+	if d.Branch != nil {
+		cp.branchVal = *d.Branch
+	}
+	if d.UserContent != nil {
+		cp.userContentVal = *d.UserContent
+	}
+	if d.Context != nil {
+		cp.Context = *d.Context
+	}
+	return &cp
+}
+
+// FunctionCallID implements agent.Context.
+func (f *FakeCallbackContext) FunctionCallID() string { return "" }
+
+// Actions implements agent.Context.
+func (f *FakeCallbackContext) Actions() *session.EventActions { return nil }
+
+// SearchMemory implements agent.Context.
+func (f *FakeCallbackContext) SearchMemory(_ context.Context, _ string) (*memory.SearchResponse, error) {
+	return nil, fmt.Errorf("SearchMemory() is not supported for FakeCallbackContext")
+}
+
+// ToolConfirmation implements agent.Context.
+func (f *FakeCallbackContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+
+// RequestConfirmation implements agent.Context.
+func (f *FakeCallbackContext) RequestConfirmation(_ string, _ any) error {
+	return fmt.Errorf("RequestConfirmation() is not supported for FakeCallbackContext")
+}
+
+// ResumedInput implements agent.Context.
+func (f *FakeCallbackContext) ResumedInput(_ string) (any, bool) { return nil, false }
+
+// Path implements agent.Context.
+func (f *FakeCallbackContext) Path() string { return "" }
+
+// RunID implements agent.Context.
+func (f *FakeCallbackContext) RunID() string { return "" }
+
+// SubScheduler implements agent.Context.
+func (f *FakeCallbackContext) SubScheduler() agent.DynamicSubScheduler { return nil }
+
+// WithAgentContext implements agent.Context.
+func (f *FakeCallbackContext) WithAgentContext(ctx context.Context) agent.Context {
+	cp := *f
+	cp.Context = ctx
+	return &cp
+}
+
+// WithAgentTimeout implements agent.Context.
+func (f *FakeCallbackContext) WithAgentTimeout(_ time.Duration) (agent.Context, context.CancelFunc) {
+	return nil, nil
+}
+
+// WithAgentCancel implements agent.Context.
+func (f *FakeCallbackContext) WithAgentCancel() (agent.Context, context.CancelFunc) {
+	return nil, nil
+}
+
+// OutputForAncestors implements agent.Context.
+func (f *FakeCallbackContext) OutputForAncestors() []string { return nil }
+
+// WithDelta implements agent.Context.
+func (f *FakeCallbackContext) WithDelta(_ *agent.CommonContextDelta) agent.Context {
+	return f
+}
 
 // ---------------------------------------------------------------------------
 // FakeReadonlyContext

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // VersionMetadata is stored as metadata.json alongside each artifact version.
@@ -26,9 +27,8 @@ type VersionMetadata struct {
 	// empty.
 	MimeType string `json:"mimeType,omitempty"`
 
-	// CreateTime is the Unix epoch timestamp (seconds with sub-second precision)
-	// at which this version was created.
-	CreateTime float64 `json:"createTime"`
+	// CreateTime is the timestamp at which this version was created.
+	CreateTime time.Time `json:"createTime"`
 
 	// CanonicalURI is the fully qualified storage URI that uniquely identifies
 	// this version (e.g. "gs://bucket/appName/userID/sessionID/fileName/3").

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 // streamResult captures both values yielded by the iter.Seq2 returned from

@@ -67,7 +67,7 @@ import (
     "log"
 
     "github.com/ieshan/adk-go-pkg/session/rewind"
-    "google.golang.org/adk/session"
+    "google.golang.org/adk/v2/session"
 )
 
 ctx := context.Background()
@@ -133,7 +133,7 @@ import (
     "log"
 
     "github.com/ieshan/adk-go-pkg/session/rewind"
-    "google.golang.org/adk/session"
+    "google.golang.org/adk/v2/session"
 )
 
 func main() {

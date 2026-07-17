@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/memory"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/session"
+	"google.golang.org/adk/v2/memory"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
@@ -59,7 +59,7 @@ func NewInlineDataPart(mimeType string, data []byte) *genai.Part {
 // NewEvent creates a session.Event with the given author and content.
 // The event ID and timestamp are auto-generated.
 func NewEvent(ctx context.Context, author string, content *genai.Content) *session.Event {
-	e := session.NewEventWithContext(ctx, "")
+	e := session.NewEvent(ctx, "")
 	e.Author = author
 	e.LLMResponse = model.LLMResponse{Content: content}
 	return e
@@ -68,7 +68,7 @@ func NewEvent(ctx context.Context, author string, content *genai.Content) *sessi
 // NewEventWithInvocationID creates a session.Event with a specific invocation
 // ID, author, and content.
 func NewEventWithInvocationID(ctx context.Context, invID, author string, content *genai.Content) *session.Event {
-	e := session.NewEventWithContext(ctx, invID)
+	e := session.NewEvent(ctx, invID)
 	e.Author = author
 	e.LLMResponse = model.LLMResponse{Content: content}
 	return e

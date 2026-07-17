@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/model"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/skilltoolset/skill"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 
 	"github.com/ieshan/adk-go-pkg/testutil"
 )
@@ -332,7 +332,7 @@ func TestRegistry_ResolveAndInvoke(t *testing.T) {
 
 	// Register a callback and verify it resolves to the same function value.
 	var beforeCalled bool
-	beforeCB := func(ctx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+	beforeCB := func(ctx agent.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
 		beforeCalled = true
 		return nil, nil
 	}

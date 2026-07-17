@@ -59,7 +59,7 @@ type VersionMetadata struct {
     Version        int64          `json:"version"`
     FileName       string         `json:"fileName"`
     MimeType       string         `json:"mimeType,omitempty"`
-    CreateTime     float64        `json:"createTime"`
+    CreateTime     time.Time      `json:"createTime"`
     CanonicalURI   string         `json:"canonicalUri"`
     CustomMetadata map[string]any `json:"customMetadata,omitempty"`
 }
@@ -209,7 +209,7 @@ versionResp, err = svc.GetArtifactVersion(ctx, &artifact.GetArtifactVersionReque
 
 The `ArtifactVersion` contains:
 - `Version`: The version number
-- `CreateTime`: Unix timestamp (seconds with fractional part)
+- `CreateTime`: Timestamp (RFC3339 time.Time)
 - `MimeType`: The MIME type of the stored content
 - `CanonicalURI`: A deterministic URI identifier for the artifact
 - `CustomMetadata`: Optional user-defined metadata map

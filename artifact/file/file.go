@@ -44,7 +44,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/adk/artifact"
+	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/genai"
 )
 
@@ -224,7 +224,7 @@ func (s *fileService) Save(_ context.Context, req *artifact.SaveRequest) (*artif
 		Version:      nextVersion,
 		FileName:     req.FileName,
 		MimeType:     mimeType,
-		CreateTime:   float64(time.Now().UnixNano()) / 1e9,
+		CreateTime:   time.Now(),
 		CanonicalURI: canonicalURI(req.AppName, req.UserID, req.SessionID, req.FileName, nextVersion),
 	}
 	if err := writeMetadata(vDir, meta); err != nil {

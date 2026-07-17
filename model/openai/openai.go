@@ -53,7 +53,7 @@ import (
 	"iter"
 	"net/http"
 
-	"google.golang.org/adk/model"
+	"google.golang.org/adk/v2/model"
 )
 
 const defaultBaseURL = "https://api.openai.com/v1"
