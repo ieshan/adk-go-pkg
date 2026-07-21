@@ -764,6 +764,34 @@ Stores an `*http.Request` in the context so that `AppNameFunc` and
 `UserIDFunc` can access it. This is used internally by the handler but is
 exported for custom integrations.
 
+## MCP Server Toolsets
+
+```go
+func BuildMCPServerToolsets(servers []agui.MCPClientConfig) ([]tool.Toolset, error)
+```
+
+`BuildMCPServerToolsets` creates ADK `mcptoolset.Toolset` instances from MCP
+server configs. Each config is converted to an MCP transport via
+`agui.BuildMCPTransport` and wrapped in ADK-Go's native `mcptoolset.New`.
+Add the returned toolsets to `llmagent.Config.Toolsets` at agent construction
+time so the ADK runner resolves MCP tools natively.
+
+```go
+toolsets, err := aguiadk.BuildMCPServerToolsets([]agui.MCPClientConfig{
+    {Type: "http", URL: "https://example.com/mcp", ServerID: "srv1"},
+})
+if err != nil { /* handle */ }
+
+agent, err := llmagent.New(llmagent.Config{
+    Name:     "my-agent",
+    Model:    model,
+    Toolsets: toolsets,
+})
+```
+
+See [AG-UI MCP Support](agui-mcp.md) for the full MCP integration guide,
+including `MCPMiddleware` and `MCPAppsMiddleware` for the generic AG-UI server.
+
 ## Full Example
 
 A complete program with an ADK agent served via AG-UI, including state

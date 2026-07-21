@@ -544,6 +544,15 @@ func Chain(middlewares ...Middleware) Middleware
 Middlewares wrap an `Agent`, returning a new `Agent`. `Chain` composes them
 left-to-right: `Chain(a, b, c)(agent)` produces `a(b(c(agent)))`.
 
+### Built-in Middlewares
+
+The `agui` package ships two MCP-related middlewares:
+
+- **`NewMCPMiddleware`** — Injects MCP server tools into the agent's tool list and executes them server-side in an agentic loop (up to `MaxIterations` rounds).
+- **`NewMCPAppsMiddleware`** — Injects UI-enabled MCP tools (tools with `_meta["ui/resourceUri"]`) and handles proxied MCP requests from frontends via `ForwardedProps`.
+
+See [AG-UI MCP Support](agui-mcp.md) for full documentation.
+
 ### Example: Logging and Auth
 
 ```go

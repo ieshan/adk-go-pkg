@@ -24,6 +24,7 @@ out of the box.
 | **Agent Skills Config** | Declarative skill integration via YAML/JSON. Supports filesystem sources with preload optimization and specific skill loading (wildcard or filtered by name). |
 | **Test Utilities** | Complete fake implementations of all ADK-Go interfaces for deterministic testing without external LLM providers. Includes FakeLLM, FakeAgent, FakeSession, and RunnerBuilder. |
 | **Evaluation Framework** | Evaluate agent performance with eval sets, built-in metrics (trajectory, response match, rubrics, safety, hallucinations), LLM-as-judge auto-raters, user simulation, and a local eval service. Mirrors ADK Python's eval package. |
+| **AG-UI MCP Support** | Inject MCP (Model Context Protocol) server tools into AG-UI agents. Two integration paths: `MCPMiddleware` for generic tool injection + server-side execution, and `MCPAppsMiddleware` for UI-enabled tools + proxied MCP requests. Bridge wiring via `aguiadk.BuildMCPServerToolsets` using ADK-Go's `mcptoolset`. |
 
 ## Installation
 
@@ -518,6 +519,44 @@ func main() {
 
 [Detailed docs &rarr;](docs/eval.md)
 
+### AG-UI MCP Support
+
+Inject MCP server tools into any AG-UI agent and execute them server-side:
+
+```go
+package main
+
+import (
+	"context"
+	"iter"
+	"log"
+	"net/http"
+
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/ieshan/adk-go-pkg/agui"
+)
+
+func main() {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		// your agent logic
+		return nil
+	})
+
+	mcpMW := agui.NewMCPMiddleware([]agui.MCPClientConfig{
+		{Type: "http", URL: "https://example.com/mcp", ServerID: "srv1"},
+	}, agui.MCPMiddlewareOptions{MaxIterations: 32})
+
+	handler, err := agui.Handler(agui.Config{Agent: mcpMW(agent)})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Fatal(http.ListenAndServe(":8080", handler))
+}
+```
+
+For ADK-Go native integration, use `aguiadk.BuildMCPServerToolsets` to create `mcptoolset.Toolset` instances from MCP configs. See [docs/agui-mcp.md](docs/agui-mcp.md) for both integration paths, `MCPAppsMiddleware` for UI-enabled tools, and proxied MCP request handling.
+
 ## Compatibility
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
@@ -532,6 +571,7 @@ func main() {
 - **Test Utilities**: New `testutil` package with fake implementations of all ADK-Go interfaces (FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, RunnerBuilder). Enables fast, deterministic testing without external LLM providers. See [docs/testutil.md](docs/testutil.md).
 - **Agent Skills Config**: Skillset support in config loader. Define skills in YAML/JSON with filesystem sources, preload optimization, and specific skill loading (wildcard or filtered by name).
 - **OpenAI Model Provider**: Supports genai `FunctionResponse.Parts` structure for function calling.
+- **AG-UI MCP Support**: MCP (Model Context Protocol) integration for AG-UI agents. `MCPMiddleware` injects MCP server tools and executes them server-side in an agentic loop. `MCPAppsMiddleware` handles UI-enabled tools (SEP-1865) and proxied MCP requests from frontends. `aguiadk.BuildMCPServerToolsets` bridges MCP servers to ADK-Go's native `mcptoolset`. See [docs/agui-mcp.md](docs/agui-mcp.md).
 - **File Artifact Service**: `GetArtifactVersion` method for metadata retrieval without loading full content.
 
 ## Dependencies
@@ -542,7 +582,9 @@ Beyond ADK-Go and `google.golang.org/genai`, the only additional direct dependen
 - [`github.com/evanphx/json-patch/v5`](https://github.com/evanphx/json-patch) -- RFC 6902 JSON Patch for `StateManager.Apply`
 - [`github.com/google/jsonschema-go`](https://github.com/google/jsonschema-go) -- JSON Schema for `ClientToolset` parameter validation
 - [`github.com/google/uuid`](https://github.com/google/uuid) -- UUID generation for eval session IDs
+- [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) -- MCP client for transport, tool listing, and execution
 - [`go.yaml.in/yaml/v4`](https://github.com/go-yaml/yaml) -- YAML parsing for the config loader
+- [`golang.org/x/sync`](https://pkg.go.dev/golang.org/x/sync) -- `errgroup` for parallel MCP server queries
 
 ## License
 
