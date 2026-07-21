@@ -612,6 +612,13 @@ func (f *FakeReadonlyContext) WithBranch(b string) *FakeReadonlyContext {
 	return f
 }
 
+// WithContext sets the embedded context.Context, enabling context-value
+// propagation for tests that rely on context keys.
+func (f *FakeReadonlyContext) WithContext(ctx context.Context) *FakeReadonlyContext {
+	f.Context = ctx
+	return f
+}
+
 // UserContent implements agent.ReadonlyContext.
 func (f *FakeReadonlyContext) UserContent() *genai.Content { return f.userContentVal }
 

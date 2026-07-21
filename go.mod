@@ -3,7 +3,9 @@ module github.com/ieshan/adk-go-pkg
 go 1.26
 
 require (
-	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260716182252-b646b4634455
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260717195153-3a7433ef055a
+	github.com/evanphx/json-patch/v5 v5.9.11
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	google.golang.org/adk/v2 v2.0.0
@@ -19,7 +21,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.18 // indirect
@@ -38,7 +39,7 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/api v0.289.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260715232425-e75dac1f907d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720171339-e059f2f05d78 // indirect
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

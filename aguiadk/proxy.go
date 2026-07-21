@@ -91,25 +91,8 @@ func proxyToolHandler(
 ) (map[string]any, error) {
 	toolCallID := emitter.GenerateToolCallID()
 
-	// Emit TOOL_CALL_START.
-	if err := emitter.ToolCallStart(toolCallID, toolName, nil); err != nil {
-		return nil, fmt.Errorf("aguiadk: failed to emit TOOL_CALL_START: %w", err)
-	}
-
-	// Emit TOOL_CALL_ARGS with serialized arguments.
-	if args != nil {
-		argsJSON, err := json.Marshal(args)
-		if err != nil {
-			return nil, fmt.Errorf("aguiadk: failed to marshal tool args: %w", err)
-		}
-		if err = emitter.ToolCallArgs(toolCallID, string(argsJSON)); err != nil {
-			return nil, fmt.Errorf("aguiadk: failed to emit TOOL_CALL_ARGS: %w", err)
-		}
-	}
-
-	// Emit TOOL_CALL_END.
-	if err := emitter.ToolCallEnd(toolCallID); err != nil {
-		return nil, fmt.Errorf("aguiadk: failed to emit TOOL_CALL_END: %w", err)
+	if err := emitToolCallEvents(emitter, toolCallID, toolName, args); err != nil {
+		return nil, err
 	}
 
 	// Wait for the client to submit a result, using the tool context
@@ -126,4 +109,28 @@ func proxyToolHandler(
 		return map[string]any{"result": resultStr}, nil
 	}
 	return result, nil
+}
+
+// emitToolCallEvents emits TOOL_CALL_START, TOOL_CALL_ARGS, and TOOL_CALL_END
+// for the ProxyToolset's inline tool handler.
+func emitToolCallEvents(emitter *agui.EventEmitter, toolCallID, toolName string, args map[string]any) error {
+	if err := emitter.ToolCallStart(toolCallID, toolName, nil); err != nil {
+		return fmt.Errorf("aguiadk: failed to emit TOOL_CALL_START: %w", err)
+	}
+
+	if args != nil {
+		argsJSON, err := json.Marshal(args)
+		if err != nil {
+			return fmt.Errorf("aguiadk: failed to marshal tool args: %w", err)
+		}
+		if err = emitter.ToolCallArgs(toolCallID, string(argsJSON)); err != nil {
+			return fmt.Errorf("aguiadk: failed to emit TOOL_CALL_ARGS: %w", err)
+		}
+	}
+
+	if err := emitter.ToolCallEnd(toolCallID); err != nil {
+		return fmt.Errorf("aguiadk: failed to emit TOOL_CALL_END: %w", err)
+	}
+
+	return nil
 }

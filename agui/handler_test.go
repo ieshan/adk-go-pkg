@@ -356,6 +356,88 @@ func TestHandler_CORS(t *testing.T) {
 	})
 }
 
+func TestHandler_CORSWithCustomHeaders(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil)
+			yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+		}
+	})
+
+	h, err := agui.Handler(agui.Config{
+		Agent: agent,
+		CORS: &agui.CORSConfig{
+			AllowOrigins:     []string{"https://app.example.com"},
+			AllowMethods:     []string{"POST", "OPTIONS", "GET"},
+			AllowHeaders:     []string{"Content-Type", "Authorization", "X-Request-ID"},
+			ExposeHeaders:    []string{"X-Response-ID", "X-Trace-ID"},
+			AllowCredentials: true,
+			MaxAge:           600 * time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	t.Run("OPTIONS preflight with custom headers", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodOptions, srv.URL, nil)
+		req.Header.Set("Origin", "https://app.example.com")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusNoContent {
+			t.Errorf("expected 204, got %d", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+			t.Errorf("Allow-Origin = %q, want https://app.example.com", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Methods"); !strings.Contains(got, "GET") {
+			t.Errorf("Allow-Methods = %q, want to contain GET", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+			t.Errorf("Allow-Headers = %q, want to contain Authorization", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-Request-ID") {
+			t.Errorf("Allow-Headers = %q, want to contain X-Request-ID", got)
+		}
+		if got := resp.Header.Get("Access-Control-Expose-Headers"); !strings.Contains(got, "X-Response-ID") {
+			t.Errorf("Expose-Headers = %q, want to contain X-Response-ID", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "true" {
+			t.Errorf("Allow-Credentials = %q, want true", got)
+		}
+		if got := resp.Header.Get("Access-Control-Max-Age"); got != "600" {
+			t.Errorf("Max-Age = %q, want 600", got)
+		}
+	})
+
+	t.Run("POST with custom CORS headers", func(t *testing.T) {
+		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+		body, _ := json.Marshal(input)
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+			t.Errorf("Allow-Origin = %q, want https://app.example.com", got)
+		}
+		if got := resp.Header.Get("Access-Control-Expose-Headers"); !strings.Contains(got, "X-Trace-ID") {
+			t.Errorf("Expose-Headers = %q, want to contain X-Trace-ID", got)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "true" {
+			t.Errorf("Allow-Credentials = %q, want true", got)
+		}
+	})
+}
+
 func TestHandler_Keepalive(t *testing.T) {
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		return func(yield func(events.Event, error) bool) {
@@ -436,4 +518,48 @@ func TestHandler_MaxBodySize(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
+}
+
+func TestHandler_DisconnectCancelsAgent(t *testing.T) {
+	ctxCancelled := make(chan struct{})
+
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			if !yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil) {
+				return
+			}
+			<-ctx.Done()
+			close(ctxCancelled)
+		}
+	})
+
+	h, err := agui.Handler(agui.Config{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+	body, _ := json.Marshal(input)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+
+	select {
+	case <-ctxCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent context was not cancelled after client disconnect")
+	}
+
+	_ = resp.Body.Close()
 }

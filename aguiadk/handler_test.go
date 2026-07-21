@@ -191,3 +191,90 @@ func TestHandler_InlineToolMode(t *testing.T) {
 		t.Errorf("GET /tool-result: expected 405, got %d", getResp.StatusCode)
 	}
 }
+
+func TestHandler_PerRequestApproval(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "approval-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "approve",
+					Args: map[string]any{"action": "delete"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+	ev.LongRunningToolIDs = []string{"fc-1"}
+
+	adkAgent := testutil.MustNewFakeAgent("approval-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	var sawRequest bool
+	h, err := aguiadk.Handler(
+		aguiadk.Config{
+			Agent:   adkAgent,
+			AppName: "approval-app",
+			UserID:  "user-1",
+			ApprovalModeFunc: func(r *http.Request) bool {
+				sawRequest = true
+				if r == nil {
+					t.Error("expected non-nil *http.Request in ApprovalModeFunc")
+				}
+				return r.Header.Get("X-AG-Approval") == "auto"
+			},
+		},
+		agui.Config{},
+	)
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	input := types.RunAgentInput{
+		ThreadID: "approval-thread",
+		RunID:    "approval-run",
+		Messages: []types.Message{
+			{ID: "msg-1", Role: types.RoleUser, Content: "do it"},
+		},
+	}
+	body, _ := json.Marshal(input)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AG-Approval", "auto")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	data, _ := io.ReadAll(resp.Body)
+	sseBody := string(data)
+
+	if !sawRequest {
+		t.Fatal("expected ApprovalModeFunc to be called with the HTTP request")
+	}
+
+	if strings.Contains(sseBody, `"interrupt"`) {
+		t.Error("expected no interrupt outcome with auto-approval via X-AG-Approval header")
+	}
+	if !strings.Contains(sseBody, "RUN_FINISHED") {
+		t.Error("expected RUN_FINISHED in SSE response")
+	}
+}

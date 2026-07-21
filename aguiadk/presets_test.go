@@ -1,0 +1,177 @@
+package aguiadk_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+
+	"github.com/ieshan/adk-go-pkg/aguiadk"
+)
+
+func TestPresets_AgenticChat(t *testing.T) {
+	cfg := aguiadk.AgenticChatPreset(aguiadk.Config{})
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if cfg.SessionTimeout != 20*time.Minute {
+		t.Errorf("SessionTimeout = %v, want 20m", cfg.SessionTimeout)
+	}
+	if cfg.ClientTools == nil {
+		t.Fatal("expected non-nil ClientTools")
+	}
+	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
+		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
+	}
+}
+
+func TestPresets_AgenticChatPreservesBase(t *testing.T) {
+	base := aguiadk.Config{AppName: "myapp"}
+	cfg := aguiadk.AgenticChatPreset(base)
+	if cfg.AppName != "myapp" {
+		t.Errorf("AppName = %q, want %q (base field should be preserved)", cfg.AppName, "myapp")
+	}
+}
+
+func TestPresets_GenerativeUI(t *testing.T) {
+	cfg := aguiadk.GenerativeUIPreset(aguiadk.Config{})
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if cfg.ClientTools == nil {
+		t.Fatal("expected non-nil ClientTools")
+	}
+	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
+		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
+	}
+}
+
+func TestPresets_HumanInTheLoop(t *testing.T) {
+	cfg := aguiadk.HumanInTheLoopPreset(aguiadk.Config{}, false)
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if cfg.SessionTimeout != 30*time.Minute {
+		t.Errorf("SessionTimeout = %v, want 30m", cfg.SessionTimeout)
+	}
+	if cfg.ClientTools == nil {
+		t.Fatal("expected non-nil ClientTools")
+	}
+	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
+		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
+	}
+	if cfg.RunStore == nil {
+		t.Error("expected non-nil RunStore when autoApprove=false")
+	}
+	defer cfg.RunStore.Stop()
+}
+
+func TestPresets_HumanInTheLoopAutoApprove(t *testing.T) {
+	cfg := aguiadk.HumanInTheLoopPreset(aguiadk.Config{}, true)
+	if cfg.RunStore != nil {
+		t.Error("expected nil RunStore when autoApprove=true")
+	}
+}
+
+func TestPresets_SharedState(t *testing.T) {
+	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+		return []events.JSONPatchOperation{
+			{Op: "add", Path: "/tool/" + name, Value: args},
+		}
+	}
+	cfg := aguiadk.SharedStatePreset(aguiadk.Config{}, mapper)
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if !cfg.SuppressToolEvents {
+		t.Error("expected SuppressToolEvents=true")
+	}
+	if cfg.ToolToStateMapper == nil {
+		t.Fatal("expected non-nil ToolToStateMapper")
+	}
+	ops := cfg.ToolToStateMapper("search", map[string]any{"q": "hello"})
+	if len(ops) != 1 || ops[0].Path != "/tool/search" {
+		t.Errorf("mapper ops = %v, want one op with path /tool/search", ops)
+	}
+}
+
+func TestPresets_InlineTools(t *testing.T) {
+	cfg := aguiadk.InlineToolsPreset(aguiadk.Config{})
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if cfg.ClientTools == nil {
+		t.Fatal("expected non-nil ClientTools")
+	}
+	if cfg.ClientTools.Mode != aguiadk.ClientToolModeInline {
+		t.Errorf("ClientTools.Mode = %v, want Inline", cfg.ClientTools.Mode)
+	}
+	if cfg.ClientTools.Timeout != 5*time.Minute {
+		t.Errorf("ClientTools.Timeout = %v, want 5m", cfg.ClientTools.Timeout)
+	}
+}
+
+func TestPresets_PredictiveState(t *testing.T) {
+	cfg := aguiadk.PredictiveStatePreset(aguiadk.Config{})
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if !cfg.EmitActivityDeltas {
+		t.Error("expected EmitActivityDeltas=true")
+	}
+	if cfg.EmitStepEvents == nil || !*cfg.EmitStepEvents {
+		t.Error("expected EmitStepEvents=true")
+	}
+	if cfg.SessionTimeout != 20*time.Minute {
+		t.Errorf("SessionTimeout = %v, want 20m", cfg.SessionTimeout)
+	}
+}
+
+func TestPresets_PredictiveStatePreservesBase(t *testing.T) {
+	base := aguiadk.Config{AppName: "myapp"}
+	cfg := aguiadk.PredictiveStatePreset(base)
+	if cfg.AppName != "myapp" {
+		t.Errorf("AppName = %q, want %q (base field should be preserved)", cfg.AppName, "myapp")
+	}
+}
+
+func TestPresets_AgenticGenerativeUI(t *testing.T) {
+	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+		return []events.JSONPatchOperation{
+			{Op: "add", Path: "/ui/" + name, Value: args},
+		}
+	}
+	cfg := aguiadk.AgenticGenerativeUIPreset(aguiadk.Config{}, mapper)
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+	if !cfg.EmitMessagesSnapshot {
+		t.Error("expected EmitMessagesSnapshot=true")
+	}
+	if cfg.EmitStepEvents == nil || !*cfg.EmitStepEvents {
+		t.Error("expected EmitStepEvents=true")
+	}
+	if !cfg.SuppressToolEvents {
+		t.Error("expected SuppressToolEvents=true")
+	}
+	if cfg.ToolToStateMapper == nil {
+		t.Fatal("expected non-nil ToolToStateMapper")
+	}
+	ops := cfg.ToolToStateMapper("render", map[string]any{"component": "card"})
+	if len(ops) != 1 || ops[0].Path != "/ui/render" {
+		t.Errorf("mapper ops = %v, want one op with path /ui/render", ops)
+	}
+	if cfg.SessionTimeout != 20*time.Minute {
+		t.Errorf("SessionTimeout = %v, want 20m", cfg.SessionTimeout)
+	}
+}
+
+func TestPresets_AgenticGenerativeUIPreservesBase(t *testing.T) {
+	base := aguiadk.Config{AppName: "guiapp"}
+	cfg := aguiadk.AgenticGenerativeUIPreset(base, func(string, map[string]any) []events.JSONPatchOperation {
+		return nil
+	})
+	if cfg.AppName != "guiapp" {
+		t.Errorf("AppName = %q, want %q (base field should be preserved)", cfg.AppName, "guiapp")
+	}
+}

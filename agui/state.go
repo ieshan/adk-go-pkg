@@ -3,14 +3,19 @@ package agui
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	jsonpatch "github.com/evanphx/json-patch/v5"
 )
 
 // StateManager tracks shared application state and supports
 // snapshot/delta operations using RFC 6902 JSON Patch.
+//
+// StateManager serves as the project's "DocState" — it provides the same
+// Apply/Snapshot semantics as the example server's docstate.go, plus Diff
+// and Set. There is no separate DocState type; creating one would be a
+// redundant subset of StateManager.
 type StateManager struct {
 	mu    sync.RWMutex
 	state map[string]any
@@ -71,67 +76,30 @@ func (s *StateManager) Set(state any) error {
 func (s *StateManager) Apply(patch []events.JSONPatchOperation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, op := range patch {
-		switch op.Op {
-		case "add":
-			if err := setPath(s.state, op.Path, op.Value); err != nil {
-				return fmt.Errorf("add %s: %w", op.Path, err)
-			}
-		case "remove":
-			if err := removePath(s.state, op.Path); err != nil {
-				return fmt.Errorf("remove %s: %w", op.Path, err)
-			}
-		case "replace":
-			if err := setPath(s.state, op.Path, op.Value); err != nil {
-				return fmt.Errorf("replace %s: %w", op.Path, err)
-			}
-		case "move":
-			val, err := getPath(s.state, op.From)
-			if err != nil {
-				return fmt.Errorf("move from %s: %w", op.From, err)
-			}
-			if err = removePath(s.state, op.From); err != nil {
-				return fmt.Errorf("move from %s: %w", op.From, err)
-			}
-			if err = setPath(s.state, op.Path, val); err != nil {
-				return fmt.Errorf("move to %s: %w", op.Path, err)
-			}
-		case "copy":
-			val, err := getPath(s.state, op.From)
-			if err != nil {
-				return fmt.Errorf("copy from %s: %w", op.From, err)
-			}
-			// Deep copy the value
-			data, err := json.Marshal(val)
-			if err != nil {
-				return fmt.Errorf("copy from %s: marshal failed: %w", op.From, err)
-			}
-			var copied any
-			if err = json.Unmarshal(data, &copied); err != nil {
-				return fmt.Errorf("copy from %s: %w", op.From, err)
-			}
-			if err = setPath(s.state, op.Path, copied); err != nil {
-				return fmt.Errorf("copy to %s: %w", op.Path, err)
-			}
-		case "test":
-			val, err := getPath(s.state, op.Path)
-			if err != nil {
-				return fmt.Errorf("test %s: %w", op.Path, err)
-			}
-			expected, err := json.Marshal(op.Value)
-			if err != nil {
-				return fmt.Errorf("test %s: marshal expected value: %w", op.Path, err)
-			}
-			actual, err := json.Marshal(val)
-			if err != nil {
-				return fmt.Errorf("test %s: marshal actual value: %w", op.Path, err)
-			}
-			if string(expected) != string(actual) {
-				return fmt.Errorf("test %s: value mismatch", op.Path)
-			}
-		default:
-			return fmt.Errorf("unknown operation: %s", op.Op)
-		}
+
+	patchBytes, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("agui: marshal patch: %w", err)
+	}
+
+	decodedPatch, err := jsonpatch.DecodePatch(patchBytes)
+	if err != nil {
+		return fmt.Errorf("agui: decode patch: %w", err)
+	}
+
+	stateBytes, err := json.Marshal(s.state)
+	if err != nil {
+		return fmt.Errorf("agui: marshal state: %w", err)
+	}
+
+	applied, err := decodedPatch.Apply(stateBytes)
+	if err != nil {
+		return fmt.Errorf("agui: apply patch: %w", err)
+	}
+
+	s.state = make(map[string]any)
+	if err := json.Unmarshal(applied, &s.state); err != nil {
+		return fmt.Errorf("agui: unmarshal patched state: %w", err)
 	}
 	return nil
 }
@@ -149,73 +117,6 @@ func (s *StateManager) Diff(newState any) ([]events.JSONPatchOperation, error) {
 		return nil, err
 	}
 	return diffMaps("", s.state, target), nil
-}
-
-// parsePath splits a JSON Pointer path into segments.
-// "/a/b/c" -> ["a", "b", "c"], "" -> []
-func parsePath(path string) []string {
-	if path == "" {
-		return nil
-	}
-	// RFC 6901: "/" targets the empty-string key at root
-	return strings.Split(strings.TrimPrefix(path, "/"), "/")
-}
-
-// getPath retrieves a value at a JSON Pointer path.
-func getPath(obj map[string]any, path string) (any, error) {
-	segments := parsePath(path)
-	var current any = obj
-	for _, seg := range segments {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("not an object at %s", seg)
-		}
-		current, ok = m[seg]
-		if !ok {
-			return nil, fmt.Errorf("key %s not found", seg)
-		}
-	}
-	return current, nil
-}
-
-// setPath sets a value at a JSON Pointer path, creating intermediate maps.
-func setPath(obj map[string]any, path string, value any) error {
-	segments := parsePath(path)
-	if len(segments) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	current := obj
-	for _, seg := range segments[:len(segments)-1] {
-		next, ok := current[seg]
-		if !ok {
-			next = make(map[string]any)
-			current[seg] = next
-		}
-		current, ok = next.(map[string]any)
-		if !ok {
-			return fmt.Errorf("not an object at %s", seg)
-		}
-	}
-	current[segments[len(segments)-1]] = value
-	return nil
-}
-
-// removePath removes a value at a JSON Pointer path.
-func removePath(obj map[string]any, path string) error {
-	segments := parsePath(path)
-	if len(segments) == 0 {
-		return fmt.Errorf("empty path")
-	}
-	current := obj
-	for _, seg := range segments[:len(segments)-1] {
-		next, ok := current[seg].(map[string]any)
-		if !ok {
-			return fmt.Errorf("not an object at %s", seg)
-		}
-		current = next
-	}
-	delete(current, segments[len(segments)-1])
-	return nil
 }
 
 // diffMaps computes patch operations between two maps.

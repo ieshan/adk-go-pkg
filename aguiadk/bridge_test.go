@@ -6,11 +6,14 @@ import (
 	"iter"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 
+	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"github.com/ieshan/adk-go-pkg/testutil"
 
@@ -237,6 +240,8 @@ func TestBridge_FunctionCallParts(t *testing.T) {
 	collected := collectEvents(t, bridgeAgent, defaultInput())
 
 	typeSeq := eventTypes(collected)
+	// No FunctionResponse in this test → no tool_use activity snapshot
+	// (the snapshot is emitted at execution time, not proposal time).
 	expected := []events.EventType{
 		events.EventTypeRunStarted,
 		events.EventTypeStateSnapshot,
@@ -314,18 +319,37 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 		events.EventTypeToolCallStart,
 		events.EventTypeToolCallArgs,
 		events.EventTypeToolCallEnd,
+		events.EventTypeActivitySnapshot, // tool_use, emitted at FunctionResponse time
 		events.EventTypeToolCallResult,
 		events.EventTypeRunFinished,
 	}
 	assertEventSequence(t, typeSeq, expected)
 
-	// Verify TOOL_CALL_RESULT correlates to TOOL_CALL_START.
+	// Verify TOOL_CALL_RESULT correlates to TOOL_CALL_START, and the
+	// tool_use ACTIVITY_SNAPSHOT has the expected type and content shape
+	// (matching the example server's settlePendingToolCalls, loop.go:567-568).
 	var toolCallStartID string
+	sawToolUseSnapshot := false
 	for _, ev := range collected {
 		if ev.Type() == events.EventTypeToolCallStart {
 			if tcse, ok := ev.(*events.ToolCallStartEvent); ok {
 				toolCallStartID = tcse.ToolCallID
 			}
+		}
+		if ev.Type() == events.EventTypeActivitySnapshot {
+			ase, ok := ev.(*events.ActivitySnapshotEvent)
+			if !ok {
+				t.Fatalf("expected *events.ActivitySnapshotEvent, got %T", ev)
+			}
+			if ase.ActivityType != "tool_use" {
+				t.Errorf("ACTIVITY_SNAPSHOT ActivityType = %q, want %q", ase.ActivityType, "tool_use")
+			}
+			contentMap, _ := ase.Content.(map[string]any)
+			text, _ := contentMap["text"].(string)
+			if !strings.HasPrefix(text, "Running get_weather(") {
+				t.Errorf("ACTIVITY_SNAPSHOT text = %q, want prefix %q", text, "Running get_weather(")
+			}
+			sawToolUseSnapshot = true
 		}
 		if ev.Type() == events.EventTypeToolCallResult {
 			tcre, ok := ev.(*events.ToolCallResultEvent)
@@ -339,6 +363,9 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 				t.Errorf("TOOL_CALL_RESULT Content = %q, want it to contain %q", tcre.Content, `"temp":72`)
 			}
 		}
+	}
+	if !sawToolUseSnapshot {
+		t.Error("expected a tool_use ACTIVITY_SNAPSHOT, saw none")
 	}
 }
 
@@ -571,6 +598,7 @@ func TestBridge_MixedParts(t *testing.T) {
 		events.EventTypeToolCallStart,
 		events.EventTypeToolCallArgs,
 		events.EventTypeToolCallEnd,
+		// No tool_use activity snapshot — no FunctionResponse in this test.
 		events.EventTypeRunFinished,
 	}
 	assertEventSequence(t, typeSeq, expected)
@@ -854,11 +882,12 @@ func TestBridge_LongRunningToolInterrupt(t *testing.T) {
 		events.EventTypeToolCallStart,
 		events.EventTypeToolCallArgs,
 		events.EventTypeToolCallEnd,
+		events.EventTypeActivitySnapshot, // approval_request (no tool_use — paused)
 		events.EventTypeRunFinished,
 	}
 	assertEventSequence(t, typeSeq, expected)
 
-	// Verify RUN_FINISHED has interrupt outcome.
+	// Verify RUN_FINISHED has interrupt outcome with ResponseSchema and Message.
 	for _, ev := range collected {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
@@ -874,17 +903,160 @@ func TestBridge_LongRunningToolInterrupt(t *testing.T) {
 			if len(finEvt.Outcome.Interrupts) != 1 {
 				t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
 			}
-			if finEvt.Outcome.Interrupts[0].ID != "fc-1" {
-				t.Errorf("Interrupts[0].ID = %q, want %q", finEvt.Outcome.Interrupts[0].ID, "fc-1")
+			intr := finEvt.Outcome.Interrupts[0]
+			if intr.ID != "fc-1" {
+				t.Errorf("Interrupts[0].ID = %q, want %q", intr.ID, "fc-1")
+			}
+			if intr.Message == "" {
+				t.Error("expected non-empty Message on interrupt")
+			}
+			if intr.ResponseSchema == nil {
+				t.Error("expected non-nil ResponseSchema on interrupt")
+			}
+			if _, ok := intr.ResponseSchema["properties"]; !ok {
+				t.Errorf("ResponseSchema missing 'properties': %v", intr.ResponseSchema)
 			}
 		}
 	}
 }
 
+func TestBridge_ClientToolNextRunInterrupt(t *testing.T) {
+	// Verifies the NextRun client-tool hand-back: when Config.ClientTools is set
+	// to NextRun mode and ADK emits a FunctionCall + LongRunningToolIDs (which
+	// is what ADK does after the clientProxyHandler returns nil — see
+	// base_flow.go:1169-1171), the bridge emits TOOL_CALL_* events and finishes
+	// with an interrupt. The client fulfills the tool call in a follow-up run.
+	//
+	// This simulates the ADK event sequence that the FakeAgent cannot produce
+	// on its own (the FakeAgent bypasses the LLM/tool flow), so we emit the
+	// events directly as ADK would.
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-client-1",
+					Name: "client_search",
+					Args: map[string]any{"query": "golang adk"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+	// LongRunningToolIDs is set by ADK after the handler returns nil with
+	// IsLongRunning=true — this is the NextRun pause signal.
+	interruptEv.LongRunningToolIDs = []string{"fc-client-1"}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(interruptEv, nil) {
+				return
+			}
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+		ClientTools: &aguiadk.ClientToolConfig{
+			Mode: aguiadk.ClientToolModeNextRun,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := defaultInput()
+	input.Tools = []types.Tool{
+		{Name: "client_search", Description: "Search the web"},
+	}
+	collected := collectEvents(t, bridgeAgent, input)
+	typeSeq := eventTypes(collected)
+
+	// TOOL_CALL_* emitted by the eventTranslator, then ACTIVITY_SNAPSHOT
+	// (approval_request from the interrupt path), then RUN_FINISHED with
+	// interrupt outcome. No tool_use snapshot — the tool is paused, not
+	// executed.
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		events.EventTypeActivitySnapshot, // approval_request
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+
+	// Verify RUN_FINISHED has interrupt outcome for the client tool call.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunFinished {
+			finEvt, ok := ev.(*events.RunFinishedEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+			}
+			if finEvt.Outcome == nil {
+				t.Fatal("expected non-nil Outcome")
+			}
+			if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
+				t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
+			}
+			if len(finEvt.Outcome.Interrupts) != 1 {
+				t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
+			}
+			if finEvt.Outcome.Interrupts[0].ID != "fc-client-1" {
+				t.Errorf("Interrupts[0].ID = %q, want %q", finEvt.Outcome.Interrupts[0].ID, "fc-client-1")
+			}
+		}
+	}
+
+	// Verify the paused run was saved to the runstore for resume.
+	saved, ok := store.Load(aguiadk.RunKey(input.ThreadID, input.RunID))
+	if !ok {
+		t.Fatal("expected paused run to be saved in runstore")
+	}
+	if len(saved.Pending) != 1 {
+		t.Fatalf("expected 1 pending tool call, got %d", len(saved.Pending))
+	}
+	if saved.Pending[0].ID != "fc-client-1" {
+		t.Errorf("Pending[0].ID = %q, want %q", saved.Pending[0].ID, "fc-client-1")
+	}
+	if saved.Pending[0].Name != "client_search" {
+		t.Errorf("Pending[0].Name = %q, want %q", saved.Pending[0].Name, "client_search")
+	}
+}
+
 func TestBridge_ResumeEntries(t *testing.T) {
-	ev := session.NewEvent(context.Background(), "inv-1")
-	ev.Author = "test-agent"
-	ev.LLMResponse = model.LLMResponse{
+	// Phase 1: trigger a long-running tool interrupt to populate the runstore.
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "approve",
+						Args: map[string]any{"action": "approve"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+	interruptEv.LongRunningToolIDs = []string{"fc-1"}
+
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{
 		Content: &genai.Content{
 			Role:  "model",
 			Parts: []*genai.Part{{Text: "resumed"}},
@@ -893,15 +1065,1478 @@ func TestBridge_ResumeEntries(t *testing.T) {
 	}
 
 	var sawFunctionResponse bool
+	var callCount int32
 	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
-			// Check session events for FunctionResponse.
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				// Phase 1: emit the interrupt event.
+				if !yield(interruptEv, nil) {
+					return
+				}
+				return
+			}
+			// Phase 2: check session events for FunctionResponse (set by the resume path).
 			for e := range ctx.Session().Events().All() {
 				if e.Content != nil {
 					for _, p := range e.Content.Parts {
 						if p.FunctionResponse != nil {
 							sawFunctionResponse = true
 						}
+					}
+				}
+			}
+			if !yield(resumeEv, nil) {
+				return
+			}
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Phase 1: run with the interrupt event to populate the runstore.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Phase 2: resume with an approved entry.
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{
+			InterruptID: "fc-1",
+			Status:      types.ResumeStatusResolved,
+			Payload:     map[string]any{"approved": true},
+		},
+	}
+
+	collected := collectEvents(t, bridgeAgent, input)
+
+	// The resume path re-emits the tool proposal, a tool_use ACTIVITY_SNAPSHOT
+	// (approved call → tool executes), and a TOOL_CALL_RESULT.
+	hasToolCallResult := false
+	hasToolUseSnapshot := false
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			hasToolCallResult = true
+		}
+		if ev.Type() == events.EventTypeActivitySnapshot {
+			if ase, ok := ev.(*events.ActivitySnapshotEvent); ok && ase.ActivityType == "tool_use" {
+				hasToolUseSnapshot = true
+			}
+		}
+	}
+	if !hasToolCallResult {
+		t.Errorf("expected TOOL_CALL_RESULT event from resume settlement, got: %v", eventTypes(collected))
+	}
+	if !hasToolUseSnapshot {
+		t.Errorf("expected tool_use ACTIVITY_SNAPSHOT for approved resume, got: %v", eventTypes(collected))
+	}
+
+	if !sawFunctionResponse {
+		t.Error("expected to see a FunctionResponse in session events from resume")
+	}
+}
+
+func TestBridge_ResumeDenied(t *testing.T) {
+	// Trigger an interrupt, then resume with approved:false — the
+	// TOOL_CALL_RESULT should carry a denial marker.
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "approve",
+						Args: map[string]any{"action": "approve"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+	interruptEv.LongRunningToolIDs = []string{"fc-1"}
+
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "denied"}},
+		},
+		Partial: false,
+	}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				if !yield(interruptEv, nil) {
+					return
+				}
+				return
+			}
+			if !yield(resumeEv, nil) {
+				return
+			}
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Phase 1: populate runstore via interrupt.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Phase 2: resume with denied.
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{
+			InterruptID: "fc-1",
+			Status:      types.ResumeStatusResolved,
+			Payload:     map[string]any{"approved": false},
+		},
+	}
+
+	collected := collectEvents(t, bridgeAgent, input)
+
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			tcre, ok := ev.(*events.ToolCallResultEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+			}
+			if !strings.Contains(tcre.Content, `"denied":true`) {
+				t.Errorf("denied TOOL_CALL_RESULT content = %q, want it to contain %q", tcre.Content, `"denied":true`)
+			}
+			return
+		}
+		// Denied calls must NOT emit a tool_use activity snapshot — the
+		// tool does not execute.
+		if ev.Type() == events.EventTypeActivitySnapshot {
+			if ase, ok := ev.(*events.ActivitySnapshotEvent); ok && ase.ActivityType == "tool_use" {
+				t.Error("denied resume must not emit a tool_use ACTIVITY_SNAPSHOT")
+			}
+		}
+	}
+	t.Fatalf("expected a TOOL_CALL_RESULT event with denial, got: %v", eventTypes(collected))
+}
+
+func TestBridge_ResumeNoPausedRun(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent")
+
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{
+			InterruptID: "fc-1",
+			Status:      types.ResumeStatusResolved,
+			Payload:     map[string]any{"approved": true},
+		},
+	}
+
+	collected := collectEvents(t, bridgeAgent, input)
+
+	hasRunError := false
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			hasRunError = true
+			errEvt, ok := ev.(*events.RunErrorEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+			}
+			if !strings.Contains(errEvt.Message, "no paused run") {
+				t.Errorf("RunError message = %q, want it to contain %q", errEvt.Message, "no paused run")
+			}
+		}
+	}
+	if !hasRunError {
+		t.Fatal("expected RUN_ERROR for resume with no paused run")
+	}
+}
+
+func TestBridge_StreamingToolCall(t *testing.T) {
+	// Partial event with name+ID but no args, then final event with args.
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{ID: "fc-1", Name: "get_weather"},
+			}},
+		},
+		Partial: true,
+	}
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{ID: "fc-1", Name: "get_weather", Args: map[string]any{"city": "SF"}},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// START on partial (no args yet), ARGS on final, END on final.
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs, // final event carries accumulated args
+		events.EventTypeToolCallEnd,
+		// No tool_use activity snapshot — no FunctionResponse in this test.
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_StreamingToolCallNeverFinalized(t *testing.T) {
+	// A partial tool call with no final event — closeStreamedToolCalls
+	// should still emit TOOL_CALL_END on run end.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{ID: "fc-1", Name: "get_weather"},
+			}},
+		},
+		Partial: true,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// START on partial (nil args → no ARGS), END from closeStreamedToolCalls.
+	// No tool_use activity snapshot — the tool never executed (no final event).
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallEnd, // synthesized by closeStreamedToolCalls
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
+	// Simulates real ADK streaming: Partial events carry PartialArgs (deltas),
+	// not accumulated Args. The final non-Partial event carries the accumulated
+	// Args. Verifies TOOL_CALL_ARGS is emitted per PartialArg.StringValue delta
+	// (matching the example server's loop.go:388-399), not the accumulated args.
+	strPtr := func(b bool) *bool { return &b }
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					// PartialArgs carries the deltas; Args is nil on Partials.
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.city", StringValue: `"San"`},
+					},
+					WillContinue: strPtr(true),
+				},
+			}},
+		},
+		Partial: true,
+	}
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.city", StringValue: ` Francisco"`},
+					},
+					WillContinue: strPtr(false),
+				},
+			}},
+		},
+		Partial: true,
+	}
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				// Final event: accumulated Args, no PartialArgs.
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					Args: map[string]any{"city": "San Francisco"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// START on first partial, ARGS per PartialArg delta, ARGS for final
+	// accumulated args, END on final. No tool_use snapshot (no FunctionResponse).
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs, // delta: `"San"`
+		events.EventTypeToolCallArgs, // delta: ` Francisco"`
+		events.EventTypeToolCallArgs, // final accumulated args
+		events.EventTypeToolCallEnd,
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+
+	// Verify the ARGS deltas are the PartialArg.StringValue fragments, not the
+	// accumulated args. The accumulated args would be `{"city":"San Francisco"}`
+	// which is different from the deltas `"San"` and ` Francisco"`.
+	var argsDeltas []string
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallArgs {
+			if tcae, ok := ev.(*events.ToolCallArgsEvent); ok {
+				argsDeltas = append(argsDeltas, tcae.Delta)
+			}
+		}
+	}
+	if len(argsDeltas) != 3 {
+		t.Fatalf("expected 3 TOOL_CALL_ARGS events, got %d: %v", len(argsDeltas), argsDeltas)
+	}
+	if argsDeltas[0] != `"San"` {
+		t.Errorf("first ARGS delta = %q, want %q", argsDeltas[0], `"San"`)
+	}
+	if argsDeltas[1] != ` Francisco"` {
+		t.Errorf("second ARGS delta = %q, want %q", argsDeltas[1], ` Francisco"`)
+	}
+	// The third ARGS is the accumulated args from the final event.
+	if !strings.Contains(argsDeltas[2], "San Francisco") {
+		t.Errorf("third ARGS (accumulated) = %q, want it to contain %q", argsDeltas[2], "San Francisco")
+	}
+}
+
+func TestBridge_MalformedToolCall_EmptyName(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{ID: "fc-1", Name: "", Args: map[string]any{"x": 1}},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	// Should emit TOOL_CALL_RESULT with error, not TOOL_CALL_START.
+	hasErrorResult := false
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			tcre, ok := ev.(*events.ToolCallResultEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+			}
+			if strings.Contains(tcre.Content, "empty function name") {
+				hasErrorResult = true
+			}
+		}
+		if ev.Type() == events.EventTypeToolCallStart {
+			t.Error("should not emit TOOL_CALL_START for empty-name call")
+		}
+	}
+	if !hasErrorResult {
+		t.Error("expected TOOL_CALL_RESULT with empty-name error")
+	}
+}
+
+func TestBridge_MalformedToolCall_EmptyID(t *testing.T) {
+	// Empty ID should get a synthetic ID — the call should still emit
+	// START/ARGS/END, not be dropped.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{Name: "get_weather", Args: map[string]any{"city": "SF"}},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		// No tool_use activity snapshot — no FunctionResponse in this test.
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+
+	// Verify the synthetic ID is non-empty.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallStart {
+			tcse, ok := ev.(*events.ToolCallStartEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallStartEvent, got %T", ev)
+			}
+			if tcse.ToolCallID == "" {
+				t.Error("expected non-empty synthetic ToolCallID")
+			}
+		}
+	}
+}
+
+func TestBridge_SuppressedToolMode(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "update_doc",
+					Args: map[string]any{"content": "hello"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+		if name == "update_doc" {
+			return []events.JSONPatchOperation{
+				{Op: "add", Path: "/doc", Value: args["content"]},
+			}
+		}
+		return nil
+	}
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		SuppressToolEvents: true,
+		ToolToStateMapper:  mapper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	hasStateDelta := false
+	hasToolCallStart := false
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeStateDelta:
+			hasStateDelta = true
+			sd, ok := ev.(*events.StateDeltaEvent)
+			if !ok {
+				t.Fatalf("expected *events.StateDeltaEvent, got %T", ev)
+			}
+			if len(sd.Delta) != 1 || sd.Delta[0].Path != "/doc" {
+				t.Errorf("StateDelta = %+v, want one op with path /doc", sd.Delta)
+			}
+		case events.EventTypeToolCallStart, events.EventTypeToolCallArgs, events.EventTypeToolCallEnd:
+			hasToolCallStart = true
+		}
+	}
+	if !hasStateDelta {
+		t.Error("expected STATE_DELTA event from suppressed tool mode")
+	}
+	if hasToolCallStart {
+		t.Error("expected no TOOL_CALL_* events in suppressed mode")
+	}
+}
+
+func TestBridge_SuppressedToolModeMapperReturnsNil(t *testing.T) {
+	// When the mapper returns nil for a tool, normal tool call events
+	// should be emitted.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "unmapped_tool",
+					Args: map[string]any{"x": 1},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+		return nil // no mapping for this tool
+	}
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		SuppressToolEvents: true,
+		ToolToStateMapper:  mapper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// Should fall back to normal tool call events.
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		// No tool_use activity snapshot — no FunctionResponse in this test.
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+// --- test helpers ---
+
+func TestBridge_InterleavedReasoningText(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "Let me think...", Thought: true},
+			},
+		},
+		Partial: false,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "Here is my answer."}},
+		},
+		Partial: false,
+	}
+
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "Wait, reconsidering...", Thought: true},
+			},
+		},
+		Partial: false,
+	}
+
+	ev4 := session.NewEvent(context.Background(), "inv-1")
+	ev4.Author = "test-agent"
+	ev4.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "Final answer."}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+			if !yield(ev4, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		// thought 1
+		events.EventTypeReasoningStart,
+		events.EventTypeReasoningMessageStart,
+		events.EventTypeReasoningMessageContent,
+		events.EventTypeReasoningMessageEnd,
+		events.EventTypeReasoningEnd,
+		// text 1 (reasoning auto-closed before text opens)
+		events.EventTypeTextMessageStart,
+		events.EventTypeTextMessageContent,
+		events.EventTypeTextMessageEnd,
+		// thought 2 (text auto-closed before reasoning opens)
+		events.EventTypeReasoningStart,
+		events.EventTypeReasoningMessageStart,
+		events.EventTypeReasoningMessageContent,
+		events.EventTypeReasoningMessageEnd,
+		events.EventTypeReasoningEnd,
+		// text 2
+		events.EventTypeTextMessageStart,
+		events.EventTypeTextMessageContent,
+		events.EventTypeTextMessageEnd,
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_StepEvents(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "thinking about it"}},
+		},
+		Partial: true,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "thinking about it"},
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "search",
+						Args: map[string]any{"q": "test"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       "fc-1",
+						Name:     "search",
+						Response: map[string]any{"result": "found"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+
+	ev4 := session.NewEvent(context.Background(), "inv-1")
+	ev4.Author = "test-agent"
+	ev4.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "done"}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+			if !yield(ev4, nil) {
+				return
+			}
+		}
+	})
+
+	stepOn := true
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:          a,
+		AppName:        "testapp",
+		UserID:         "user1",
+		EmitStepEvents: &stepOn,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		// ev1: partial text — first non-partial hasn't arrived yet, no step
+		events.EventTypeTextMessageStart,
+		events.EventTypeTextMessageContent,
+		// ev2: non-partial, has FunctionCall → STEP_STARTED("tools") (first non-partial
+		// with FunctionCall goes directly to tools step)
+		events.EventTypeStepStarted, // "tools"
+		events.EventTypeTextMessageContent,
+		events.EventTypeTextMessageEnd,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		// ev3: FunctionResponse → StepFinished("tools") + StepStarted("llm")
+		events.EventTypeStepFinished,     // "tools"
+		events.EventTypeStepStarted,      // "llm"
+		events.EventTypeActivitySnapshot, // tool_use
+		events.EventTypeToolCallResult,
+		// ev4: text, non-partial
+		events.EventTypeTextMessageStart,
+		events.EventTypeTextMessageContent,
+		events.EventTypeTextMessageEnd,
+		events.EventTypeStepFinished, // "llm" (closeOpenStep at run end)
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_MidStreamErrorDuringToolCallStreaming(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "search",
+						PartialArgs: []*genai.PartialArg{
+							{StringValue: `{"q":"te`},
+						},
+					},
+				},
+			},
+		},
+		Partial: true,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			// Then yield an error.
+			yield(nil, fmt.Errorf("stream interrupted"))
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			// Error is expected — but we should still have collected events.
+			_ = err
+			continue
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	typeSeq := eventTypes(collected)
+
+	// Verify TOOL_CALL_END is emitted before RUN_ERROR.
+	hasToolCallStart := false
+	hasToolCallEnd := false
+	runErrorIdx := -1
+	toolCallEndIdx := -1
+	for i, et := range typeSeq {
+		if et == events.EventTypeToolCallStart {
+			hasToolCallStart = true
+		}
+		if et == events.EventTypeToolCallEnd {
+			hasToolCallEnd = true
+			toolCallEndIdx = i
+		}
+		if et == events.EventTypeRunError {
+			runErrorIdx = i
+		}
+	}
+
+	if !hasToolCallStart {
+		t.Error("expected TOOL_CALL_START in event stream")
+	}
+	if !hasToolCallEnd {
+		t.Error("expected TOOL_CALL_END before RUN_ERROR (closeStreamedToolCalls on error path)")
+	}
+	if runErrorIdx == -1 {
+		t.Fatal("expected RUN_ERROR event")
+	}
+	if toolCallEndIdx == -1 || toolCallEndIdx > runErrorIdx {
+		t.Errorf("TOOL_CALL_END (idx %d) must come before RUN_ERROR (idx %d)", toolCallEndIdx, runErrorIdx)
+	}
+}
+
+func TestBridge_CustomEvent(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "hello"}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+		CustomEventEmitter: func(emitter *agui.EventEmitter, toolCallCount int) error {
+			return emitter.Custom("agent_complete", map[string]any{"toolCalls": toolCallCount})
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	hasCustom := false
+	customIdx := -1
+	runFinishedIdx := -1
+	for i, et := range typeSeq {
+		if et == events.EventTypeCustom {
+			hasCustom = true
+			customIdx = i
+		}
+		if et == events.EventTypeRunFinished {
+			runFinishedIdx = i
+		}
+	}
+
+	if !hasCustom {
+		t.Fatal("expected CUSTOM event in stream")
+	}
+	if customIdx > runFinishedIdx {
+		t.Errorf("CUSTOM (idx %d) must come before RUN_FINISHED (idx %d)", customIdx, runFinishedIdx)
+	}
+
+	// Verify the custom event name.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeCustom {
+			customEvt, ok := ev.(*events.CustomEvent)
+			if !ok {
+				t.Fatalf("expected *events.CustomEvent, got %T", ev)
+			}
+			if customEvt.Name != "agent_complete" {
+				t.Errorf("custom event name = %q, want %q", customEvt.Name, "agent_complete")
+			}
+		}
+	}
+}
+
+func TestBridge_ReasoningEncryptedValue(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "Let me think...", Thought: true, ThoughtSignature: []byte("encrypted-sig")},
+			},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	hasEncrypted := false
+	for _, et := range typeSeq {
+		if et == events.EventTypeReasoningEncryptedValue {
+			hasEncrypted = true
+		}
+	}
+	if !hasEncrypted {
+		t.Errorf("expected REASONING_ENCRYPTED_VALUE event, got: %v", typeSeq)
+	}
+}
+
+func TestBridge_MaxIterationsExceeded(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "first response"}},
+		},
+		Partial: false,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "second response"}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:         a,
+		AppName:       "testapp",
+		UserID:        "user1",
+		MaxIterations: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			_ = err
+			continue
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	typeSeq := eventTypes(collected)
+
+	hasRunError := false
+	for _, et := range typeSeq {
+		if et == events.EventTypeRunError {
+			hasRunError = true
+		}
+	}
+	if !hasRunError {
+		t.Fatalf("expected RUN_ERROR event, got: %v", typeSeq)
+	}
+
+	// Verify the error message contains "did not converge".
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			errEvt, ok := ev.(*events.RunErrorEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+			}
+			if !strings.Contains(errEvt.Message, "did not converge") {
+				t.Errorf("error message = %q, want it to contain %q", errEvt.Message, "did not converge")
+			}
+		}
+	}
+}
+
+func TestBridge_PerRequestApproval(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "approve",
+						Args: map[string]any{"action": "approve"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+	ev.LongRunningToolIDs = []string{"fc-1"}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:            a,
+		AppName:          "testapp",
+		UserID:           "user1",
+		ApprovalModeFunc: func(r *http.Request) bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Inject an HTTP request into context via WithHTTPRequest.
+	input := defaultInput()
+	ctx := aguiadk.WithHTTPRequest(context.Background(), &http.Request{})
+
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, input) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	typeSeq := eventTypes(collected)
+
+	// With auto-approve, the long-running tool should NOT trigger an interrupt.
+	// The run should complete normally (RUN_FINISHED without interrupt outcome).
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunFinished {
+			finEvt, ok := ev.(*events.RunFinishedEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+			}
+			if finEvt.Outcome != nil && finEvt.Outcome.Type == events.RunFinishedOutcomeTypeInterrupt {
+				t.Errorf("expected no interrupt outcome with auto-approve, got interrupt")
+			}
+		}
+	}
+
+	// Verify we got a normal RUN_FINISHED (not an interrupt).
+	hasRunFinished := false
+	for _, et := range typeSeq {
+		if et == events.EventTypeRunFinished {
+			hasRunFinished = true
+		}
+	}
+	if !hasRunFinished {
+		t.Fatal("expected RUN_FINISHED event")
+	}
+}
+
+func TestBridge_StatePersistenceAcrossRuns(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "setting state"}},
+		},
+		Partial: false,
+	}
+	ev1.Actions.StateDelta = map[string]any{"foo": "bar"}
+
+	ev2 := session.NewEvent(context.Background(), "inv-2")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "reading state"}},
+		},
+		Partial: false,
+	}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				if !yield(ev1, nil) {
+					return
+				}
+			} else {
+				if !yield(ev2, nil) {
+					return
+				}
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Run 1: emits StateDelta setting foo=bar.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Run 2: same thread, should see foo=bar in STATE_SNAPSHOT.
+	input2 := defaultInput()
+	input2.RunID = "run-2"
+	collected2 := collectEvents(t, bridgeAgent, input2)
+
+	var snapshotMap map[string]any
+	for _, ev := range collected2 {
+		if ev.Type() == events.EventTypeStateSnapshot {
+			snapEvt, ok := ev.(*events.StateSnapshotEvent)
+			if !ok {
+				t.Fatalf("expected *events.StateSnapshotEvent, got %T", ev)
+			}
+			snapshotMap = snapEvt.Snapshot.(map[string]any)
+		}
+	}
+	if snapshotMap == nil {
+		t.Fatal("expected STATE_SNAPSHOT event in run 2")
+	}
+	fooVal, ok := snapshotMap["foo"]
+	if !ok {
+		t.Fatal("expected 'foo' key in state snapshot from run 2")
+	}
+	if fooVal != "bar" {
+		t.Errorf("state['foo'] = %v, want 'bar'", fooVal)
+	}
+}
+
+func TestBridge_ConcurrentResume(t *testing.T) {
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "approve",
+						Args: map[string]any{"action": "approve"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+	interruptEv.LongRunningToolIDs = []string{"fc-1"}
+
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "resumed"}},
+		},
+		Partial: false,
+	}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				if !yield(interruptEv, nil) {
+					return
+				}
+				return
+			}
+			if !yield(resumeEv, nil) {
+				return
+			}
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Phase 1: trigger interrupt.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Phase 2: resume twice concurrently.
+	resumeInput := defaultInput()
+	resumeInput.Resume = []types.ResumeEntry{
+		{InterruptID: "fc-1", Status: types.ResumeStatusResolved, Payload: map[string]any{"approved": true}},
+	}
+
+	var wg sync.WaitGroup
+	var errors []string
+	var mu sync.Mutex
+	collectWithError := func() {
+		defer wg.Done()
+		ctx := context.Background()
+		for ev, err := range bridgeAgent.Run(ctx, resumeInput) {
+			if err != nil {
+				mu.Lock()
+				errors = append(errors, err.Error())
+				mu.Unlock()
+				return
+			}
+			if ev != nil && ev.Type() == events.EventTypeRunError {
+				if re, ok := ev.(*events.RunErrorEvent); ok {
+					mu.Lock()
+					errors = append(errors, re.Message)
+					mu.Unlock()
+				} else {
+					mu.Lock()
+					errors = append(errors, "run_error")
+					mu.Unlock()
+				}
+			}
+		}
+	}
+
+	wg.Add(2)
+	go collectWithError()
+	go collectWithError()
+	wg.Wait()
+
+	// At least one should have gotten a "claimed by a concurrent resume" error.
+	hasConcurrentError := false
+	for _, e := range errors {
+		if strings.Contains(e, "concurrent resume") || strings.Contains(e, "no paused run found") {
+			hasConcurrentError = true
+		}
+	}
+	if !hasConcurrentError {
+		t.Errorf("expected at least one concurrent resume error, got: %v", errors)
+	}
+}
+
+func TestBridge_MultimodalAudio(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "received audio"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	var partCount int
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					partCount++
+					if p.InlineData != nil {
+						hasInlineData = true
 					}
 				}
 			}
@@ -920,23 +2555,999 @@ func TestBridge_ResumeEntries(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	input := defaultInput()
-	input.Resume = []types.ResumeEntry{
-		{
-			InterruptID: "fc-1",
-			Status:      types.ResumeStatusResolved,
-			Payload:     "approved",
+	// Small valid WAV base64 (minimal header + silence).
+	wavBase64 := "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "transcribe this"},
+					{
+						Type: types.InputContentTypeAudio,
+						Source: &types.InputContentSource{
+							Type:     types.InputContentSourceTypeData,
+							Value:    wavBase64,
+							MimeType: "audio/wav",
+						},
+					},
+				},
+			},
 		},
 	}
 
 	collectEvents(t, bridgeAgent, input)
 
-	if !sawFunctionResponse {
-		t.Error("expected to see a FunctionResponse in session events from resume")
+	if partCount != 2 {
+		t.Errorf("partCount = %d, want 2", partCount)
+	}
+	if !hasInlineData {
+		t.Error("expected an inline data part for audio content")
 	}
 }
 
-// --- test helpers ---
+func TestBridge_MultimodalBinary(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "received binary"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	var partCount int
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					partCount++
+					if p.InlineData != nil {
+						hasInlineData = true
+					}
+				}
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Small base64 binary payload.
+	binBase64 := "SGVsbG8gV29ybGQ="
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "process this"},
+					{
+						Type:     types.InputContentTypeBinary,
+						Data:     binBase64,
+						MimeType: "application/octet-stream",
+					},
+				},
+			},
+		},
+	}
+
+	collectEvents(t, bridgeAgent, input)
+
+	if partCount != 2 {
+		t.Errorf("partCount = %d, want 2", partCount)
+	}
+	if !hasInlineData {
+		t.Error("expected an inline data part for binary content")
+	}
+}
+
+// --- existing test helpers below ---
+
+func TestBridge_MessagesSnapshotOnInterrupt(t *testing.T) {
+	// Verifies that MESSAGES_SNAPSHOT is emitted before RUN_FINISHED on the
+	// interrupt path when EmitMessagesSnapshot is enabled.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "I need approval"}},
+		},
+		Partial: false,
+	}
+	fcEv := session.NewEvent(context.Background(), "inv-1")
+	fcEv.Author = "test-agent"
+	fcEv.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "approve",
+					Args: map[string]any{"action": "delete"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+	fcEv.LongRunningToolIDs = []string{"fc-1"}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+			if !yield(fcEv, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:                a,
+		AppName:              "testapp",
+		UserID:               "user1",
+		EmitMessagesSnapshot: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	// Find MESSAGES_SNAPSHOT and verify it appears before RUN_FINISHED.
+	var msgSnapIdx, runFinIdx int = -1, -1
+	for i, ev := range collected {
+		if ev.Type() == events.EventTypeMessagesSnapshot {
+			msgSnapIdx = i
+		}
+		if ev.Type() == events.EventTypeRunFinished {
+			runFinIdx = i
+		}
+	}
+	if msgSnapIdx == -1 {
+		t.Fatal("expected MESSAGES_SNAPSHOT event on interrupt path")
+	}
+	if runFinIdx == -1 {
+		t.Fatal("expected RUN_FINISHED event")
+	}
+	if msgSnapIdx >= runFinIdx {
+		t.Errorf("MESSAGES_SNAPSHOT (index %d) should come before RUN_FINISHED (index %d)", msgSnapIdx, runFinIdx)
+	}
+
+	// Verify RUN_FINISHED has interrupt outcome.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunFinished {
+			finEvt, ok := ev.(*events.RunFinishedEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+			}
+			if finEvt.Outcome == nil || finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
+				t.Error("expected interrupt outcome on RUN_FINISHED")
+			}
+		}
+	}
+}
+
+func TestBridge_StateStatusTransitions(t *testing.T) {
+	// Verifies that STATE_DELTA events with "/status" are emitted at lifecycle
+	// transitions when EmitStateStatus is enabled.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "Hello"}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:           a,
+		AppName:         "testapp",
+		UserID:          "user1",
+		EmitStateStatus: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var statusDeltas []string
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeStateDelta {
+			if sd, ok := ev.(*events.StateDeltaEvent); ok {
+				for _, op := range sd.Delta {
+					if op.Path == "/status" {
+						if s, ok := op.Value.(string); ok {
+							statusDeltas = append(statusDeltas, s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	expected := []string{"running", "done"}
+	if len(statusDeltas) != len(expected) {
+		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+	}
+	for i, want := range expected {
+		if statusDeltas[i] != want {
+			t.Errorf("statusDelta[%d] = %q, want %q", i, statusDeltas[i], want)
+		}
+	}
+}
+
+func TestBridge_StateStatusOnInterrupt(t *testing.T) {
+	// Verifies status transitions: running → awaiting_approval on interrupt.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "approve",
+					Args: map[string]any{"action": "delete"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+	ev.LongRunningToolIDs = []string{"fc-1"}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:           a,
+		AppName:         "testapp",
+		UserID:          "user1",
+		EmitStateStatus: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var statusDeltas []string
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeStateDelta {
+			if sd, ok := ev.(*events.StateDeltaEvent); ok {
+				for _, op := range sd.Delta {
+					if op.Path == "/status" {
+						if s, ok := op.Value.(string); ok {
+							statusDeltas = append(statusDeltas, s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	expected := []string{"running", "awaiting_approval"}
+	if len(statusDeltas) != len(expected) {
+		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+	}
+	for i, want := range expected {
+		if statusDeltas[i] != want {
+			t.Errorf("statusDelta[%d] = %q, want %q", i, statusDeltas[i], want)
+		}
+	}
+}
+
+func TestBridge_StateStatusOnError(t *testing.T) {
+	// Verifies status transitions: running → error on agent error.
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			yield(nil, fmt.Errorf("agent crashed"))
+			return
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:           a,
+		AppName:         "testapp",
+		UserID:          "user1",
+		EmitStateStatus: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var statusDeltas []string
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeStateDelta {
+			if sd, ok := ev.(*events.StateDeltaEvent); ok {
+				for _, op := range sd.Delta {
+					if op.Path == "/status" {
+						if s, ok := op.Value.(string); ok {
+							statusDeltas = append(statusDeltas, s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	expected := []string{"running", "error"}
+	if len(statusDeltas) != len(expected) {
+		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+	}
+	for i, want := range expected {
+		if statusDeltas[i] != want {
+			t.Errorf("statusDelta[%d] = %q, want %q", i, statusDeltas[i], want)
+		}
+	}
+}
+
+func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
+	// Verifies that ACTIVITY_SNAPSHOT and ACTIVITY_DELTA events are emitted
+	// during streaming tool calls when EmitActivityDeltas is enabled.
+	strPtr := func(b bool) *bool { return &b }
+
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "search",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.q", StringValue: `"hel`},
+					},
+					WillContinue: strPtr(true),
+				},
+			}},
+		},
+		Partial: true,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "search",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.q", StringValue: `lo"`},
+					},
+					WillContinue: strPtr(false),
+				},
+			}},
+		},
+		Partial: true,
+	}
+
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "search",
+					Args: map[string]any{"q": "hello"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		EmitActivityDeltas: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var activitySnapCount, activityDeltaCount int
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeActivitySnapshot:
+			activitySnapCount++
+		case events.EventTypeActivityDelta:
+			activityDeltaCount++
+		}
+	}
+
+	if activitySnapCount != 1 {
+		t.Errorf("expected 1 ACTIVITY_SNAPSHOT, got %d", activitySnapCount)
+	}
+	if activityDeltaCount != 2 {
+		t.Errorf("expected 2 ACTIVITY_DELTA events (one per PartialArg), got %d", activityDeltaCount)
+	}
+}
+
+func TestBridge_NoActivityDeltaWhenDisabled(t *testing.T) {
+	// Verifies that ACTIVITY_DELTA events are NOT emitted when EmitActivityDeltas
+	// is disabled (the default).
+	strPtr := func(b bool) *bool { return &b }
+
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "search",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.q", StringValue: `"hel`},
+					},
+					WillContinue: strPtr(true),
+				},
+			}},
+		},
+		Partial: true,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "search",
+					Args: map[string]any{"q": "hello"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeActivityDelta {
+			t.Error("did not expect ACTIVITY_DELTA when EmitActivityDeltas is disabled")
+		}
+		if ev.Type() == events.EventTypeActivitySnapshot {
+			// ACTIVITY_SNAPSHOT is only emitted at FunctionResponse time, not at
+			// TOOL_CALL_START time, when EmitActivityDeltas is disabled.
+			t.Error("did not expect ACTIVITY_SNAPSHOT during streaming when EmitActivityDeltas is disabled")
+		}
+	}
+}
+
+func TestBridge_EmptyModelStream(t *testing.T) {
+	// Verifies that a runner that yields zero events still produces
+	// RUN_STARTED and RUN_FINISHED.
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			return
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_HandBackMode(t *testing.T) {
+	// Verifies that ClientToolModeHandBack produces a plain RUN_FINISHED
+	// (no interrupt outcome) with MESSAGES_SNAPSHOT when a long-running tool
+	// is invoked.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "client_tool",
+					Args: map[string]any{"query": "test"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+	ev.LongRunningToolIDs = []string{"fc-1"}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:                a,
+		AppName:              "testapp",
+		UserID:               "user1",
+		EmitMessagesSnapshot: true,
+		ClientTools:          &aguiadk.ClientToolConfig{Mode: aguiadk.ClientToolModeHandBack},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	// Verify RUN_FINISHED has NO interrupt outcome.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunFinished {
+			finEvt, ok := ev.(*events.RunFinishedEvent)
+			if !ok {
+				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+			}
+			if finEvt.Outcome != nil {
+				t.Errorf("expected nil Outcome on hand-back, got type %q", finEvt.Outcome.Type)
+			}
+		}
+	}
+
+	// Verify MESSAGES_SNAPSHOT was emitted.
+	hasMsgSnapshot := false
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeMessagesSnapshot {
+			hasMsgSnapshot = true
+		}
+	}
+	if !hasMsgSnapshot {
+		t.Error("expected MESSAGES_SNAPSHOT on hand-back")
+	}
+}
+
+func TestBridge_MultimodalVideo(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "received video"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	var partCount int
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					partCount++
+					if p.InlineData != nil {
+						hasInlineData = true
+					}
+				}
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Small valid MP4 base64 (minimal header).
+	mp4Base64 := "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE="
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "analyze this video"},
+					{
+						Type: types.InputContentTypeVideo,
+						Source: &types.InputContentSource{
+							Type:     types.InputContentSourceTypeData,
+							Value:    mp4Base64,
+							MimeType: "video/mp4",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	collectEvents(t, bridgeAgent, input)
+
+	if partCount != 2 {
+		t.Errorf("partCount = %d, want 2", partCount)
+	}
+	if !hasInlineData {
+		t.Error("expected an inline data part for video content")
+	}
+}
+
+func TestBridge_MultimodalDocument(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "received document"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	var partCount int
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					partCount++
+					if p.InlineData != nil {
+						hasInlineData = true
+					}
+				}
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Small valid PDF base64 (minimal header).
+	pdfBase64 := "JVBERi0xLjQKJdPr6eEKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PmVuZG9iagoyIDAgb2JqCjw8L1R5cGUvUGFnZXMvS2lkc1szIDAgUl0vQ291bnQgMT4+ZW5kb2JqCjMgMCBvYmoKPDwvVHlwZS9QYWdlL01lZGlhQm94WzAgMCAzIDNdL1BhcmVudCAyIDAgUj4+ZW5kb2JqCnN0cmVhbQp4cmVmCjAgNApzdGFydHhyZWYKODIKJSVFT0YK"
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "read this document"},
+					{
+						Type: types.InputContentTypeDocument,
+						Source: &types.InputContentSource{
+							Type:     types.InputContentSourceTypeData,
+							Value:    pdfBase64,
+							MimeType: "application/pdf",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	collectEvents(t, bridgeAgent, input)
+
+	if partCount != 2 {
+		t.Errorf("partCount = %d, want 2", partCount)
+	}
+	if !hasInlineData {
+		t.Error("expected an inline data part for document content")
+	}
+}
+
+func TestBridge_MultimodalProviderGating(t *testing.T) {
+	// Verifies that when Provider is set to a non-openai value, audio/video/
+	// document content types fall back to text-only.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "ok"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	var partCount int
+	var textParts int
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					partCount++
+					if p.InlineData != nil {
+						hasInlineData = true
+					}
+					if p.Text != "" {
+						textParts++
+					}
+				}
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		Provider: "anthropic",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wavBase64 := "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "transcribe this"},
+					{
+						Type: types.InputContentTypeAudio,
+						Source: &types.InputContentSource{
+							Type:     types.InputContentSourceTypeData,
+							Value:    wavBase64,
+							MimeType: "audio/wav",
+						},
+						Text: "[audio attachment]",
+					},
+				},
+			},
+		},
+	}
+
+	collectEvents(t, bridgeAgent, input)
+
+	if hasInlineData {
+		t.Error("expected no inline data part for audio with non-openai provider")
+	}
+	if textParts != 2 {
+		t.Errorf("expected 2 text parts (user text + fallback text), got %d", textParts)
+	}
+}
+
+func TestBridge_MultimodalProviderOpenAI(t *testing.T) {
+	// Verifies that when Provider is "openai", audio content is forwarded
+	// as inline data (no gating).
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "ok"}},
+		},
+		Partial: false,
+	}
+
+	var hasInlineData bool
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			content := ctx.UserContent()
+			if content != nil {
+				for _, p := range content.Parts {
+					if p.InlineData != nil {
+						hasInlineData = true
+					}
+				}
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		Provider: "openai",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wavBase64 := "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
+
+	input := types.RunAgentInput{
+		ThreadID: "thread-1",
+		RunID:    "run-1",
+		Messages: []types.Message{
+			{
+				ID:   "msg-1",
+				Role: types.RoleUser,
+				Content: []types.InputContent{
+					{Type: types.InputContentTypeText, Text: "transcribe this"},
+					{
+						Type: types.InputContentTypeAudio,
+						Source: &types.InputContentSource{
+							Type:     types.InputContentSourceTypeData,
+							Value:    wavBase64,
+							MimeType: "audio/wav",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	collectEvents(t, bridgeAgent, input)
+
+	if !hasInlineData {
+		t.Error("expected inline data part for audio with openai provider")
+	}
+}
+
+func TestBridge_HandBackPreset(t *testing.T) {
+	cfg := aguiadk.HandBackPreset(aguiadk.Config{})
+	if cfg.ClientTools == nil || cfg.ClientTools.Mode != aguiadk.ClientToolModeHandBack {
+		t.Error("expected ClientToolModeHandBack")
+	}
+	if !cfg.EmitMessagesSnapshot {
+		t.Error("expected EmitMessagesSnapshot=true")
+	}
+	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
+		t.Error("expected EmitStateSnapshot=true")
+	}
+}
+
+func TestBridge_StopReleasesLazyRunStore(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent")
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Stop should be safe to call even if no RunStore was created.
+	aguiadk.Stop(bridgeAgent)
+
+	// Stop on a non-bridge agent should be a no-op (no panic).
+	aguiadk.Stop(nil)
+}
+
+func TestBridge_StopDoesNotReleaseProvidedRunStore(t *testing.T) {
+	store := aguiadk.NewRunStore()
+	defer store.Stop()
+	a := testutil.MustNewFakeAgent("test-agent")
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Stop should NOT stop a caller-provided RunStore — caller owns it.
+	aguiadk.Stop(bridgeAgent)
+
+	// Verify the store is still usable (not stopped).
+	key := aguiadk.RunKey("t", "r")
+	store.Save(key, &aguiadk.PausedRun{ThreadID: "t", RunID: "r"})
+	if _, ok := store.Load(key); !ok {
+		t.Error("expected caller-provided RunStore to still be usable after Stop")
+	}
+}
 
 func eventTypes(inpEvents []events.Event) []events.EventType {
 	var evtTypes []events.EventType

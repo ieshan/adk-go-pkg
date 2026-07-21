@@ -1,11 +1,20 @@
 package agui
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 )
+
+// ErrTransport indicates a transport-level error (e.g. the client disconnected
+// and the event channel is closed). Callers can use errors.Is to distinguish
+// transport errors from encoding errors: a transport error means the client is
+// gone and the run should be cancelled; an encoding error means the event
+// content is malformed and the event should be dropped while keeping the stream
+// alive for subsequent events.
+var ErrTransport = errors.New("agui: transport error")
 
 // EventEmitter provides typed methods for emitting AG-UI events.
 type EventEmitter struct {
@@ -30,7 +39,7 @@ func (e *EventEmitter) GenerateToolCallID() string {
 func (e *EventEmitter) emit(ev events.Event) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("agui: emit failed (channel closed): %v", r)
+			err = fmt.Errorf("%w: %v", ErrTransport, r)
 		}
 	}()
 	e.out <- ev
@@ -108,8 +117,33 @@ func (e *EventEmitter) StateDelta(delta []events.JSONPatchOperation) error {
 }
 
 // MessagesSnapshot emits a MESSAGES_SNAPSHOT event.
+// EncryptedValue and EncryptedContent fields are scrubbed from messages
+// before emission to prevent leaking ciphertext to the client.
 func (e *EventEmitter) MessagesSnapshot(messages []types.Message) error {
-	return e.emit(events.NewMessagesSnapshotEvent(messages))
+	return e.emit(events.NewMessagesSnapshotEvent(scrubEncryptedValues(messages)))
+}
+
+// scrubEncryptedValues zeroes EncryptedValue and EncryptedContent fields
+// in messages. If no scrubbing is needed, it returns the original slice
+// without allocation.
+func scrubEncryptedValues(msgs []types.Message) []types.Message {
+	needsScrub := false
+	for i := range msgs {
+		if msgs[i].EncryptedValue != "" || msgs[i].EncryptedContent != "" {
+			needsScrub = true
+			break
+		}
+	}
+	if !needsScrub {
+		return msgs
+	}
+	out := make([]types.Message, len(msgs))
+	copy(out, msgs)
+	for i := range out {
+		out[i].EncryptedValue = ""
+		out[i].EncryptedContent = ""
+	}
+	return out
 }
 
 // StepStarted emits a STEP_STARTED event.

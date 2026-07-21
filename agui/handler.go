@@ -51,12 +51,14 @@ func Handler(cfg Config) (http.Handler, error) {
 			return
 		}
 
-		ctx := r.Context()
-		session := newSSESession(w, flusher, sseWriter)
+		runCtx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		session := newSSESession(w, flusher, sseWriter, cancel)
 
 		// Start keepalive goroutine if configured.
 		if cfg.KeepaliveInterval > 0 {
-			keepaliveCtx, cancelKeepalive := context.WithCancel(ctx)
+			keepaliveCtx, cancelKeepalive := context.WithCancel(runCtx)
 			defer cancelKeepalive()
 
 			go func() {
@@ -73,16 +75,16 @@ func Handler(cfg Config) (http.Handler, error) {
 			}()
 		}
 
-		for ev, err := range agent.Run(ctx, input) {
+		for ev, err := range agent.Run(runCtx, input) {
 			if err != nil {
 				errEv := events.NewRunErrorEvent(err.Error(), events.WithRunID(input.RunID))
-				_ = session.WriteEvent(ctx, errEv)
+				_ = session.WriteEvent(runCtx, errEv)
 				if cfg.OnError != nil {
 					cfg.OnError(err)
 				}
 				return
 			}
-			if writeErr := session.WriteEvent(ctx, ev); writeErr != nil {
+			if writeErr := session.WriteEvent(runCtx, ev); writeErr != nil {
 				if cfg.OnError != nil {
 					cfg.OnError(writeErr)
 				}

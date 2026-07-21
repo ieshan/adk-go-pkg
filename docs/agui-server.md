@@ -227,7 +227,7 @@ always `nil` for channel sends, but the signature is future-proof).
 |--------|-------------|
 | `StateSnapshot(snapshot any) error` | Emits `STATE_SNAPSHOT` |
 | `StateDelta(delta []events.JSONPatchOperation) error` | Emits `STATE_DELTA` with JSON Patch ops |
-| `MessagesSnapshot(messages []types.Message) error` | Emits `MESSAGES_SNAPSHOT` |
+| `MessagesSnapshot(messages []types.Message) error` | Emits `MESSAGES_SNAPSHOT`; `EncryptedValue` and `EncryptedContent` fields are scrubbed (zeroed) before emission to prevent leaking ciphertext to the client. The scrub is allocation-free when no message carries encrypted fields. |
 
 ### Steps and Activity
 
@@ -266,7 +266,13 @@ func NewStateManager(initial any) (*StateManager, error)
 ```
 
 `StateManager` tracks shared application state using RFC 6902 JSON Patch
-operations. It is safe for concurrent use.
+operations (backed by [`github.com/evanphx/json-patch/v5`](https://github.com/evanphx/json-patch)).
+It is safe for concurrent use.
+
+`StateManager` also serves as the project's "DocState" — it provides the same
+`Apply`/`Snapshot` semantics as the AG-UI example server's `docstate.go`, plus
+`Diff` and `Set`. There is no separate `DocState` type; creating one would be a
+redundant subset of `StateManager`.
 
 ### Methods
 
@@ -341,6 +347,49 @@ func main() {
 	fmt.Println("state:", sm.Snapshot())
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }
+```
+
+## Predictive State
+
+`PredictiveStateTracker` streams ghosted state deltas under the `/_predictive`
+namespace, then commits the final value to the real path and clears the
+prediction. This lets a UI render an optimistic preview while the agent is
+still generating, then settle to the committed value on completion. Clients
+that ignore every delta under `/_predictive` still end in the correct
+committed state.
+
+```go
+type PredictiveStateTracker struct { /* unexported */ }
+
+func NewPredictiveStateTracker(state *StateManager, emitter *EventEmitter) *PredictiveStateTracker
+```
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `PredictiveDelta(patch []events.JSONPatchOperation) error` | Applies `patch` under `/_predictive` (paths prefixed automatically) and emits a `STATE_DELTA` with the prefixed paths. The namespace is created lazily on first use; subsequent calls preserve existing predictive state. |
+| `Commit(path string, value any) error` | Applies `value` to the real state `path` (creating intermediate objects if needed) and emits a `STATE_DELTA` with the real, un-prefixed path. Independent of any prediction — a dropped or garbled prediction cannot corrupt it. |
+| `Clear() error` | Removes the `/_predictive` namespace and emits a `STATE_DELTA` for the removal. Best-effort: if the namespace does not exist, the apply fails silently but the delta is still emitted so clients that tracked it can clean up. |
+| `State() *StateManager` | Returns the underlying `StateManager` for inspection/testing. |
+
+### Example: Predictive → Commit → Clear
+
+```go
+sm, _ := agui.NewStateManager(nil)
+emitter := agui.NewEventEmitter(ch)
+predictive := agui.NewPredictiveStateTracker(sm, emitter)
+
+// Stream a ghosted draft while the agent is still working.
+predictive.PredictiveDelta([]events.JSONPatchOperation{
+    {Op: "add", Path: "/draft", Value: "partial answer..."},
+})
+
+// Commit the final value to the real path.
+predictive.Commit("/answer", "final answer")
+
+// Clear the predictive namespace.
+predictive.Clear()
 ```
 
 ## Client Tool Orchestration

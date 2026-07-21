@@ -13,17 +13,31 @@ import (
 // The returned handler injects the HTTP request into the context via
 // WithHTTPRequest so that AppNameFunc and UserIDFunc can access it.
 func Handler(cfg Config, agCfg agui.Config) (http.Handler, error) {
-	bridge, err := New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	agCfg.Agent = bridge
-
 	// Pre-populate ToolResultHandler for inline mode so both agui.Handler
 	// and the /tool-result mux share the same instance.
 	if agCfg.ToolMode == agui.ToolModeInline && agCfg.ToolResultHandler == nil {
 		agCfg.ToolResultHandler = agui.NewToolResultHandler()
 	}
+
+	// Wire ClientTools inline mode: share the ToolResultHandler between
+	// the bridge and the agui handler so /tool-result submissions reach
+	// the waiting tool handlers.
+	if cfg.ClientTools != nil && cfg.ClientTools.Mode == ClientToolModeInline {
+		if cfg.ClientTools.ResultHandler == nil {
+			if agCfg.ToolResultHandler != nil {
+				cfg.ClientTools.ResultHandler = agCfg.ToolResultHandler
+			} else {
+				cfg.ClientTools.ResultHandler = agui.NewToolResultHandler()
+				agCfg.ToolResultHandler = cfg.ClientTools.ResultHandler
+			}
+		}
+	}
+
+	bridge, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	agCfg.Agent = bridge
 
 	inner, err := agui.Handler(agCfg)
 	if err != nil {
@@ -35,7 +49,9 @@ func Handler(cfg Config, agCfg agui.Config) (http.Handler, error) {
 		inner.ServeHTTP(w, r)
 	}
 
-	if agCfg.ToolMode == agui.ToolModeInline {
+	needToolResultEndpoint := agCfg.ToolMode == agui.ToolModeInline ||
+		(cfg.ClientTools != nil && cfg.ClientTools.Mode == ClientToolModeInline)
+	if needToolResultEndpoint {
 		mux := http.NewServeMux()
 		mux.HandleFunc("POST /", wrap)
 		mux.Handle("POST /tool-result", agui.ToolResultEndpoint(agCfg.ToolResultHandler))

@@ -15,8 +15,8 @@ out of the box.
 |---------|-------------|
 | **OpenAI Model Provider** | Drop-in `model.LLM` adapter for any OpenAI-compatible API (OpenAI, Ollama, LiteLLM, OpenRouter, vLLM, Together AI). |
 | **Anthropic Model Provider** | Drop-in `model.LLM` adapter for Anthropic's Messages API and compatible providers (Claude, Amazon Bedrock, Google Vertex AI). Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. |
-| **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management, tool orchestration, middleware, and SSE handler. Zero ADK dependency. |
-| **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, and client tool proxy. |
+| **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management (RFC 6902 JSON Patch via `evanphx/json-patch`), predictive state tracker, tool orchestration, middleware, encrypted-value scrubbing, and SSE handler. Zero ADK dependency. |
+| **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, streaming tool calls, client tool hand-back (NextRun + Inline), HITL runstore & resume, tool call validation, activity snapshots, suppressed tool mode, and preset configurations. |
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
 | **File Artifact Service** | Filesystem-backed `artifact.Service` with automatic versioning and metadata sidecars. |
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
@@ -526,6 +526,7 @@ func main() {
 
 ## Recent Changes
 
+- **AG-UI ADK Bridge Gap Fix**: Closed all 10 AG-UI protocol feature gaps between the `agui`/`aguiadk` packages and the AG-UI example server. New features: disconnect cancellation, client tool hand-back (NextRun + Inline modes via `ClientToolset`), streaming tool calls (progressive `TOOL_CALL_*` from partial `FunctionCall` parts), HITL runstore & resume (`RunStore` with TTL, atomic claim, approval interrupts), tool call validation (synthetic IDs, error `TOOL_CALL_RESULT` for malformed calls), suppressed tool mode (`Config.SuppressToolEvents` + `Config.ToolToStateMapper` emits `STATE_DELTA` instead of `TOOL_CALL_*`), predictive state tracker (`agui.PredictiveStateTracker` for ghosted `/_predictive` deltas), activity snapshots (`tool_use` and `approval_request`), encrypted value scrubbing in `MessagesSnapshot`, and preset configurations (`AgenticChatPreset`, `HumanInTheLoopPreset`, `GenerativeUIPreset`, `SharedStatePreset`, `InlineToolsPreset`). `StateManager.Apply` now uses `evanphx/json-patch/v5` for RFC 6902 compliance. See [docs/aguiadk-bridge.md](docs/aguiadk-bridge.md).
 - **Evaluation Framework**: New `eval` package with eval sets, 13 built-in metrics, LLM-as-judge evaluators, user simulation, and local eval service. Mirrors ADK Python eval package. See [docs/eval.md](docs/eval.md).
 - **Anthropic Model Provider**: Drop-in `model.LLM` adapter for Anthropic's Messages API. Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. See [docs/anthropic-model.md](docs/anthropic-model.md).
 - **Test Utilities**: New `testutil` package with fake implementations of all ADK-Go interfaces (FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, RunnerBuilder). Enables fast, deterministic testing without external LLM providers. See [docs/testutil.md](docs/testutil.md).
@@ -538,6 +539,8 @@ func main() {
 Beyond ADK-Go and `google.golang.org/genai`, the only additional direct dependencies are:
 
 - [`github.com/ag-ui-protocol/ag-ui/sdks/community/go`](https://github.com/ag-ui-protocol/ag-ui) -- AG-UI event types and helpers
+- [`github.com/evanphx/json-patch/v5`](https://github.com/evanphx/json-patch) -- RFC 6902 JSON Patch for `StateManager.Apply`
+- [`github.com/google/jsonschema-go`](https://github.com/google/jsonschema-go) -- JSON Schema for `ClientToolset` parameter validation
 - [`github.com/google/uuid`](https://github.com/google/uuid) -- UUID generation for eval session IDs
 - [`go.yaml.in/yaml/v4`](https://github.com/go-yaml/yaml) -- YAML parsing for the config loader
 

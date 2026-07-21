@@ -17,16 +17,20 @@ type sseSession struct {
 	w         http.ResponseWriter
 	f         http.Flusher
 	sseWriter *agsse.SSEWriter
+	cancel    context.CancelFunc
 }
 
-func newSSESession(w http.ResponseWriter, f http.Flusher, sw *agsse.SSEWriter) *sseSession {
-	return &sseSession{w: w, f: f, sseWriter: sw}
+func newSSESession(w http.ResponseWriter, f http.Flusher, sw *agsse.SSEWriter, cancel context.CancelFunc) *sseSession {
+	return &sseSession{w: w, f: f, sseWriter: sw, cancel: cancel}
 }
 
 func (s *sseSession) WriteEvent(ctx context.Context, ev events.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.sseWriter.WriteEvent(ctx, s.w, ev); err != nil {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		return err
 	}
 	s.f.Flush()
