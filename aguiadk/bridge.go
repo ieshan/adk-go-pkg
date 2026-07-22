@@ -77,16 +77,19 @@ type Config struct {
 
 	// SuppressToolEvents replaces TOOL_CALL_START/ARGS/END/RESULT events
 	// with STATE_DELTA events. When true, ToolToStateMapper is called for
-	// each finalized tool call; if it returns non-nil, the patch operations
-	// are emitted as a STATE_DELTA instead of tool call events. If the
-	// mapper returns nil for a given tool, normal tool call events are
-	// emitted. This enables generative-UI patterns where tool calls become
-	// state mutations rather than visible tool invocations.
+	// each finalized tool call; if it returns (ops, true), the patch
+	// operations are emitted as a STATE_DELTA instead of tool call events.
+	// If the mapper returns (nil, false) for a given tool, normal tool call
+	// events are emitted. This enables generative-UI patterns where tool
+	// calls become state mutations rather than visible tool invocations.
 	SuppressToolEvents bool
 
 	// ToolToStateMapper maps a tool call (name + args) to a set of JSON Patch
-	// operations to apply as a state delta. Only used when SuppressToolEvents
-	// is true. Return nil to emit normal tool call events for this tool.
+	// operations to apply as a state delta and a boolean indicating whether
+	// the tool call should be suppressed. Only used when SuppressToolEvents
+	// is true. Return false as the second value to emit normal tool call
+	// events for this tool. Return (nil, true) to suppress the tool call
+	// without emitting any state delta.
 	ToolToStateMapper ToolToStateMapper
 
 	// EmitStepEvents controls whether STEP_STARTED/STEP_FINISHED events are
@@ -134,9 +137,12 @@ type Config struct {
 }
 
 // ToolToStateMapper converts a tool call into JSON Patch operations for
-// suppressed tool mode. Return nil to fall back to normal tool call events
-// for this particular tool.
-type ToolToStateMapper func(toolName string, args map[string]any) []events.JSONPatchOperation
+// suppressed tool mode. The boolean return value indicates whether the
+// tool call should be suppressed (true) or emitted as normal tool call
+// events (false). When suppress is true and ops is non-nil, the patch
+// operations are emitted as a STATE_DELTA. When suppress is true and ops
+// is nil, the tool call is silently swallowed with no events emitted.
+type ToolToStateMapper func(toolName string, args map[string]any) ([]events.JSONPatchOperation, bool)
 
 // emitStateSnapshot returns whether state snapshots should be emitted.
 func (c Config) emitStateSnapshot() bool {
@@ -888,8 +894,10 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool)
 		if partial {
 			return
 		}
-		if ops := t.toolToStateMapper(fc.Name, fc.Args); ops != nil {
-			_ = t.emitter.StateDelta(ops)
+		if ops, suppress := t.toolToStateMapper(fc.Name, fc.Args); suppress {
+			if ops != nil {
+				_ = t.emitter.StateDelta(ops)
+			}
 			return
 		}
 	}
@@ -1018,11 +1026,6 @@ func (t *eventTranslator) emitToolUseActivity(toolCallID, toolName string, args 
 // (matching the example server's settlePendingToolCalls, loop.go:567-568)
 // since a FunctionResponse means the tool actually executed.
 func (t *eventTranslator) emitFunctionResponse(fr *genai.FunctionResponse) {
-	// Suppressed tool mode: no TOOL_CALL_RESULT events.
-	if t.suppressTools {
-		return
-	}
-
 	toolCallID, ok := t.toolCallIDs[fr.ID]
 	if !ok {
 		toolCallID, ok = t.toolCallIDs[fr.Name]

@@ -138,16 +138,19 @@ type Config struct {
 
     // SuppressToolEvents replaces TOOL_CALL_START/ARGS/END/RESULT events
     // with STATE_DELTA events. When true, ToolToStateMapper is called for
-    // each finalized tool call; if it returns non-nil, the patch operations
-    // are emitted as a STATE_DELTA instead of tool call events. If the
-    // mapper returns nil for a given tool, normal tool call events are
-    // emitted. This enables generative-UI patterns where tool calls become
-    // state mutations rather than visible tool invocations.
+    // each finalized tool call; if it returns (ops, true), the patch
+    // operations are emitted as a STATE_DELTA instead of tool call events.
+    // If the mapper returns (nil, false) for a given tool, normal tool call
+    // events are emitted. This enables generative-UI patterns where tool
+    // calls become state mutations rather than visible tool invocations.
     SuppressToolEvents bool
 
     // ToolToStateMapper maps a tool call (name + args) to a set of JSON Patch
-    // operations to apply as a state delta. Only used when SuppressToolEvents
-    // is true. Return nil to emit normal tool call events for this tool.
+    // operations to apply as a state delta and a boolean indicating whether
+    // the tool call should be suppressed. Only used when SuppressToolEvents
+    // is true. Return false as the second value to emit normal tool call
+    // events for this tool. Return (nil, true) to suppress the tool call
+    // without emitting any state delta.
     ToolToStateMapper ToolToStateMapper
 }
 ```
@@ -169,8 +172,8 @@ type Config struct {
 | `SessionTimeout` | 20 min | Idle timeout before sessions are cleaned up |
 | `ClientTools` | nil | Client tool config (Mode, ResultHandler, Timeout). See [ClientToolset](#clienttoolset). |
 | `RunStore` | nil (lazy) | Paused-run store for HITL. If nil, an in-memory store with 30m TTL is created lazily. See [RunStore](#runstore). |
-| `SuppressToolEvents` | `false` | Replace `TOOL_CALL_*` with `STATE_DELTA` via `ToolToStateMapper`. See [Suppressed Tool Mode](#suppressed-tool-mode). |
-| `ToolToStateMapper` | nil | Maps a tool call to JSON Patch ops; only used when `SuppressToolEvents` is true |
+| `SuppressToolEvents` | `false` | Replace `TOOL_CALL_*` with `STATE_DELTA` via `ToolToStateMapper`. Mapper returns `(ops, suppress)`; suppress=true emits STATE_DELTA, suppress=false emits normal tool events. See [Suppressed Tool Mode](#suppressed-tool-mode). |
+| `ToolToStateMapper` | nil | Maps a tool call to `(JSONPatchOps, suppress bool)`; only used when `SuppressToolEvents` is true |
 
 ### Dynamic App Name and User ID
 
@@ -245,7 +248,7 @@ The bridge translates ADK session events into AG-UI events as follows:
 | (run start) | `RUN_STARTED` | Emitted before the ADK runner starts |
 | (run end) | `RUN_FINISHED` | Emitted after the ADK runner completes; `closeStreamedToolCalls()` synthesizes `TOOL_CALL_END` for any streamed calls that never got a final event |
 | Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) + `ACTIVITY_SNAPSHOT` (`approval_request`) per pending call | Run ends with interrupts (each carrying `ResponseSchema` and `Message`); paused run saved to `RunStore`. Client resumes with `Resume` entries. |
-| (suppressed tool mode) | `STATE_DELTA` | When `SuppressToolEvents` is true and `ToolToStateMapper` returns non-nil, `TOOL_CALL_*` events are replaced with `STATE_DELTA` carrying the mapper's patch ops. Partial events are skipped. |
+| (suppressed tool mode) | `STATE_DELTA` | When `SuppressToolEvents` is true and `ToolToStateMapper` returns `suppress=true`, `TOOL_CALL_*` events are replaced with `STATE_DELTA` carrying the mapper's patch ops (if non-nil). Partial events are skipped. Suppressed calls never enter `toolCallIDs`, so their `FunctionResponse` is naturally skipped. Non-suppressed calls (`suppress=false`) get normal `TOOL_CALL_*` + `TOOL_CALL_RESULT`. |
 | (session state) | `STATE_SNAPSHOT` | Emitted at run start if `EmitStateSnapshot` is true |
 | (session events) | `MESSAGES_SNAPSHOT` | Emitted at run end if `EmitMessagesSnapshot` is true; `EncryptedValue`/`EncryptedContent` scrubbed |
 | Runner error | `RUN_ERROR` | Error message included |
@@ -599,30 +602,37 @@ Callers that want explicit lifecycle control should set this field and call
 ## Suppressed Tool Mode
 
 When `Config.SuppressToolEvents` is true and `Config.ToolToStateMapper`
-returns non-nil for a finalized tool call, the bridge emits a `STATE_DELTA`
+returns `(ops, true)` for a finalized tool call, the bridge emits a `STATE_DELTA`
 with the mapper's patch operations instead of `TOOL_CALL_START`/`ARGS`/`END`/
 `RESULT` events. Partial events are skipped — only the final (non-partial)
-event produces a `STATE_DELTA`. If the mapper returns nil for a given tool,
-normal tool call events are emitted.
+event produces a `STATE_DELTA`. If the mapper returns `(nil, false)` for a
+given tool, normal tool call events are emitted (including `TOOL_CALL_RESULT`
+when a `FunctionResponse` arrives). If the mapper returns `(nil, true)`, the
+tool call is silently swallowed with no events emitted at all.
+
+Suppressed tool calls never enter the `toolCallIDs` map (the bridge returns
+early before populating it), so their `FunctionResponse` parts naturally hit
+the "no matching tool call, skip" path — no blanket suppression check is
+needed in `emitFunctionResponse`.
 
 This enables generative-UI patterns where tool invocations become state
 mutations in the UI rather than visible tool calls (matching the AG-UI example
 server's `applyRecipeChanges` / `validateToolCallsQuiet` pattern).
 
 ```go
-type ToolToStateMapper func(toolName string, args map[string]any) []events.JSONPatchOperation
+type ToolToStateMapper func(toolName string, args map[string]any) ([]events.JSONPatchOperation, bool)
 ```
 
 ### Example
 
 ```go
-mapper := func(toolName string, args map[string]any) []events.JSONPatchOperation {
+mapper := func(toolName string, args map[string]any) ([]events.JSONPatchOperation, bool) {
 	if toolName == "set_theme" {
 		return []events.JSONPatchOperation{
 			{Op: "replace", Path: "/theme", Value: args["theme"]},
-		}
+		}, true
 	}
-	return nil // fall back to normal tool call events for other tools
+	return nil, false // fall back to normal tool call events for other tools
 }
 
 handler, err := aguiadk.Handler(
@@ -649,6 +659,9 @@ func GenerativeUIPreset(base Config) Config
 func HumanInTheLoopPreset(base Config, autoApprove bool) Config
 func SharedStatePreset(base Config, mapper ToolToStateMapper) Config
 func InlineToolsPreset(base Config) Config
+func HandBackPreset(base Config) Config
+func PredictiveStatePreset(base Config) Config
+func AgenticGenerativeUIPreset(base Config, mapper ToolToStateMapper) Config
 ```
 
 | Preset | ClientTools | RunStore | SuppressToolEvents | Notes |
@@ -658,6 +671,9 @@ func InlineToolsPreset(base Config) Config
 | `HumanInTheLoopPreset` | NextRun | auto (if `!autoApprove`) | — | 30m session timeout; approval interrupts for consequential actions |
 | `SharedStatePreset` | — | — | yes (with `mapper`) | Tool calls become `STATE_DELTA` via mapper; collaborative document editing |
 | `InlineToolsPreset` | Inline (5m timeout) | — | — | Keeps SSE connection open for inline tool results; `Handler` mounts `/tool-result` automatically |
+| `HandBackPreset` | HandBack | — | — | Ends run with plain `RUN_FINISHED` on client tool invocation; messages snapshot enabled |
+| `PredictiveStatePreset` | — | — | — | Activity deltas + step events for ghosted `/_predictive` state streaming |
+| `AgenticGenerativeUIPreset` | — | — | yes (with `mapper`) | Tool calls become `STATE_DELTA` via mapper; step events + messages snapshot enabled |
 
 ### Example: Human-in-the-Loop
 

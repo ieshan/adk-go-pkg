@@ -1641,13 +1641,13 @@ func TestBridge_SuppressedToolMode(t *testing.T) {
 		}
 	})
 
-	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
 		if name == "update_doc" {
 			return []events.JSONPatchOperation{
 				{Op: "add", Path: "/doc", Value: args["content"]},
-			}
+			}, true
 		}
-		return nil
+		return nil, false
 	}
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
@@ -1715,8 +1715,8 @@ func TestBridge_SuppressedToolModeMapperReturnsNil(t *testing.T) {
 		}
 	})
 
-	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
-		return nil // no mapping for this tool
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
+		return nil, false // no mapping for this tool
 	}
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
@@ -1744,6 +1744,300 @@ func TestBridge_SuppressedToolModeMapperReturnsNil(t *testing.T) {
 		events.EventTypeRunFinished,
 	}
 	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_SuppressedToolModeMixed(t *testing.T) {
+	// Two tools in one run: one suppressed (returns (ops, true)), one not
+	// (returns (nil, false)). Verify STATE_DELTA for the suppressed tool,
+	// TOOL_CALL_START/ARGS/END for the non-suppressed tool, and TOOL_CALL_RESULT
+	// only for the non-suppressed tool (both get a FunctionResponse).
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-1",
+						Name: "update_doc",
+						Args: map[string]any{"content": "hello"},
+					},
+				},
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "fc-2",
+						Name: "get_weather",
+						Args: map[string]any{"city": "SF"},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-2")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       "fc-1",
+						Name:     "update_doc",
+						Response: map[string]any{"ok": true},
+					},
+				},
+				{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       "fc-2",
+						Name:     "get_weather",
+						Response: map[string]any{"temp": 72},
+					},
+				},
+			},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
+		if name == "update_doc" {
+			return []events.JSONPatchOperation{
+				{Op: "add", Path: "/doc", Value: args["content"]},
+			}, true
+		}
+		return nil, false
+	}
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		SuppressToolEvents: true,
+		ToolToStateMapper:  mapper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// Expected: STATE_DELTA for suppressed tool, TOOL_CALL_START/ARGS/END for
+	// non-suppressed tool, then ACTIVITY_SNAPSHOT + TOOL_CALL_RESULT only for
+	// the non-suppressed tool (fc-2).
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeStateDelta, // suppressed tool (update_doc)
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		events.EventTypeActivitySnapshot, // tool_use for get_weather
+		events.EventTypeToolCallResult,   // only for get_weather
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+
+	// Verify the STATE_DELTA has the right path and the TOOL_CALL_RESULT
+	// correlates to the non-suppressed tool.
+	var stateDeltaPath string
+	var toolCallResultID string
+	var toolCallStartID string
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeStateDelta:
+			sd, ok := ev.(*events.StateDeltaEvent)
+			if !ok {
+				t.Fatalf("expected *events.StateDeltaEvent, got %T", ev)
+			}
+			if len(sd.Delta) != 1 {
+				t.Errorf("StateDelta len = %d, want 1", len(sd.Delta))
+			} else {
+				stateDeltaPath = sd.Delta[0].Path
+			}
+		case events.EventTypeToolCallStart:
+			tcse, ok := ev.(*events.ToolCallStartEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallStartEvent, got %T", ev)
+			}
+			toolCallStartID = tcse.ToolCallID
+		case events.EventTypeToolCallResult:
+			tcre, ok := ev.(*events.ToolCallResultEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+			}
+			toolCallResultID = tcre.ToolCallID
+		}
+	}
+	if stateDeltaPath != "/doc" {
+		t.Errorf("StateDelta path = %q, want /doc", stateDeltaPath)
+	}
+	if toolCallStartID != "fc-2" {
+		t.Errorf("ToolCallStart ID = %q, want fc-2", toolCallStartID)
+	}
+	if toolCallResultID != toolCallStartID {
+		t.Errorf("ToolCallResult ID = %q, want %q (should match non-suppressed tool)", toolCallResultID, toolCallStartID)
+	}
+}
+
+func TestBridge_SuppressedToolModeNilOpsSuppress(t *testing.T) {
+	// Mapper returns (nil, true) — verify no STATE_DELTA, no TOOL_CALL_*
+	// events, tool call silently swallowed.
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "silent_tool",
+					Args: map[string]any{"x": 1},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
+		return nil, true // suppress with no state delta
+	}
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		SuppressToolEvents: true,
+		ToolToStateMapper:  mapper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// Expect only RUN_STARTED, STATE_SNAPSHOT, RUN_FINISHED — no tool events
+	// and no STATE_DELTA.
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_SuppressedToolModeNonSuppressedResult(t *testing.T) {
+	// Mapper returns (nil, false) with a FunctionResponse — verify
+	// TOOL_CALL_RESULT IS emitted (the key new behavior after removing the
+	// blanket suppressTools check in emitFunctionResponse).
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "normal_tool",
+					Args: map[string]any{"x": 1},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-2")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:       "fc-1",
+					Name:     "normal_tool",
+					Response: map[string]any{"result": "ok"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
+		return nil, false // don't suppress — normal tool events
+	}
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:              a,
+		AppName:            "testapp",
+		UserID:             "user1",
+		SuppressToolEvents: true,
+		ToolToStateMapper:  mapper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	// Expect full tool call lifecycle including TOOL_CALL_RESULT.
+	expected := []events.EventType{
+		events.EventTypeRunStarted,
+		events.EventTypeStateSnapshot,
+		events.EventTypeToolCallStart,
+		events.EventTypeToolCallArgs,
+		events.EventTypeToolCallEnd,
+		events.EventTypeActivitySnapshot, // tool_use
+		events.EventTypeToolCallResult,
+		events.EventTypeRunFinished,
+	}
+	assertEventSequence(t, typeSeq, expected)
+
+	// Verify TOOL_CALL_RESULT content contains the response.
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			tcre, ok := ev.(*events.ToolCallResultEvent)
+			if !ok {
+				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+			}
+			if !strings.Contains(tcre.Content, `"result":"ok"`) {
+				t.Errorf("TOOL_CALL_RESULT Content = %q, want it to contain %q", tcre.Content, `"result":"ok"`)
+			}
+		}
+	}
 }
 
 // --- test helpers ---

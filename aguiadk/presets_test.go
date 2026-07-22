@@ -74,10 +74,10 @@ func TestPresets_HumanInTheLoopAutoApprove(t *testing.T) {
 }
 
 func TestPresets_SharedState(t *testing.T) {
-	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
 		return []events.JSONPatchOperation{
 			{Op: "add", Path: "/tool/" + name, Value: args},
-		}
+		}, true
 	}
 	cfg := aguiadk.SharedStatePreset(aguiadk.Config{}, mapper)
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
@@ -89,7 +89,7 @@ func TestPresets_SharedState(t *testing.T) {
 	if cfg.ToolToStateMapper == nil {
 		t.Fatal("expected non-nil ToolToStateMapper")
 	}
-	ops := cfg.ToolToStateMapper("search", map[string]any{"q": "hello"})
+	ops, _ := cfg.ToolToStateMapper("search", map[string]any{"q": "hello"})
 	if len(ops) != 1 || ops[0].Path != "/tool/search" {
 		t.Errorf("mapper ops = %v, want one op with path /tool/search", ops)
 	}
@@ -136,10 +136,10 @@ func TestPresets_PredictiveStatePreservesBase(t *testing.T) {
 }
 
 func TestPresets_AgenticGenerativeUI(t *testing.T) {
-	mapper := func(name string, args map[string]any) []events.JSONPatchOperation {
+	mapper := func(name string, args map[string]any) ([]events.JSONPatchOperation, bool) {
 		return []events.JSONPatchOperation{
 			{Op: "add", Path: "/ui/" + name, Value: args},
-		}
+		}, true
 	}
 	cfg := aguiadk.AgenticGenerativeUIPreset(aguiadk.Config{}, mapper)
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
@@ -157,7 +157,7 @@ func TestPresets_AgenticGenerativeUI(t *testing.T) {
 	if cfg.ToolToStateMapper == nil {
 		t.Fatal("expected non-nil ToolToStateMapper")
 	}
-	ops := cfg.ToolToStateMapper("render", map[string]any{"component": "card"})
+	ops, _ := cfg.ToolToStateMapper("render", map[string]any{"component": "card"})
 	if len(ops) != 1 || ops[0].Path != "/ui/render" {
 		t.Errorf("mapper ops = %v, want one op with path /ui/render", ops)
 	}
@@ -168,8 +168,8 @@ func TestPresets_AgenticGenerativeUI(t *testing.T) {
 
 func TestPresets_AgenticGenerativeUIPreservesBase(t *testing.T) {
 	base := aguiadk.Config{AppName: "guiapp"}
-	cfg := aguiadk.AgenticGenerativeUIPreset(base, func(string, map[string]any) []events.JSONPatchOperation {
-		return nil
+	cfg := aguiadk.AgenticGenerativeUIPreset(base, func(string, map[string]any) ([]events.JSONPatchOperation, bool) {
+		return nil, false
 	})
 	if cfg.AppName != "guiapp" {
 		t.Errorf("AppName = %q, want %q (base field should be preserved)", cfg.AppName, "guiapp")
