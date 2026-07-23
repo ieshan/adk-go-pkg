@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/planner"
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
@@ -121,6 +122,56 @@ func TestThinking_ThinkingBudget(t *testing.T) {
 	// Budget hint must be present in the prompt.
 	if !strings.Contains(promptText, "100") {
 		t.Errorf("expected budget value 100 to appear in prompt, prompt was:\n%s", promptText)
+	}
+}
+
+// TestThinking_ThinkingInstructionTemplate verifies that when a
+// ThinkingInstructionTemplate is set, the rendered system instruction includes
+// the template data (tools, userMessage, instruction, budget).
+func TestThinking_ThinkingInstructionTemplate(t *testing.T) {
+	engine := prompt.New()
+	tmpl := engine.MustParse("test-thinking-instruction", "Tools: {{.Input.tools}}\nUser: {{.Input.userMessage}}\nInstr: {{.Input.instruction}}\nBudget: {{.Input.budget}}")
+
+	llm := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponseWithJSON))
+	p := planner.NewThinking(planner.ThinkingConfig{
+		Model:                       llm,
+		ThinkingInstructionTemplate: tmpl,
+		ThinkingBudget:              50,
+	})
+
+	_, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "Search the web.",
+		Instruction: "Be concise.",
+		ToolDescriptions: []planner.ToolDescription{
+			{Name: "search", Description: "Searches the web."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+
+	lastCall := llm.LastCall()
+	if lastCall == nil {
+		t.Fatal("expected FakeLLM to record the request, got nil")
+	}
+	if lastCall.Config == nil || lastCall.Config.SystemInstruction == nil {
+		t.Fatal("expected system instruction in LLM request")
+	}
+	sysInst := ""
+	for _, part := range lastCall.Config.SystemInstruction.Parts {
+		sysInst += part.Text
+	}
+	if !strings.Contains(sysInst, "Tools:") {
+		t.Errorf("expected 'Tools:' in system instruction, got:\n%s", sysInst)
+	}
+	if !strings.Contains(sysInst, "Search the web.") {
+		t.Errorf("expected user message in system instruction, got:\n%s", sysInst)
+	}
+	if !strings.Contains(sysInst, "Be concise.") {
+		t.Errorf("expected instruction in system instruction, got:\n%s", sysInst)
+	}
+	if !strings.Contains(sysInst, "Budget: 50") {
+		t.Errorf("expected budget in system instruction, got:\n%s", sysInst)
 	}
 }
 

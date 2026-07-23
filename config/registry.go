@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
@@ -108,6 +109,7 @@ type Registry struct {
 	modelCodes            map[string]ModelCodeFactory
 	agents                map[string]agent.Agent
 	schemas               map[string]SchemaFactory
+	templates             *prompt.TemplateRegistry
 }
 
 // NewRegistry returns an initialised [Registry] with built-in skill factories registered.
@@ -127,6 +129,7 @@ func NewRegistry() *Registry {
 		modelCodes:            make(map[string]ModelCodeFactory),
 		agents:                make(map[string]agent.Agent),
 		schemas:               make(map[string]SchemaFactory),
+		templates:             prompt.NewRegistry(prompt.New()),
 	}
 
 	r.RegisterSkill("filesystem", func(cfg map[string]any) (skill.Source, error) {
@@ -484,4 +487,19 @@ func (r *Registry) ResolveSchema(name string, args map[string]any) (*genai.Schem
 		return nil, fmt.Errorf("config.Registry.ResolveSchema: no factory registered for schema %q", name)
 	}
 	return factory(args)
+}
+
+// RegisterTemplateRegistry registers a prompt TemplateRegistry for resolving
+// named instruction templates.
+func (r *Registry) RegisterTemplateRegistry(tr *prompt.TemplateRegistry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.templates = tr
+}
+
+// TemplateRegistry returns the registered TemplateRegistry, or nil if none.
+func (r *Registry) TemplateRegistry() *prompt.TemplateRegistry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.templates
 }

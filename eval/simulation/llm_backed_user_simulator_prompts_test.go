@@ -8,7 +8,10 @@ import (
 )
 
 func TestGetLlmBackedUserSimulatorPrompt(t *testing.T) {
-	prompt := GetLlmBackedUserSimulatorPrompt("test plan", "test history", "[STOP]")
+	prompt, err := GetLlmBackedUserSimulatorPrompt("test plan", "test history", "[STOP]")
+	if err != nil {
+		t.Fatalf("GetLlmBackedUserSimulatorPrompt failed: %v", err)
+	}
 	if !strings.Contains(prompt, "test plan") {
 		t.Error("expected plan in prompt")
 	}
@@ -32,7 +35,10 @@ func TestGetLlmBackedUserSimulatorPromptWithPersona(t *testing.T) {
 			},
 		},
 	}
-	prompt := GetLlmBackedUserSimulatorPromptWithPersona("plan", "history", "[STOP]", persona)
+	prompt, err := GetLlmBackedUserSimulatorPromptWithPersona("plan", "history", "[STOP]", persona)
+	if err != nil {
+		t.Fatalf("GetLlmBackedUserSimulatorPromptWithPersona failed: %v", err)
+	}
 	if !strings.Contains(prompt, "A test persona") {
 		t.Error("expected persona description in prompt")
 	}
@@ -51,14 +57,17 @@ func TestGetLlmBackedUserSimulatorPromptWithPersona_EmptyDescription(t *testing.
 	persona := &eval.UserPersona{
 		Description: "",
 	}
-	prompt := GetLlmBackedUserSimulatorPromptWithPersona("plan", "history", "[STOP]", persona)
+	prompt, err := GetLlmBackedUserSimulatorPromptWithPersona("plan", "history", "[STOP]", persona)
+	if err != nil {
+		t.Fatalf("GetLlmBackedUserSimulatorPromptWithPersona failed: %v", err)
+	}
 	if !strings.Contains(prompt, "No specific persona.") {
 		t.Error("expected default description for empty persona")
 	}
 }
 
 func TestDefaultUserSimulatorInstructionsTemplate_HasPlaceholders(t *testing.T) {
-	placeholders := []string{"{{ conversation_plan }}", "{{ conversation_history }}", "{{ stop_signal }}"}
+	placeholders := []string{"{{.Input.conversation_plan}}", "{{.Input.conversation_history}}", "{{.Input.stop_signal}}"}
 	for _, ph := range placeholders {
 		if !strings.Contains(DefaultUserSimulatorInstructionsTemplate, ph) {
 			t.Errorf("missing placeholder %s in default template", ph)
@@ -67,7 +76,7 @@ func TestDefaultUserSimulatorInstructionsTemplate_HasPlaceholders(t *testing.T) 
 }
 
 func TestUserSimulatorInstructionsWithPersonaTemplate_HasPlaceholders(t *testing.T) {
-	placeholders := []string{"{{ conversation_plan }}", "{{ conversation_history }}", "{{ stop_signal }}", "{{ persona_description }}", "{{ persona_behaviors }}"}
+	placeholders := []string{"{{.Input.conversation_plan}}", "{{.Input.conversation_history}}", "{{.Input.stop_signal}}", "{{.Input.persona_description}}", "{{.Input.persona_behaviors}}"}
 	for _, ph := range placeholders {
 		if !strings.Contains(UserSimulatorInstructionsWithPersonaTemplate, ph) {
 			t.Errorf("missing placeholder %s in persona template", ph)
@@ -84,13 +93,13 @@ func TestIsValidUserSimulatorTemplate(t *testing.T) {
 	}{
 		{
 			"all_present",
-			"Plan: {{ conversation_plan }}, History: {{ conversation_history }}, Stop: {{ stop_signal }}",
+			"Plan: {{.Input.conversation_plan}}, History: {{.Input.conversation_history}}, Stop: {{.Input.stop_signal}}",
 			[]string{"conversation_plan", "conversation_history", "stop_signal"},
 			true,
 		},
 		{
 			"missing_one",
-			"Plan: {{ conversation_plan }}, History: {{ conversation_history }}",
+			"Plan: {{.Input.conversation_plan}}, History: {{.Input.conversation_history}}",
 			[]string{"conversation_plan", "conversation_history", "stop_signal"},
 			false,
 		},

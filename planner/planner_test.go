@@ -15,9 +15,6 @@ func TestPlan_NoSteps(t *testing.T) {
 		Reasoning: "Nothing to do.",
 	}
 
-	if plan == nil {
-		t.Fatal("expected non-nil Plan")
-	}
 	if len(plan.Steps) != 0 {
 		t.Errorf("expected 0 steps, got %d", len(plan.Steps))
 	}

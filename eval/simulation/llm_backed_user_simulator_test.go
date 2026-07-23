@@ -94,14 +94,14 @@ func TestLlmBackedUserSimulatorConfig_ValidateCustomInstructions(t *testing.T) {
 		{
 			name: "valid instructions",
 			config: LlmBackedUserSimulatorConfig{
-				CustomInstructions: "{{ stop_signal }} {{ conversation_plan }} {{ conversation_history }}",
+				CustomInstructions: "{{.Input.stop_signal}} {{.Input.conversation_plan}} {{.Input.conversation_history}}",
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing stop_signal",
 			config: LlmBackedUserSimulatorConfig{
-				CustomInstructions: "{{ conversation_plan }} {{ conversation_history }}",
+				CustomInstructions: "{{.Input.conversation_plan}} {{.Input.conversation_history}}",
 			},
 			wantErr: true,
 		},

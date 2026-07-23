@@ -5,22 +5,24 @@ import (
 	"strings"
 
 	"github.com/ieshan/adk-go-pkg/eval"
+	"github.com/ieshan/adk-go-pkg/prompt"
 )
 
+var simulatorEngine = prompt.New()
+
 // GetLlmBackedUserSimulatorPrompt builds the default user simulator prompt.
-func GetLlmBackedUserSimulatorPrompt(plan, history, stopSignal string) string {
-	prompt := DefaultUserSimulatorInstructionsTemplate
-	prompt = strings.ReplaceAll(prompt, "{{ conversation_plan }}", plan)
-	prompt = strings.ReplaceAll(prompt, "{{ conversation_history }}", history)
-	prompt = strings.ReplaceAll(prompt, "{{ stop_signal }}", stopSignal)
-	return prompt
+func GetLlmBackedUserSimulatorPrompt(plan, history, stopSignal string) (string, error) {
+	tmpl := simulatorEngine.MustParse("default-user-simulator", DefaultUserSimulatorInstructionsTemplate)
+	return tmpl.Execute(prompt.BuildData(map[string]any{
+		"conversation_plan":    plan,
+		"conversation_history": history,
+		"stop_signal":          stopSignal,
+	}))
 }
 
 // GetLlmBackedUserSimulatorPromptWithPersona builds the user simulator
 // prompt with a persona.
-func GetLlmBackedUserSimulatorPromptWithPersona(plan, history, stopSignal string, persona *eval.UserPersona) string {
-	prompt := UserSimulatorInstructionsWithPersonaTemplate
-
+func GetLlmBackedUserSimulatorPromptWithPersona(plan, history, stopSignal string, persona *eval.UserPersona) (string, error) {
 	// Build persona description.
 	personaDesc := persona.Description
 	if personaDesc == "" {
@@ -40,12 +42,14 @@ func GetLlmBackedUserSimulatorPromptWithPersona(plan, history, stopSignal string
 	}
 	personaBehaviors := strings.Join(behaviorLines, "\n")
 
-	prompt = strings.ReplaceAll(prompt, "{{ conversation_plan }}", plan)
-	prompt = strings.ReplaceAll(prompt, "{{ conversation_history }}", history)
-	prompt = strings.ReplaceAll(prompt, "{{ stop_signal }}", stopSignal)
-	prompt = strings.ReplaceAll(prompt, "{{ persona_description }}", personaDesc)
-	prompt = strings.ReplaceAll(prompt, "{{ persona_behaviors }}", personaBehaviors)
-	return prompt
+	tmpl := simulatorEngine.MustParse("persona-user-simulator", UserSimulatorInstructionsWithPersonaTemplate)
+	return tmpl.Execute(prompt.BuildData(map[string]any{
+		"conversation_plan":    plan,
+		"conversation_history": history,
+		"stop_signal":          stopSignal,
+		"persona_description":  personaDesc,
+		"persona_behaviors":    personaBehaviors,
+	}))
 }
 
 // DefaultUserSimulatorInstructionsTemplate is the default prompt template
@@ -55,14 +59,14 @@ const DefaultUserSimulatorInstructionsTemplate = `You are playing the role of a 
 Your goal is to follow the conversation plan below and generate realistic user messages.
 
 Conversation Plan:
-{{ conversation_plan }}
+{{.Input.conversation_plan}}
 
 Conversation History:
-{{ conversation_history }}
+{{.Input.conversation_history}}
 
 Instructions:
 1. Generate the next user message based on the conversation plan and history.
-2. If the agent has completed all goals in the plan, respond with {{ stop_signal }} to end the conversation.
+2. If the agent has completed all goals in the plan, respond with {{.Input.stop_signal}} to end the conversation.
 3. If the agent asks a clarifying question, answer it using information from the conversation plan.
 4. Do not make up information that is not in the conversation plan.
 5. Keep your responses concise and natural.
@@ -74,20 +78,20 @@ Next user message:`
 const UserSimulatorInstructionsWithPersonaTemplate = `You are playing the role of a user interacting with an AI agent.
 
 Persona:
-{{ persona_description }}
+{{.Input.persona_description}}
 
 Behaviors:
-{{ persona_behaviors }}
+{{.Input.persona_behaviors}}
 
 Conversation Plan:
-{{ conversation_plan }}
+{{.Input.conversation_plan}}
 
 Conversation History:
-{{ conversation_history }}
+{{.Input.conversation_history}}
 
 Instructions:
 1. Generate the next user message based on the conversation plan, history, and your persona.
-2. If the agent has completed all goals in the plan, respond with {{ stop_signal }} to end the conversation.
+2. If the agent has completed all goals in the plan, respond with {{.Input.stop_signal}} to end the conversation.
 3. If the agent asks a clarifying question, answer it using information from the conversation plan.
 4. Do not make up information that is not in the conversation plan.
 5. Follow your persona's behavior instructions and avoid violating the rubrics.
@@ -96,14 +100,21 @@ Instructions:
 Next user message:`
 
 // IsValidUserSimulatorTemplate checks if the given template string contains
-// all required parameters (as {{ param }} placeholders). Returns true if all
+// all required parameters (as {{.Input.param}} placeholders). Returns true if all
 // required params are present, false otherwise.
 func IsValidUserSimulatorTemplate(templateStr string, requiredParams []string) bool {
 	for _, param := range requiredParams {
-		placeholder := fmt.Sprintf("{{ %s }}", param)
-		if !strings.Contains(templateStr, placeholder) {
+		if !hasTemplatePlaceholder(templateStr, param) {
 			return false
 		}
 	}
 	return true
+}
+
+// hasTemplatePlaceholder reports whether templateStr contains a placeholder for
+// the named Input parameter, accepting optional whitespace around the field.
+func hasTemplatePlaceholder(templateStr, param string) bool {
+	compact := fmt.Sprintf("{{.Input.%s}}", param)
+	spaced := fmt.Sprintf("{{.Input.%s }}", param)
+	return strings.Contains(templateStr, compact) || strings.Contains(templateStr, spaced)
 }

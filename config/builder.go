@@ -14,6 +14,8 @@ import (
 	"google.golang.org/adk/v2/tool/skilltoolset"
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 	"google.golang.org/genai"
+
+	"github.com/ieshan/adk-go-pkg/prompt"
 )
 
 // BuildWithPath constructs a live [agent.Agent] tree from a declarative
@@ -250,6 +252,25 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 		return nil, fmt.Errorf("config.Build [llm %q]: afterAgentCallbacks: %w", cfg.Name(), err)
 	}
 
+	var instructionProvider llmagent.InstructionProvider
+	if cfg.InstructionTemplate != nil && cfg.InstructionTemplate.IsSet() {
+		if err := cfg.InstructionTemplate.Validate(); err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: instruction_template: %w", cfg.Name(), err)
+		}
+		var engine *prompt.TemplateEngine
+		if reg.TemplateRegistry() != nil {
+			engine = reg.TemplateRegistry().Engine()
+		} else {
+			engine = prompt.New()
+		}
+		loader := prompt.NewLoader(engine, nil)
+		tmpl, err := cfg.InstructionTemplate.Resolve(reg.TemplateRegistry(), loader)
+		if err != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: resolve instruction_template: %w", cfg.Name(), err)
+		}
+		instructionProvider = prompt.NewInstructionProviderFromTemplate(tmpl)
+	}
+
 	var inputSchema, outputSchema *genai.Schema
 	if cfg.InputSchema != nil {
 		if cfg.InputSchema.Inline != nil {
@@ -287,6 +308,7 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 		InputSchema:              inputSchema,
 		OutputSchema:             outputSchema,
 		OutputKey:                cfg.OutputKey,
+		InstructionProvider:      instructionProvider,
 		IncludeContents:          llmagent.IncludeContents(cfg.IncludeContents),
 		BeforeModelCallbacks:     beforeModelCBs,
 		AfterModelCallbacks:      afterModelCBs,

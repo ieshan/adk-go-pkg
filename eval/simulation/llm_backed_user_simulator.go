@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ieshan/adk-go-pkg/eval"
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -30,12 +31,12 @@ func DefaultLlmBackedUserSimulatorConfig() LlmBackedUserSimulatorConfig {
 	}
 }
 
-// ValidateCustomInstructions checks for required placeholders.
+// ValidateCustomInstructions checks for required {{.Input.*}} placeholders.
 func (c LlmBackedUserSimulatorConfig) ValidateCustomInstructions() error {
-	required := []string{"{{ stop_signal }}", "{{ conversation_plan }}", "{{ conversation_history }}"}
-	for _, placeholder := range required {
-		if !strings.Contains(c.CustomInstructions, placeholder) {
-			return fmt.Errorf("custom instructions must contain %q", placeholder)
+	required := []string{"stop_signal", "conversation_plan", "conversation_history"}
+	for _, param := range required {
+		if !hasTemplatePlaceholder(c.CustomInstructions, param) {
+			return fmt.Errorf("custom instructions must contain {{.Input.%s}}", param)
 		}
 	}
 	return nil
@@ -102,22 +103,39 @@ func (s *LlmBackedUserSimulator) GetNextUserMessage(ctx context.Context, events 
 
 	history := s.summarizeConversation(events)
 
-	var prompt string
+	var userPrompt string
 	if s.config.CustomInstructions != "" {
-		prompt = s.config.CustomInstructions
-		prompt = strings.ReplaceAll(prompt, "{{ stop_signal }}", "</finished>")
-		prompt = strings.ReplaceAll(prompt, "{{ conversation_plan }}", plan)
-		prompt = strings.ReplaceAll(prompt, "{{ conversation_history }}", history)
+		tmpl, err := prompt.New().Parse("custom-user-simulator", s.config.CustomInstructions)
+		if err != nil {
+			return nil, fmt.Errorf("invalid custom instructions template: %w", err)
+		}
+		rendered, err := tmpl.Execute(prompt.BuildData(map[string]any{
+			"stop_signal":          "</finished>",
+			"conversation_plan":    plan,
+			"conversation_history": history,
+		}))
+		if err != nil {
+			return nil, fmt.Errorf("failed to render custom instructions template: %w", err)
+		}
+		userPrompt = rendered
 	} else if s.userPersona != nil {
-		prompt = GetLlmBackedUserSimulatorPromptWithPersona(plan, history, "</finished>", s.userPersona)
+		var err error
+		userPrompt, err = GetLlmBackedUserSimulatorPromptWithPersona(plan, history, "</finished>", s.userPersona)
+		if err != nil {
+			return nil, fmt.Errorf("failed to render persona user simulator prompt: %w", err)
+		}
 	} else {
-		prompt = GetLlmBackedUserSimulatorPrompt(plan, history, "</finished>")
+		var err error
+		userPrompt, err = GetLlmBackedUserSimulatorPrompt(plan, history, "</finished>")
+		if err != nil {
+			return nil, fmt.Errorf("failed to render default user simulator prompt: %w", err)
+		}
 	}
 
 	// Call LLM.
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
-			{Parts: []*genai.Part{{Text: prompt}}, Role: "user"},
+			{Parts: []*genai.Part{{Text: userPrompt}}, Role: "user"},
 		},
 	}
 

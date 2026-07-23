@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -702,6 +703,110 @@ func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
 	}
 	if a.Name() != "rich-bot" {
 		t.Errorf("expected agent name %q, got %q", "rich-bot", a.Name())
+	}
+}
+
+// TestBuild_LLMAgent_WithInstructionTemplate_Inline verifies that an inline
+// InstructionTemplate is resolved and produces a non-nil agent.
+func TestBuild_LLMAgent_WithInstructionTemplate_Inline(t *testing.T) {
+	cfg := &LLMAgentConfig{
+		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-inline-bot"},
+		Model:               "mock/fast",
+		InstructionTemplate: &prompt.TemplateRef{Inline: "You are {{.Agent.Name}}."},
+	}
+
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	if err != nil {
+		t.Fatalf("Build returned unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("Build returned nil agent")
+	}
+	if a.Name() != "tmpl-inline-bot" {
+		t.Errorf("expected agent name %q, got %q", "tmpl-inline-bot", a.Name())
+	}
+}
+
+// TestBuild_LLMAgent_WithInstructionTemplate_Name verifies that a named
+// InstructionTemplate is resolved from the registry.
+func TestBuild_LLMAgent_WithInstructionTemplate_Name(t *testing.T) {
+	reg := testRegistry()
+	tr := reg.TemplateRegistry()
+	if err := tr.Register("greeting", "Hello from {{.Agent.Name}}."); err != nil {
+		t.Fatalf("RegisterString: %v", err)
+	}
+
+	cfg := &LLMAgentConfig{
+		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-name-bot"},
+		Model:               "mock/fast",
+		InstructionTemplate: &prompt.TemplateRef{Name: "greeting"},
+	}
+
+	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	if err != nil {
+		t.Fatalf("Build returned unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("Build returned nil agent")
+	}
+}
+
+// TestBuild_LLMAgent_WithInstructionTemplate_Path verifies that a file-based
+// InstructionTemplate is loaded and resolved.
+func TestBuild_LLMAgent_WithInstructionTemplate_Path(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, "instruction.tmpl")
+	_ = os.WriteFile(tmplPath, []byte("You are a helpful assistant."), 0644)
+
+	cfg := &LLMAgentConfig{
+		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-path-bot"},
+		Model:               "mock/fast",
+		InstructionTemplate: &prompt.TemplateRef{Path: tmplPath},
+	}
+
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	if err != nil {
+		t.Fatalf("Build returned unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("Build returned nil agent")
+	}
+}
+
+// TestBuild_LLMAgent_InstructionTemplatePrecedence verifies that
+// InstructionTemplate takes precedence over Instruction.
+func TestBuild_LLMAgent_InstructionTemplatePrecedence(t *testing.T) {
+	cfg := &LLMAgentConfig{
+		BaseAgentConfig:     BaseAgentConfig{Name: "precedence-bot"},
+		Model:               "mock/fast",
+		Instruction:         "static instruction",
+		InstructionTemplate: &prompt.TemplateRef{Inline: "templated instruction"},
+	}
+
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	if err != nil {
+		t.Fatalf("Build returned unexpected error: %v", err)
+	}
+	if a == nil {
+		t.Fatal("Build returned nil agent")
+	}
+}
+
+// TestBuild_LLMAgent_InvalidInstructionTemplate verifies that an invalid
+// TemplateRef (multiple fields set) returns an error.
+func TestBuild_LLMAgent_InvalidInstructionTemplate(t *testing.T) {
+	cfg := &LLMAgentConfig{
+		BaseAgentConfig: BaseAgentConfig{Name: "bad-tmpl-bot"},
+		Model:           "mock/fast",
+		InstructionTemplate: &prompt.TemplateRef{
+			Inline: "inline",
+			Name:   "name",
+		},
+	}
+
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	if err == nil {
+		t.Fatal("expected error for invalid InstructionTemplate, got nil")
 	}
 }
 

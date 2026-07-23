@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -52,6 +53,11 @@ type PlanReActConfig struct {
 	// PlanInstruction overrides the default planning system prompt.
 	// When empty the built-in prompt is used.
 	PlanInstruction string
+
+	// PlanInstructionTemplate overrides the default planning system prompt
+	// using a text/template. When set, takes precedence over PlanInstruction.
+	// Template data: {{.Input.tools}}, {{.Input.userMessage}}, {{.Input.instruction}}
+	PlanInstructionTemplate *prompt.Template
 
 	// MaxSteps caps the number of steps in the returned plan.
 	// Steps beyond this limit are silently truncated.
@@ -126,14 +132,28 @@ func NewPlanReAct(cfg PlanReActConfig) *PlanReActPlanner {
 //	    log.Fatal(err)
 //	}
 func (p *PlanReActPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) (*Plan, error) {
-	prompt := p.buildPrompt(input)
+	planPrompt := p.buildPrompt(input)
+
+	systemInstruction := p.cfg.PlanInstruction
+	if p.cfg.PlanInstructionTemplate != nil {
+		data := prompt.BuildData(map[string]any{
+			"tools":       formatToolDescriptions(input),
+			"userMessage": input.UserMessage,
+			"instruction": input.Instruction,
+		})
+		rendered, err := p.cfg.PlanInstructionTemplate.Execute(data)
+		if err != nil {
+			return nil, fmt.Errorf("planner: render plan instruction template: %w", err)
+		}
+		systemInstruction = rendered
+	}
 
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
-			genai.NewContentFromText(prompt, "user"),
+			genai.NewContentFromText(planPrompt, "user"),
 		},
 		Config: &genai.GenerateContentConfig{
-			SystemInstruction: genai.NewContentFromText(p.cfg.PlanInstruction, "system"),
+			SystemInstruction: genai.NewContentFromText(systemInstruction, "system"),
 		},
 	}
 
@@ -179,6 +199,25 @@ func (p *PlanReActPlanner) buildPrompt(input *PlanRequest) string {
 	// request Config, so it is not included in the user prompt.
 
 	// Tool descriptions section.
+	sb.WriteString(formatToolDescriptions(input))
+
+	// Optional caller instruction.
+	if input.Instruction != "" {
+		sb.WriteString("## Additional Instruction\n\n")
+		sb.WriteString(input.Instruction)
+		sb.WriteString("\n\n")
+	}
+
+	// User message.
+	sb.WriteString("## User Request\n\n")
+	sb.WriteString(input.UserMessage)
+
+	return sb.String()
+}
+
+// formatToolDescriptions returns the formatted "Available Tools" section.
+func formatToolDescriptions(input *PlanRequest) string {
+	var sb strings.Builder
 	if len(input.ToolDescriptions) > 0 {
 		sb.WriteString("## Available Tools\n\n")
 		for _, td := range input.ToolDescriptions {
@@ -192,18 +231,6 @@ func (p *PlanReActPlanner) buildPrompt(input *PlanRequest) string {
 	} else {
 		sb.WriteString("## Available Tools\n\n(none)\n\n")
 	}
-
-	// Optional caller instruction.
-	if input.Instruction != "" {
-		sb.WriteString("## Additional Instruction\n\n")
-		sb.WriteString(input.Instruction)
-		sb.WriteString("\n\n")
-	}
-
-	// User message.
-	sb.WriteString("## User Request\n\n")
-	sb.WriteString(input.UserMessage)
-
 	return sb.String()
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -26,6 +27,10 @@ type ThinkingConfig struct {
 	// approximate token budget it should use for its reasoning process.
 	// A value of 0 means no budget hint is added to the prompt.
 	ThinkingBudget int
+
+	// ThinkingInstructionTemplate overrides the default thinking system prompt.
+	// Template data: {{.Input.tools}}, {{.Input.userMessage}}, {{.Input.instruction}}, {{.Input.budget}}
+	ThinkingInstructionTemplate *prompt.Template
 }
 
 // ThinkingPlanner generates execution plans by prompting an LLM to reason
@@ -98,14 +103,29 @@ func NewThinking(cfg ThinkingConfig) *ThinkingPlanner {
 //	    },
 //	})
 func (p *ThinkingPlanner) GeneratePlan(ctx context.Context, input *PlanRequest) (*Plan, error) {
-	prompt := p.buildPrompt(input)
+	userPrompt := p.buildPrompt(input)
+
+	systemInstruction := p.thinkingInstruction()
+	if p.cfg.ThinkingInstructionTemplate != nil {
+		data := prompt.BuildData(map[string]any{
+			"tools":       formatToolDescriptions(input),
+			"userMessage": input.UserMessage,
+			"instruction": input.Instruction,
+			"budget":      p.cfg.ThinkingBudget,
+		})
+		rendered, err := p.cfg.ThinkingInstructionTemplate.Execute(data)
+		if err != nil {
+			return nil, fmt.Errorf("planner: render thinking instruction template: %w", err)
+		}
+		systemInstruction = rendered
+	}
 
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
-			genai.NewContentFromText(prompt, "user"),
+			genai.NewContentFromText(userPrompt, "user"),
 		},
 		Config: &genai.GenerateContentConfig{
-			SystemInstruction: genai.NewContentFromText(p.thinkingInstruction(), "system"),
+			SystemInstruction: genai.NewContentFromText(systemInstruction, "system"),
 		},
 	}
 

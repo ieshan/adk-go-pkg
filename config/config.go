@@ -56,6 +56,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"go.yaml.in/yaml/v4"
 	"google.golang.org/genai"
 )
@@ -84,25 +85,26 @@ type BaseAgentConfig struct {
 // LLMAgentConfig is the typed config for "llm" agents.
 type LLMAgentConfig struct {
 	BaseAgentConfig          `json:",inline" yaml:",inline"`
-	Model                    string         `json:"model,omitempty" yaml:"model,omitempty"`
-	ModelCode                *CodeConfig    `json:"model_code,omitempty" yaml:"model_code,omitempty"`
-	Instruction              string         `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-	StaticInstruction        string         `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
-	InputSchema              *SchemaRef     `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
-	OutputSchema             *SchemaRef     `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
-	OutputKey                string         `json:"output_key,omitempty" yaml:"output_key,omitempty"`
-	IncludeContents          string         `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
-	Tools                    []ToolRef      `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Skillsets                []SkillsetRef  `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
-	GenerateConfig           map[string]any `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
-	DisallowTransferToParent bool           `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
-	DisallowTransferToPeers  bool           `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
-	BeforeModelCallbacks     []CodeConfig   `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
-	AfterModelCallbacks      []CodeConfig   `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
-	OnModelErrorCallbacks    []CodeConfig   `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
-	BeforeToolCallbacks      []CodeConfig   `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
-	AfterToolCallbacks       []CodeConfig   `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
-	OnToolErrorCallbacks     []CodeConfig   `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
+	Model                    string              `json:"model,omitempty" yaml:"model,omitempty"`
+	ModelCode                *CodeConfig         `json:"model_code,omitempty" yaml:"model_code,omitempty"`
+	Instruction              string              `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	InstructionTemplate      *prompt.TemplateRef `json:"instruction_template,omitempty" yaml:"instruction_template,omitempty"`
+	StaticInstruction        string              `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
+	InputSchema              *SchemaRef          `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
+	OutputSchema             *SchemaRef          `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
+	OutputKey                string              `json:"output_key,omitempty" yaml:"output_key,omitempty"`
+	IncludeContents          string              `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
+	Tools                    []ToolRef           `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Skillsets                []SkillsetRef       `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
+	GenerateConfig           map[string]any      `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
+	DisallowTransferToParent bool                `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
+	DisallowTransferToPeers  bool                `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
+	BeforeModelCallbacks     []CodeConfig        `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
+	AfterModelCallbacks      []CodeConfig        `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
+	OnModelErrorCallbacks    []CodeConfig        `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
+	BeforeToolCallbacks      []CodeConfig        `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
+	AfterToolCallbacks       []CodeConfig        `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
+	OnToolErrorCallbacks     []CodeConfig        `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
 }
 
 func (c *LLMAgentConfig) Name() string        { return c.BaseAgentConfig.Name }
@@ -533,27 +535,28 @@ type rawAgentConfig struct {
 	SubAgents   []map[string]any `json:"sub_agents,omitempty" yaml:"sub_agents,omitempty"`
 
 	// LLM-only fields
-	Model                    string         `json:"model,omitempty" yaml:"model,omitempty"`
-	ModelCode                *CodeConfig    `json:"model_code,omitempty" yaml:"model_code,omitempty"`
-	Instruction              string         `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-	StaticInstruction        string         `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
-	InputSchema              *SchemaRef     `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
-	OutputSchema             *SchemaRef     `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
-	OutputKey                string         `json:"output_key,omitempty" yaml:"output_key,omitempty"`
-	IncludeContents          string         `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
-	Tools                    []ToolRef      `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Skillsets                []SkillsetRef  `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
-	GenerateConfig           map[string]any `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
-	DisallowTransferToParent bool           `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
-	DisallowTransferToPeers  bool           `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
-	BeforeModelCallbacks     []CodeConfig   `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
-	AfterModelCallbacks      []CodeConfig   `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
-	OnModelErrorCallbacks    []CodeConfig   `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
-	BeforeToolCallbacks      []CodeConfig   `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
-	AfterToolCallbacks       []CodeConfig   `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
-	OnToolErrorCallbacks     []CodeConfig   `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
-	BeforeAgentCallbacks     []CodeConfig   `json:"before_agent_callbacks,omitempty" yaml:"before_agent_callbacks,omitempty"`
-	AfterAgentCallbacks      []CodeConfig   `json:"after_agent_callbacks,omitempty" yaml:"after_agent_callbacks,omitempty"`
+	Model                    string              `json:"model,omitempty" yaml:"model,omitempty"`
+	ModelCode                *CodeConfig         `json:"model_code,omitempty" yaml:"model_code,omitempty"`
+	Instruction              string              `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	InstructionTemplate      *prompt.TemplateRef `json:"instruction_template,omitempty" yaml:"instruction_template,omitempty"`
+	StaticInstruction        string              `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
+	InputSchema              *SchemaRef          `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
+	OutputSchema             *SchemaRef          `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
+	OutputKey                string              `json:"output_key,omitempty" yaml:"output_key,omitempty"`
+	IncludeContents          string              `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
+	Tools                    []ToolRef           `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Skillsets                []SkillsetRef       `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
+	GenerateConfig           map[string]any      `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
+	DisallowTransferToParent bool                `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
+	DisallowTransferToPeers  bool                `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
+	BeforeModelCallbacks     []CodeConfig        `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
+	AfterModelCallbacks      []CodeConfig        `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
+	OnModelErrorCallbacks    []CodeConfig        `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
+	BeforeToolCallbacks      []CodeConfig        `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
+	AfterToolCallbacks       []CodeConfig        `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
+	OnToolErrorCallbacks     []CodeConfig        `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
+	BeforeAgentCallbacks     []CodeConfig        `json:"before_agent_callbacks,omitempty" yaml:"before_agent_callbacks,omitempty"`
+	AfterAgentCallbacks      []CodeConfig        `json:"after_agent_callbacks,omitempty" yaml:"after_agent_callbacks,omitempty"`
 
 	// Loop-only fields
 	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
@@ -592,6 +595,7 @@ func toAgentConfig(raw rawAgentConfig) (AgentConfig, error) {
 			Model:                    raw.Model,
 			ModelCode:                raw.ModelCode,
 			Instruction:              raw.Instruction,
+			InstructionTemplate:      raw.InstructionTemplate,
 			StaticInstruction:        raw.StaticInstruction,
 			InputSchema:              raw.InputSchema,
 			OutputSchema:             raw.OutputSchema,
@@ -691,6 +695,9 @@ func validateNoLLMFields(raw rawAgentConfig, typ string) error {
 	}
 	if raw.Instruction != "" {
 		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "instruction")
+	}
+	if raw.InstructionTemplate != nil && raw.InstructionTemplate.IsSet() {
+		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "instruction_template")
 	}
 	if len(raw.Tools) > 0 {
 		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "tools")

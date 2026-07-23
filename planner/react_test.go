@@ -2,9 +2,11 @@ package planner_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/planner"
+	"github.com/ieshan/adk-go-pkg/prompt"
 	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
@@ -166,6 +168,54 @@ func TestPlanReAct_EmptyToolDescriptions(t *testing.T) {
 	}
 	if plan.Reasoning == "" {
 		t.Error("expected non-empty Reasoning")
+	}
+}
+
+// TestPlanReAct_PlanInstructionTemplate verifies that when a
+// PlanInstructionTemplate is set, the rendered system instruction includes
+// the template data (tools, userMessage, instruction).
+func TestPlanReAct_PlanInstructionTemplate(t *testing.T) {
+	engine := prompt.New()
+	tmpl := engine.MustParse("test-plan-instruction", "Tools: {{.Input.tools}}\nUser: {{.Input.userMessage}}\nInstr: {{.Input.instruction}}")
+
+	llm := testutil.NewFakeLLM(testutil.NewTextResponse(threeStepJSON))
+	p := planner.NewPlanReAct(planner.PlanReActConfig{
+		Model:                   llm,
+		MaxSteps:                10,
+		PlanInstructionTemplate: tmpl,
+	})
+
+	_, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "Fetch news and email me.",
+		Instruction: "Be helpful.",
+		ToolDescriptions: []planner.ToolDescription{
+			{Name: "fetch_news", Description: "Fetches news headlines."},
+			{Name: "send_email", Description: "Sends an email."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+
+	lastCall := llm.LastCall()
+	if lastCall == nil {
+		t.Fatal("expected FakeLLM to record the request, got nil")
+	}
+	if lastCall.Config == nil || lastCall.Config.SystemInstruction == nil {
+		t.Fatal("expected system instruction in LLM request")
+	}
+	sysInst := ""
+	for _, part := range lastCall.Config.SystemInstruction.Parts {
+		sysInst += part.Text
+	}
+	if !strings.Contains(sysInst, "Tools:") {
+		t.Errorf("expected 'Tools:' in system instruction, got:\n%s", sysInst)
+	}
+	if !strings.Contains(sysInst, "Fetch news and email me.") {
+		t.Errorf("expected user message in system instruction, got:\n%s", sysInst)
+	}
+	if !strings.Contains(sysInst, "Be helpful.") {
+		t.Errorf("expected instruction in system instruction, got:\n%s", sysInst)
 	}
 }
 
