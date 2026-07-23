@@ -10,8 +10,11 @@ import (
 type EvalStatus string
 
 const (
-	EvalStatusPassed       EvalStatus = "PASSED"
-	EvalStatusFailed       EvalStatus = "FAILED"
+	// EvalStatusPassed indicates the evaluation passed.
+	EvalStatusPassed EvalStatus = "PASSED"
+	// EvalStatusFailed indicates the evaluation failed.
+	EvalStatusFailed EvalStatus = "FAILED"
+	// EvalStatusNotEvaluated indicates the metric was not evaluated.
 	EvalStatusNotEvaluated EvalStatus = "NOT_EVALUATED"
 )
 
@@ -65,8 +68,11 @@ const (
 type MatchType string
 
 const (
-	MatchExact    MatchType = "EXACT"
-	MatchInOrder  MatchType = "IN_ORDER"
+	// MatchExact requires exact tool name and argument match.
+	MatchExact MatchType = "EXACT"
+	// MatchInOrder requires tools to be called in the same order.
+	MatchInOrder MatchType = "IN_ORDER"
+	// MatchAnyOrder requires the same tools regardless of order.
 	MatchAnyOrder MatchType = "ANY_ORDER"
 )
 

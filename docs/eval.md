@@ -813,4 +813,4 @@ resultsMgr := eval.NewLocalEvalSetResultsManager("./agents")
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func
 - **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`)
-- **GenAI v1.64.0** (`google.golang.org/genai`)
+- **GenAI v1.65.0** (`google.golang.org/genai`)

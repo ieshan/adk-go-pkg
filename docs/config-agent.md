@@ -45,10 +45,11 @@ type BaseAgentConfig struct {
 ```go
 type LLMAgentConfig struct {
     BaseAgentConfig
-    Model                    string         // Model ref: "prefix/model-id".
-    ModelCode                *CodeConfig    // Registered model factory reference.
-    Instruction              string         // System prompt.
-    StaticInstruction        string         // Global instruction for all agents in tree.
+    Model                    string              // Model ref: "prefix/model-id".
+    ModelCode                *CodeConfig         // Registered model factory reference.
+    Instruction              string              // Static system prompt.
+    InstructionTemplate      *prompt.TemplateRef // Dynamic instruction via template (takes precedence over Instruction).
+    StaticInstruction        string              // Global instruction for all agents in tree.
     InputSchema              *SchemaRef     // Registered input schema reference.
     OutputSchema             *SchemaRef     // Registered output schema reference.
     OutputKey                string         // Session state key for agent output.
@@ -148,7 +149,7 @@ type ToolRef struct {
 
 | Config `agent_class` | Go `Type()` | ADK Agent | Description | Valid Fields |
 |----------------------|-------------|-----------|-------------|--------------|
-| `LlmAgent` | `llm` | `llmagent.New` | LLM-backed agent with model, tools, and instruction. | All BaseAgentConfig fields, Model, ModelCode, Instruction, StaticInstruction, InputSchema, OutputSchema, OutputKey, IncludeContents, Tools, Skillsets, GenerateConfig, DisallowTransferToParent, DisallowTransferToPeers, BeforeModelCallbacks, AfterModelCallbacks, OnModelErrorCallbacks, BeforeToolCallbacks, AfterToolCallbacks, OnToolErrorCallbacks |
+| `LlmAgent` | `llm` | `llmagent.New` | LLM-backed agent with model, tools, and instruction. | All BaseAgentConfig fields, Model, ModelCode, Instruction, InstructionTemplate, StaticInstruction, InputSchema, OutputSchema, OutputKey, IncludeContents, Tools, Skillsets, GenerateConfig, DisallowTransferToParent, DisallowTransferToPeers, BeforeModelCallbacks, AfterModelCallbacks, OnModelErrorCallbacks, BeforeToolCallbacks, AfterToolCallbacks, OnToolErrorCallbacks |
 | `SequentialAgent` | `sequential` | `sequentialagent.New` | Runs sub-agents one after another. | BaseAgentConfig fields |
 | `ParallelAgent` | `parallel` | `parallelagent.New` | Runs sub-agents concurrently. | BaseAgentConfig fields |
 | `LoopAgent` | `loop` | `loopagent.New` | Runs sub-agents in a loop up to `MaxIterations`. | BaseAgentConfig fields, MaxIterations |
@@ -166,6 +167,12 @@ The `Registry` maps model prefixes, tool names, skill sources, callbacks, model 
 
 ```go
 reg := config.NewRegistry()
+
+// Register a prompt template registry for named instruction templates.
+engine := prompt.New()
+tmplReg := prompt.NewRegistry(engine)
+tmplReg.Register("greeting", "Hello from {{.Agent.Name}}.")
+reg.RegisterTemplateRegistry(tmplReg)
 
 // Register a model factory for the "openai" prefix.
 // When the config says model: "openai/gpt-4o", this factory is called
@@ -252,6 +259,7 @@ The Registry provides typed registration and resolution for all callback types:
 | `RegisterAfterAgentCallback` | `ResolveAfterAgentCallback` | `agent.AfterAgentCallback` |
 | `RegisterModelCode` | `ResolveModelCode` | `ModelCodeFactory` |
 | `RegisterAgent` | `ResolveAgent` | `agent.Agent` |
+| `RegisterTemplateRegistry` | `TemplateRegistry` | `*prompt.TemplateRegistry` |
 
 ## Skillsets
 
@@ -338,6 +346,60 @@ reg.RegisterSkill("s3", func(cfg map[string]any) (skill.Source, error) {
     // Create S3-based skill source...
     return s3Source, nil
 })
+```
+
+## Instruction Templates
+
+The `InstructionTemplate` field on `LLMAgentConfig` enables dynamic, template-based
+instructions using the `prompt` package. It accepts a `prompt.TemplateRef` which
+can reference a template by name, inline text, or file path.
+
+When `InstructionTemplate` is set, it takes precedence over the static `Instruction`
+field. The builder resolves the template using the registry's `TemplateRegistry`
+(if registered) or a default `prompt.New()` engine, then wraps it as an
+`llmagent.InstructionProvider` via `prompt.NewInstructionProviderFromTemplate`.
+
+See [Prompt Templating](prompt.md) for template syntax, available data fields,
+and built-in functions.
+
+### Registering a Template Registry
+
+```go
+reg := config.NewRegistry()
+
+engine := prompt.New()
+tmplReg := prompt.NewRegistry(engine)
+tmplReg.Register("greeting", "Hello from {{.Agent.Name}}.")
+reg.RegisterTemplateRegistry(tmplReg)
+```
+
+### YAML Examples
+
+**Inline template:**
+```yaml
+name: my-agent
+agent_class: LlmAgent
+model: openai/gpt-4o
+instruction_template:
+  inline: "You are {{.Agent.Name}}. User: {{.User.Text}}"
+```
+
+**Named template (requires registered TemplateRegistry):**
+```yaml
+name: my-agent
+agent_class: LlmAgent
+model: openai/gpt-4o
+instruction_template:
+  name: "greeting"
+```
+
+**File-based template:**
+```yaml
+name: my-agent
+agent_class: LlmAgent
+model: openai/gpt-4o
+instruction_template:
+  path: "prompts/system.tmpl"
 ```
 
 ## Loading and Building
@@ -438,6 +500,11 @@ name: root-agent
 agent_class: LlmAgent
 model: openai/gpt-4o
 instruction: "You are a helpful assistant."
+# Optional: use a template instead of a static instruction
+# instruction_template:
+#   inline: "You are {{.Agent.Name}}. User: {{.User.Text}}"
+#   # or by name: name: "greeting"
+#   # or from file: path: "prompts/system.tmpl"
 static_instruction: "All agents in this tree are professional and concise."
 output_key: result
 include_contents: default
@@ -464,6 +531,7 @@ generate_content_config:
   "agent_class": "LlmAgent",
   "model": "openai/gpt-4o",
   "instruction": "You are a helpful assistant.",
+  "instruction_template": {"inline": "You are {{.Agent.Name}}."},
   "disallow_transfer_to_parent": true,
   "disallow_transfer_to_peers": true,
   "tools": [

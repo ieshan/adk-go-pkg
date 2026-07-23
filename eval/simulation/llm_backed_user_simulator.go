@@ -77,6 +77,7 @@ func NewLlmBackedUserSimulator(
 	}
 }
 
+// GetNextUserMessage generates the next user message using the LLM.
 func (s *LlmBackedUserSimulator) GetNextUserMessage(ctx context.Context, events []*session.Event) (*eval.NextUserMessage, error) {
 	// First invocation: return starting prompt.
 	if s.invocationCount == 0 && s.conversationScenario != nil && s.conversationScenario.StartingPrompt != "" {
@@ -175,6 +176,7 @@ func (s *LlmBackedUserSimulator) GetNextUserMessage(ctx context.Context, events 
 	}, nil
 }
 
+// GetSimulationEvaluator returns an evaluator for the simulator's output.
 func (s *LlmBackedUserSimulator) GetSimulationEvaluator() (eval.Evaluator, error) {
 	return nil, ErrSimulationEvaluatorNotImplemented
 }

@@ -17,6 +17,7 @@ out of the box.
 | **Anthropic Model Provider** | Drop-in `model.LLM` adapter for Anthropic's Messages API and compatible providers (Claude, Amazon Bedrock, Google Vertex AI). Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. |
 | **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management (RFC 6902 JSON Patch via `evanphx/json-patch`), predictive state tracker, tool orchestration, middleware, encrypted-value scrubbing, and SSE handler. Zero ADK dependency. |
 | **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, streaming tool calls, client tool hand-back (NextRun + Inline), HITL runstore & resume, tool call validation, activity snapshots, suppressed tool mode, and preset configurations. |
+| **Prompt Templating** | `text/template`-based prompt rendering engine with agent context data (state, user, session, artifacts, memory), 13 built-in functions, template registry, loader (files/embed.FS), and `llmagent.InstructionProvider` integration. |
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
 | **File Artifact Service** | Filesystem-backed `artifact.Service` with automatic versioning and metadata sidecars. |
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
@@ -209,6 +210,45 @@ func main() {
 ```
 
 [Detailed docs &rarr;](docs/aguiadk-bridge.md)
+
+### Prompt Templating
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/ieshan/adk-go-pkg/prompt"
+)
+
+func main() {
+	engine := prompt.New()
+	tmpl, err := engine.Parse("greeting", "Hello {{.Input.name}}!")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	data := prompt.BuildData(map[string]any{"name": "world"})
+	rendered, err := tmpl.Execute(data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(rendered)
+}
+```
+
+For `llmagent.InstructionProvider` integration:
+
+```go
+provider, err := prompt.NewInstructionProvider(
+	"You are {{.Agent.Name}}. User: {{.User.Text}}. Country: {{.State.Get \"country\"}}",
+)
+// Pass to llmagent.Config{InstructionProvider: provider}
+```
+
+[Detailed docs &rarr;](docs/prompt.md)
 
 ### Planners
 
@@ -561,10 +601,11 @@ For ADK-Go native integration, use `aguiadk.BuildMCPServerToolsets` to create `m
 
 - **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
 - **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`) — Required for Agent Skills support
-- **GenAI v1.64.0** (`google.golang.org/genai`)
+- **GenAI v1.65.0** (`google.golang.org/genai`)
 
 ## Recent Changes
 
+- **Prompt Templating**: New `prompt` package with `text/template`-based rendering engine, agent context data (state, user, session, artifacts, memory), 13 built-in functions, thread-safe `TemplateRegistry`, `TemplateLoader` (files/embed.FS), `TemplateRef` tagged union, and `llmagent.InstructionProvider` integration. Config loader supports `InstructionTemplate` field for declarative templated instructions. See [docs/prompt.md](docs/prompt.md).
 - **AG-UI ADK Bridge Gap Fix**: Closed all 10 AG-UI protocol feature gaps between the `agui`/`aguiadk` packages and the AG-UI example server. New features: disconnect cancellation, client tool hand-back (NextRun + Inline modes via `ClientToolset`), streaming tool calls (progressive `TOOL_CALL_*` from partial `FunctionCall` parts), HITL runstore & resume (`RunStore` with TTL, atomic claim, approval interrupts), tool call validation (synthetic IDs, error `TOOL_CALL_RESULT` for malformed calls), suppressed tool mode (`Config.SuppressToolEvents` + `Config.ToolToStateMapper` emits `STATE_DELTA` instead of `TOOL_CALL_*`), predictive state tracker (`agui.PredictiveStateTracker` for ghosted `/_predictive` deltas), activity snapshots (`tool_use` and `approval_request`), encrypted value scrubbing in `MessagesSnapshot`, and preset configurations (`AgenticChatPreset`, `HumanInTheLoopPreset`, `GenerativeUIPreset`, `SharedStatePreset`, `InlineToolsPreset`). `StateManager.Apply` now uses `evanphx/json-patch/v5` for RFC 6902 compliance. See [docs/aguiadk-bridge.md](docs/aguiadk-bridge.md).
 - **Evaluation Framework**: New `eval` package with eval sets, 13 built-in metrics, LLM-as-judge evaluators, user simulation, and local eval service. Mirrors ADK Python eval package. See [docs/eval.md](docs/eval.md).
 - **Anthropic Model Provider**: Drop-in `model.LLM` adapter for Anthropic's Messages API. Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. See [docs/anthropic-model.md](docs/anthropic-model.md).

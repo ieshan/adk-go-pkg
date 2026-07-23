@@ -107,28 +107,46 @@ type LLMAgentConfig struct {
 	OnToolErrorCallbacks     []CodeConfig        `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
 }
 
-func (c *LLMAgentConfig) Name() string        { return c.BaseAgentConfig.Name }
+// Name returns the agent name.
+func (c *LLMAgentConfig) Name() string { return c.BaseAgentConfig.Name }
+
+// Description returns the agent description.
 func (c *LLMAgentConfig) Description() string { return c.BaseAgentConfig.Description }
+
+// SubAgents returns the inline sub-agent configs.
 func (c *LLMAgentConfig) SubAgents() []AgentConfig {
 	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
 }
+
+// SubAgentEntries returns the sub-agent entries for the LLM agent.
 func (c *LLMAgentConfig) SubAgentEntries() []SubAgentEntry { return c.BaseAgentConfig.SubAgentEntries }
-func (*LLMAgentConfig) Type() string                       { return "llm" }
-func (*LLMAgentConfig) isAgentConfig()                     {}
+
+// Type returns the agent type identifier.
+func (*LLMAgentConfig) Type() string   { return "llm" }
+func (*LLMAgentConfig) isAgentConfig() {}
 
 // SequentialAgentConfig is the typed config for "sequential" agents.
 type SequentialAgentConfig struct {
 	BaseAgentConfig `json:",inline" yaml:",inline"`
 }
 
-func (c *SequentialAgentConfig) Name() string        { return c.BaseAgentConfig.Name }
+// Name returns the agent name.
+func (c *SequentialAgentConfig) Name() string { return c.BaseAgentConfig.Name }
+
+// Description returns the agent description.
 func (c *SequentialAgentConfig) Description() string { return c.BaseAgentConfig.Description }
+
+// SubAgents returns the inline sub-agent configs.
 func (c *SequentialAgentConfig) SubAgents() []AgentConfig {
 	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
 }
+
+// SubAgentEntries returns the sub-agent entries for the sequential agent.
 func (c *SequentialAgentConfig) SubAgentEntries() []SubAgentEntry {
 	return c.BaseAgentConfig.SubAgentEntries
 }
+
+// Type returns the agent type identifier.
 func (*SequentialAgentConfig) Type() string   { return "sequential" }
 func (*SequentialAgentConfig) isAgentConfig() {}
 
@@ -137,14 +155,23 @@ type ParallelAgentConfig struct {
 	BaseAgentConfig `json:",inline" yaml:",inline"`
 }
 
-func (c *ParallelAgentConfig) Name() string        { return c.BaseAgentConfig.Name }
+// Name returns the agent name.
+func (c *ParallelAgentConfig) Name() string { return c.BaseAgentConfig.Name }
+
+// Description returns the agent description.
 func (c *ParallelAgentConfig) Description() string { return c.BaseAgentConfig.Description }
+
+// SubAgents returns the inline sub-agent configs.
 func (c *ParallelAgentConfig) SubAgents() []AgentConfig {
 	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
 }
+
+// SubAgentEntries returns the sub-agent entries for the parallel agent.
 func (c *ParallelAgentConfig) SubAgentEntries() []SubAgentEntry {
 	return c.BaseAgentConfig.SubAgentEntries
 }
+
+// Type returns the agent type identifier.
 func (*ParallelAgentConfig) Type() string   { return "parallel" }
 func (*ParallelAgentConfig) isAgentConfig() {}
 
@@ -154,14 +181,23 @@ type LoopAgentConfig struct {
 	MaxIterations   int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
 }
 
-func (c *LoopAgentConfig) Name() string        { return c.BaseAgentConfig.Name }
+// Name returns the agent name.
+func (c *LoopAgentConfig) Name() string { return c.BaseAgentConfig.Name }
+
+// Description returns the agent description.
 func (c *LoopAgentConfig) Description() string { return c.BaseAgentConfig.Description }
+
+// SubAgents returns the inline sub-agent configs.
 func (c *LoopAgentConfig) SubAgents() []AgentConfig {
 	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
 }
+
+// SubAgentEntries returns the sub-agent entries for the loop agent.
 func (c *LoopAgentConfig) SubAgentEntries() []SubAgentEntry { return c.BaseAgentConfig.SubAgentEntries }
-func (*LoopAgentConfig) Type() string                       { return "loop" }
-func (*LoopAgentConfig) isAgentConfig()                     {}
+
+// Type returns the agent type identifier.
+func (*LoopAgentConfig) Type() string   { return "loop" }
+func (*LoopAgentConfig) isAgentConfig() {}
 
 func inlineSubAgents(entries []SubAgentEntry) []AgentConfig {
 	var agents []AgentConfig
@@ -411,8 +447,11 @@ type SubAgentEntry struct {
 type StreamingMode string
 
 const (
+	// StreamingModeNone disables streaming.
 	StreamingModeNone StreamingMode = "none"
-	StreamingModeSSE  StreamingMode = "sse"
+	// StreamingModeSSE enables server-sent events streaming.
+	StreamingModeSSE StreamingMode = "sse"
+	// StreamingModeBIDI enables bidirectional streaming.
 	StreamingModeBIDI StreamingMode = "bidi"
 )
 

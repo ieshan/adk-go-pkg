@@ -3,6 +3,7 @@ package eval
 // TrajectoryEvaluatorMetricInfoProvider provides metric info for TrajectoryEvaluator.
 type TrajectoryEvaluatorMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the tool trajectory average score metric.
 func (TrajectoryEvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(ToolTrajectoryAvgScore),
@@ -18,6 +19,7 @@ type ResponseEvaluatorMetricInfoProvider struct {
 	metricName string
 }
 
+// GetMetricInfo returns the metric info for the response evaluation metric.
 func (p ResponseEvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	if p.metricName == string(ResponseEvaluationScore) {
 		return MetricInfo{
@@ -40,6 +42,7 @@ func (p ResponseEvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 // SafetyEvaluatorV1MetricInfoProvider provides metric info for SafetyEvaluatorV1.
 type SafetyEvaluatorV1MetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the safety v1 metric.
 func (SafetyEvaluatorV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(SafetyV1),
@@ -53,6 +56,7 @@ func (SafetyEvaluatorV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 // MultiTurnTaskSuccessV1MetricInfoProvider provides metric info for MultiTurnTaskSuccessV1.
 type MultiTurnTaskSuccessV1MetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the multi-turn task success v1 metric.
 func (MultiTurnTaskSuccessV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(MultiTurnTaskSuccessV1),
@@ -66,6 +70,7 @@ func (MultiTurnTaskSuccessV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 // MultiTurnTrajectoryQualityV1MetricInfoProvider provides metric info for MultiTurnTrajectoryQualityV1.
 type MultiTurnTrajectoryQualityV1MetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the multi-turn trajectory quality v1 metric.
 func (MultiTurnTrajectoryQualityV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(MultiTurnTrajectoryQualityV1),
@@ -79,6 +84,7 @@ func (MultiTurnTrajectoryQualityV1MetricInfoProvider) GetMetricInfo() MetricInfo
 // MultiTurnToolUseQualityV1MetricInfoProvider provides metric info for MultiTurnToolUseQualityV1.
 type MultiTurnToolUseQualityV1MetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the multi-turn tool use quality v1 metric.
 func (MultiTurnToolUseQualityV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(MultiTurnToolUseQualityV1),
@@ -92,6 +98,7 @@ func (MultiTurnToolUseQualityV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 // FinalResponseMatchV2EvaluatorMetricInfoProvider provides metric info for FinalResponseMatchV2Evaluator.
 type FinalResponseMatchV2EvaluatorMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the final response match v2 metric.
 func (FinalResponseMatchV2EvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(FinalResponseMatchV2),
@@ -105,6 +112,7 @@ func (FinalResponseMatchV2EvaluatorMetricInfoProvider) GetMetricInfo() MetricInf
 // RubricBasedFinalResponseQualityV1EvaluatorMetricInfoProvider provides metric info.
 type RubricBasedFinalResponseQualityV1EvaluatorMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the rubric-based final response quality v1 metric.
 func (RubricBasedFinalResponseQualityV1EvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(RubricBasedFinalResponseQualityV1),
@@ -118,6 +126,7 @@ func (RubricBasedFinalResponseQualityV1EvaluatorMetricInfoProvider) GetMetricInf
 // HallucinationsV1EvaluatorMetricInfoProvider provides metric info for HallucinationsV1Evaluator.
 type HallucinationsV1EvaluatorMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the hallucinations v1 metric.
 func (HallucinationsV1EvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(HallucinationsV1),
@@ -131,6 +140,7 @@ func (HallucinationsV1EvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 // RubricBasedToolUseQualityV1EvaluatorMetricInfoProvider provides metric info.
 type RubricBasedToolUseQualityV1EvaluatorMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the rubric-based tool use quality v1 metric.
 func (RubricBasedToolUseQualityV1EvaluatorMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(RubricBasedToolUseQualityV1),
@@ -144,6 +154,7 @@ func (RubricBasedToolUseQualityV1EvaluatorMetricInfoProvider) GetMetricInfo() Me
 // PerTurnUserSimulatorQualityV1MetricInfoProvider provides metric info.
 type PerTurnUserSimulatorQualityV1MetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the per-turn user simulator quality v1 metric.
 func (PerTurnUserSimulatorQualityV1MetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(PerTurnUserSimulatorQualityV1),
@@ -157,6 +168,7 @@ func (PerTurnUserSimulatorQualityV1MetricInfoProvider) GetMetricInfo() MetricInf
 // RubricBasedMultiTurnTrajectoryMetricInfoProvider provides metric info.
 type RubricBasedMultiTurnTrajectoryMetricInfoProvider struct{}
 
+// GetMetricInfo returns the metric info for the rubric-based multi-turn trajectory metric.
 func (RubricBasedMultiTurnTrajectoryMetricInfoProvider) GetMetricInfo() MetricInfo {
 	return MetricInfo{
 		MetricName:  string(RubricBasedMultiTurnTrajectoryQualityV1),

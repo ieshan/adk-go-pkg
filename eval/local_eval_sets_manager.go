@@ -37,6 +37,7 @@ func (m *LocalEvalSetsManager) validateAndPath(appName, evalSetID string) (strin
 	return m.evalSetPath(appName, evalSetID), nil
 }
 
+// GetEvalSet loads the eval set from a .evalset.json file on disk.
 func (m *LocalEvalSetsManager) GetEvalSet(ctx context.Context, appName, evalSetID string) (*EvalSet, error) {
 	path, err := m.validateAndPath(appName, evalSetID)
 	if err != nil {
@@ -45,6 +46,7 @@ func (m *LocalEvalSetsManager) GetEvalSet(ctx context.Context, appName, evalSetI
 	return LoadEvalSetFromFile(path)
 }
 
+// CreateEvalSet creates a new empty eval set file on disk.
 func (m *LocalEvalSetsManager) CreateEvalSet(ctx context.Context, appName, evalSetID string) (*EvalSet, error) {
 	path, err := m.validateAndPath(appName, evalSetID)
 	if err != nil {
@@ -60,6 +62,7 @@ func (m *LocalEvalSetsManager) CreateEvalSet(ctx context.Context, appName, evalS
 	return evalSet, nil
 }
 
+// ListEvalSets returns the IDs of all .evalset.json files in the app's eval directory.
 func (m *LocalEvalSetsManager) ListEvalSets(ctx context.Context, appName string) ([]string, error) {
 	if err := ValidatePathSegment(appName, "appName"); err != nil {
 		return nil, err
@@ -86,6 +89,7 @@ func (m *LocalEvalSetsManager) ListEvalSets(ctx context.Context, appName string)
 	return result, nil
 }
 
+// GetEvalCase returns a specific eval case from an eval set on disk.
 func (m *LocalEvalSetsManager) GetEvalCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error) {
 	evalSet, err := m.GetEvalSet(ctx, appName, evalSetID)
 	if err != nil {
@@ -98,6 +102,7 @@ func (m *LocalEvalSetsManager) GetEvalCase(ctx context.Context, appName, evalSet
 	return ec, nil
 }
 
+// AddEvalCase adds a new eval case to an eval set file on disk.
 func (m *LocalEvalSetsManager) AddEvalCase(ctx context.Context, appName, evalSetID string, evalCase EvalCase) error {
 	path, err := m.validateAndPath(appName, evalSetID)
 	if err != nil {
@@ -114,6 +119,7 @@ func (m *LocalEvalSetsManager) AddEvalCase(ctx context.Context, appName, evalSet
 	return m.saveEvalSet(path, updated)
 }
 
+// UpdateEvalCase updates an existing eval case in an eval set file on disk.
 func (m *LocalEvalSetsManager) UpdateEvalCase(ctx context.Context, appName, evalSetID string, evalCase EvalCase) error {
 	path, err := m.validateAndPath(appName, evalSetID)
 	if err != nil {
@@ -130,6 +136,7 @@ func (m *LocalEvalSetsManager) UpdateEvalCase(ctx context.Context, appName, eval
 	return m.saveEvalSet(path, updated)
 }
 
+// DeleteEvalCase removes an eval case from an eval set file on disk.
 func (m *LocalEvalSetsManager) DeleteEvalCase(ctx context.Context, appName, evalSetID, evalCaseID string) error {
 	path, err := m.validateAndPath(appName, evalSetID)
 	if err != nil {

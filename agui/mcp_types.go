@@ -8,7 +8,8 @@ const (
 	maxToolNameLength    = 64
 	mcpToolNamePrefix    = "mcp"
 	defaultMaxIterations = 32
-	MCPAppsActivityType  = "mcp-apps"
+	// MCPAppsActivityType is the activity type for MCP app events.
+	MCPAppsActivityType = "mcp-apps"
 )
 
 // MCPClientConfig describes a single MCP server connection.

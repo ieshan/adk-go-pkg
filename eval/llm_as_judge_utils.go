@@ -11,12 +11,19 @@ import (
 type Label string
 
 const (
-	LabelValid          Label = "valid"
-	LabelInvalid        Label = "invalid"
-	LabelAlmost         Label = "almost"
-	LabelTrue           Label = "true"
-	LabelFalse          Label = "false"
-	LabelNotFound       Label = "not_found"
+	// LabelValid indicates the auto-rater response is valid.
+	LabelValid Label = "valid"
+	// LabelInvalid indicates the auto-rater response is invalid.
+	LabelInvalid Label = "invalid"
+	// LabelAlmost indicates the auto-rater response is almost valid.
+	LabelAlmost Label = "almost"
+	// LabelTrue indicates a true label.
+	LabelTrue Label = "true"
+	// LabelFalse indicates a false label.
+	LabelFalse Label = "false"
+	// LabelNotFound indicates the label was not found.
+	LabelNotFound Label = "not_found"
+	// LabelPartiallyValid indicates the auto-rater response is partially valid.
 	LabelPartiallyValid Label = "partially_valid"
 )
 

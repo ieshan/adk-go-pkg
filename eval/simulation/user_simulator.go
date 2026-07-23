@@ -1,5 +1,3 @@
-// Package simulation provides user simulator implementations for generating
-// user interactions during evaluation.
 package simulation
 
 import (

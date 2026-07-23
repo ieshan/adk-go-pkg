@@ -28,6 +28,7 @@ func (m *LocalEvalSetResultsManager) resultPath(appName, resultID string) string
 	return filepath.Join(m.resultsDir(appName), resultID+".evalset_result.json")
 }
 
+// SaveEvalSetResult writes eval set results to a .evalset_result.json file on disk.
 func (m *LocalEvalSetResultsManager) SaveEvalSetResult(ctx context.Context, appName, evalSetID string, results []EvalCaseResult) error {
 	if err := ValidatePathSegment(appName, "appName"); err != nil {
 		return err
@@ -48,6 +49,7 @@ func (m *LocalEvalSetResultsManager) SaveEvalSetResult(ctx context.Context, appN
 	return nil
 }
 
+// GetEvalSetResult loads an eval set result from a .evalset_result.json file on disk.
 func (m *LocalEvalSetResultsManager) GetEvalSetResult(ctx context.Context, appName, evalSetResultID string) (*EvalSetResult, error) {
 	if err := ValidatePathSegment(appName, "appName"); err != nil {
 		return nil, err
@@ -66,6 +68,7 @@ func (m *LocalEvalSetResultsManager) GetEvalSetResult(ctx context.Context, appNa
 	return ParseEvalSetResultJSON(data)
 }
 
+// ListEvalSetResults returns the IDs of all .evalset_result.json files for the given app.
 func (m *LocalEvalSetResultsManager) ListEvalSetResults(ctx context.Context, appName string) ([]string, error) {
 	if err := ValidatePathSegment(appName, "appName"); err != nil {
 		return nil, err

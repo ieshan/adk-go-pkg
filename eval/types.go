@@ -109,7 +109,7 @@ func (i *InvocationEventsData) GetToolUses() []genai.FunctionCall { return nil }
 // GetToolResponses returns nil for events format.
 func (i *InvocationEventsData) GetToolResponses() []genai.FunctionResponse { return nil }
 
-// MarshalJSON implements custom JSON marshaling for IntermediateData.
+// MarshalIntermediateData implements custom JSON marshaling for IntermediateData.
 // It detects the concrete type and marshals accordingly.
 func MarshalIntermediateData(data IntermediateData) ([]byte, error) {
 	switch v := data.(type) {

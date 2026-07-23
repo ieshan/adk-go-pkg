@@ -44,8 +44,11 @@ type InferenceRequest struct {
 type InferenceStatus string
 
 const (
+	// InferenceStatusUnknown indicates the inference status is unknown.
 	InferenceStatusUnknown InferenceStatus = "unknown"
+	// InferenceStatusSuccess indicates inference completed successfully.
 	InferenceStatusSuccess InferenceStatus = "success"
+	// InferenceStatusFailure indicates inference failed.
 	InferenceStatusFailure InferenceStatus = "failure"
 )
 

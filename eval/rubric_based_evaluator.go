@@ -66,6 +66,7 @@ func extractFirstGroup(re *regexp.Regexp, s string) []string {
 	return results
 }
 
+// Parse extracts rubric responses from the auto-rater's text output.
 func (DefaultAutoRaterResponseParser) Parse(response string) ([]RubricResponse, error) {
 	properties := extractFirstGroup(propertyPattern, response)
 	rationales := extractFirstGroup(rationalePattern, response)
@@ -104,6 +105,7 @@ func (DefaultAutoRaterResponseParser) Parse(response string) ([]RubricResponse, 
 // MajorityVotePerInvocationResultsAggregator aggregates using majority vote.
 type MajorityVotePerInvocationResultsAggregator struct{}
 
+// Aggregate combines multiple per-invocation samples using majority vote.
 func (MajorityVotePerInvocationResultsAggregator) Aggregate(samples []PerInvocationResult, threshold *float64) PerInvocationResult {
 	type buckets struct {
 		noScores  []RubricScore
@@ -158,6 +160,7 @@ func (MajorityVotePerInvocationResultsAggregator) Aggregate(samples []PerInvocat
 // MeanInvocationResultsSummarizer summarizes using mean score.
 type MeanInvocationResultsSummarizer struct{}
 
+// Summarize computes the mean score across per-invocation results.
 func (MeanInvocationResultsSummarizer) Summarize(perInvocation []PerInvocationResult, threshold *float64) EvaluationResult {
 	rubricScoresByID := make(map[string][]RubricScore)
 	var allScores []RubricScore

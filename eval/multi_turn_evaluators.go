@@ -16,9 +16,8 @@ func NewMultiTurnTaskSuccessV1Evaluator(evalMetric EvalMetric) *MultiTurnTaskSuc
 	return &MultiTurnTaskSuccessV1Evaluator{evalMetric: evalMetric}
 }
 
-// EvaluateInvocations returns NOT_EVALUATED for all invocations.
-// Only the last turn is considered; prior turns are marked NOT_EVALUATED.
-// Vertex AI is not supported in this package.
+// EvaluateInvocations returns NOT_EVALUATED for all invocations because
+// Vertex AI multi-turn evaluators are not supported in this package.
 func (e *MultiTurnTaskSuccessV1Evaluator) EvaluateInvocations(
 	ctx context.Context,
 	actualInvocations []Invocation,
@@ -40,9 +39,8 @@ func NewMultiTurnTrajectoryQualityV1Evaluator(evalMetric EvalMetric) *MultiTurnT
 	return &MultiTurnTrajectoryQualityV1Evaluator{evalMetric: evalMetric}
 }
 
-// EvaluateInvocations returns NOT_EVALUATED for all invocations.
-// Only the last turn is considered; prior turns are marked NOT_EVALUATED.
-// Vertex AI is not supported in this package.
+// EvaluateInvocations returns NOT_EVALUATED for all invocations because
+// Vertex AI multi-turn evaluators are not supported in this package.
 func (e *MultiTurnTrajectoryQualityV1Evaluator) EvaluateInvocations(
 	ctx context.Context,
 	actualInvocations []Invocation,
@@ -64,9 +62,8 @@ func NewMultiTurnToolUseQualityV1Evaluator(evalMetric EvalMetric) *MultiTurnTool
 	return &MultiTurnToolUseQualityV1Evaluator{evalMetric: evalMetric}
 }
 
-// EvaluateInvocations returns NOT_EVALUATED for all invocations.
-// Only the last turn is considered; prior turns are marked NOT_EVALUATED.
-// Vertex AI is not supported in this package.
+// EvaluateInvocations returns NOT_EVALUATED for all invocations because
+// Vertex AI multi-turn evaluators are not supported in this package.
 func (e *MultiTurnToolUseQualityV1Evaluator) EvaluateInvocations(
 	ctx context.Context,
 	actualInvocations []Invocation,
@@ -76,9 +73,8 @@ func (e *MultiTurnToolUseQualityV1Evaluator) EvaluateInvocations(
 	return multiTurnNotEvaluatedResult(actualInvocations, expectedInvocations), nil
 }
 
-// multiTurnNotEvaluatedResult builds an EvaluationResult where all but the
-// last invocation are marked NOT_EVALUATED (and the last is also NOT_EVALUATED
-// since Vertex AI is not supported).
+// multiTurnNotEvaluatedResult builds an EvaluationResult where every
+// invocation is marked NOT_EVALUATED because Vertex AI is not supported.
 func multiTurnNotEvaluatedResult(actual, expected []Invocation) *EvaluationResult {
 	perInvocation := make([]PerInvocationResult, len(actual))
 	for i := range actual {

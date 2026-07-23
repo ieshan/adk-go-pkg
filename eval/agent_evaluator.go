@@ -49,9 +49,13 @@ type NextUserMessage struct {
 type UserSimulatorStatus string
 
 const (
-	UserSimulatorStatusSuccess            UserSimulatorStatus = "success"
+	// UserSimulatorStatusSuccess indicates the simulator produced a user message.
+	UserSimulatorStatusSuccess UserSimulatorStatus = "success"
+	// UserSimulatorStatusNoMessageGenerated indicates no message was generated.
 	UserSimulatorStatusNoMessageGenerated UserSimulatorStatus = "no_message_generated"
-	UserSimulatorStatusTurnLimitReached   UserSimulatorStatus = "turn_limit_reached"
+	// UserSimulatorStatusTurnLimitReached indicates the turn limit was reached.
+	UserSimulatorStatusTurnLimitReached UserSimulatorStatus = "turn_limit_reached"
+	// UserSimulatorStatusStopSignalDetected indicates a stop signal was detected.
 	UserSimulatorStatusStopSignalDetected UserSimulatorStatus = "stop_signal_detected"
 )
 

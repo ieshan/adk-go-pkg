@@ -20,6 +20,7 @@ func NewStaticUserSimulator(staticConversation []eval.Invocation) *StaticUserSim
 	}
 }
 
+// GetNextUserMessage returns the next user message from the static conversation list.
 func (s *StaticUserSimulator) GetNextUserMessage(ctx context.Context, events []*session.Event) (*eval.NextUserMessage, error) {
 	if s.invocationIdx >= len(s.staticConversation) {
 		return &eval.NextUserMessage{Status: eval.UserSimulatorStatusTurnLimitReached}, nil
@@ -35,9 +36,13 @@ func (s *StaticUserSimulator) GetNextUserMessage(ctx context.Context, events []*
 	}, nil
 }
 
+// GetSimulationEvaluator returns an evaluator for the simulator's output.
 func (s *StaticUserSimulator) GetSimulationEvaluator() (eval.Evaluator, error) {
 	return nil, ErrSimulationEvaluatorNotImplemented
 }
 
-// Compile-time interface check.
+// Compile-time interface check: ensures *StaticUserSimulator satisfies
+// eval.UserSimulator. If the interface changes (e.g., a method is added
+// or a signature is modified), this produces a clear error at the type
+// definition rather than at a distant call site.
 var _ eval.UserSimulator = (*StaticUserSimulator)(nil)
