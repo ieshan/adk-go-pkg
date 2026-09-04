@@ -112,6 +112,9 @@ func TestHandler_E2E_SSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -174,6 +177,9 @@ func TestHandler_InlineToolMode(t *testing.T) {
 		t.Fatalf("POST /tool-result: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 
 	// 404 is expected since no agent run is waiting for this tool call ID,
 	// but the endpoint should exist and respond (not 405 or connection refused).
@@ -185,6 +191,9 @@ func TestHandler_InlineToolMode(t *testing.T) {
 	getResp, err := http.Get(srv.URL + "/tool-result")
 	if err != nil {
 		t.Fatalf("GET /tool-result: %v", err)
+	}
+	if getResp == nil {
+		t.Fatal("nil response")
 	}
 	defer func() { _ = getResp.Body.Close() }()
 	if getResp.StatusCode != http.StatusMethodNotAllowed {
@@ -251,12 +260,18 @@ func TestHandler_PerRequestApproval(t *testing.T) {
 	body, _ := json.Marshal(input)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	if req == nil {
+		t.Fatal("nil request")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AG-Approval", "auto")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("nil response")
 	}
 	defer func() { _ = resp.Body.Close() }()
 

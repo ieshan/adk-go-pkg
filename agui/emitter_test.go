@@ -410,6 +410,9 @@ func TestEventEmitter_MessagesSnapshot_NoScrubWhenClean(t *testing.T) {
 	}
 
 	evts := drain(ch)
+	if len(evts) == 0 {
+		t.Fatal("no events drained")
+	}
 	ms, ok := evts[0].(*events.MessagesSnapshotEvent)
 	if !ok {
 		t.Fatalf("expected *events.MessagesSnapshotEvent, got %T", evts[0])

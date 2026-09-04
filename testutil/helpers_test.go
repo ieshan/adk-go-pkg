@@ -207,7 +207,7 @@ func TestCollectEvents_WithError(t *testing.T) {
 
 func TestCollectFinalEvents(t *testing.T) {
 	e1 := NewTextEvent(context.Background(), "model", "partial")
-	e1.LLMResponse.Partial = true
+	e1.Partial = true
 	e2 := NewTextEvent(context.Background(), "model", "final")
 
 	seq := func(yield func(*session.Event, error) bool) {

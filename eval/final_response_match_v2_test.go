@@ -105,6 +105,9 @@ func TestFinalResponseMatchV2Evaluator_EmptyResponse(t *testing.T) {
 	}}
 
 	result, _ := e.EvaluateInvocations(context.Background(), actual, expected, nil)
+	if result == nil {
+		t.Fatal("nil result")
+	}
 	if result.OverallEvalStatus != EvalStatusNotEvaluated {
 		t.Errorf("OverallEvalStatus = %v, want NOT_EVALUATED for empty response", result.OverallEvalStatus)
 	}

@@ -92,6 +92,9 @@ func TestClientToolset_NextRunIsLongRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if len(tools) == 0 {
+		t.Fatal("no tools returned")
+	}
 	if !tools[0].IsLongRunning() {
 		t.Error("expected NextRun tool to be long-running")
 	}
@@ -112,6 +115,9 @@ func TestClientToolset_InlineNotLongRunning(t *testing.T) {
 	tools, err := ts.Tools(readonlyCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatal("no tools returned")
 	}
 	if tools[0].IsLongRunning() {
 		t.Error("expected Inline tool to NOT be long-running")

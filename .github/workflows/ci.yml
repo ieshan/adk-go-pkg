@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only token — no job writes to the repo.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same branch/PR to avoid wasting CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # go.mod is the single source of truth for the Go version.
+          go-version-file: go.mod
+          cache: true
+
+      # golangci-lint-action@v9 supports golangci-lint v2 and runs on node24.
+      # v2.13.1 is the first patch release with go1.27 support (added in
+      # v2.13.0). Pinning a specific release keeps the Go-version check
+      # satisfied without depending on how "latest" happens to resolve.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # shadow and nilness are the two extra analyzers AGENTS.md requires
+      # beyond standard `go vet`. They are installed as standalone vettools
+      # and invoked via `-vettool`. Known acceptable shadows (loop-scoped
+      # `t, err :=` and `if err :=` in config/builder.go) are standard Go
+      # patterns and do not need fixing.
+      - name: Install shadow and nilness analyzers
+        run: |
+          go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest
+          go install golang.org/x/tools/go/analysis/passes/nilness/cmd/nilness@latest
+
+      - name: Vet (shadow)
+        run: go vet -vettool=$(go env GOPATH)/bin/shadow ./...
+
+      - name: Vet (nilness)
+        run: go vet -vettool=$(go env GOPATH)/bin/nilness ./...
+
+      - name: Test
+        run: go test ./...
+
+  # Runs the whole suite under -race. The race detector is mandatory for
+  # concurrency-related changes per AGENTS.md.
+  test-race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Test (race)
+        run: go test -race -count=1 ./...
+
+  # Official Go team action. Reports known vulnerabilities from the Go
+  # vulnerability database (vuln.go.dev) that are actually reachable from
+  # this module's call graph, not just present in go.sum — that call-graph
+  # analysis is what keeps it low-noise compared to a plain dependency-list
+  # CVE scan.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Reuse this job's own checkout instead of having the action do a
+      # second one. go-version-file pins to the same Go version go.mod
+      # already requires, instead of a separate hardcoded version here.
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          repo-checkout: false
+          go-version-file: go.mod
+          go-package: ./...
+
+  # securego/gosec's own action.yml runs gosec inside a bare Docker container
+  # which has no C toolchain — not an issue for this pure-Go module, but
+  # installing the binary onto the same runner as the other jobs keeps the
+  # setup uniform with codamigo's CI and gives gosec's type-checking source
+  # loader the same Go toolchain setup-go already provisioned.
+  #
+  # New findings block merges. Suppress false positives with an inline
+  # `// #nosec Gxxx -- reason` comment (gosec's own directive — it does not
+  # understand golangci-lint's `//nolint` comments when run standalone).
+  gosec:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: gosec
+        run: gosec ./...
+
+  # go.uber.org/nilaway, run standalone (its own recommended path outside the
+  # nilaway repo's self-check golangci-lint plugin build). -include-pkgs
+  # scopes analysis to this module instead of every dependency NilAway can
+  # see, which is the flag NilAway's own docs call out as the standard way to
+  # keep a first run's signal-to-noise ratio sane on an existing codebase.
+  #
+  # New findings block merges.
+  nilaway:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Install NilAway
+        run: go install go.uber.org/nilaway/cmd/nilaway@latest
+
+      - name: NilAway
+        run: nilaway -include-pkgs="github.com/ieshan/adk-go-pkg" ./...

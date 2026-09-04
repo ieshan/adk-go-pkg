@@ -38,6 +38,9 @@ func TestFakeEmbedding_Deterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Embed() error: %v", err)
 	}
+	if len(vec2) == 0 {
+		t.Fatal("second Embed() returned empty vector")
+	}
 
 	// Same input should produce same output
 	for i := range vec1 {
@@ -54,6 +57,9 @@ func TestFakeEmbedding_Deterministic(t *testing.T) {
 	}
 
 	different := false
+	if len(vec3) == 0 {
+		t.Fatal("no embedding returned")
+	}
 	for i := range vec1 {
 		if vec1[i] != vec3[i] {
 			different = true
@@ -117,6 +123,9 @@ func TestFakeEmbedding_PrecomputedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed() error: %v", err)
 	}
+	if len(vec) == 0 {
+		t.Fatal("Embed() returned empty vector")
+	}
 
 	// Should still return original values, not modified
 	if vec[0] != 0.1 {
@@ -128,9 +137,15 @@ func TestFakeEmbedding_CallRecording(t *testing.T) {
 	f := NewFakeEmbedding()
 	ctx := context.Background()
 
-	f.Embed(ctx, "first")
-	f.Embed(ctx, "second")
-	f.Embed(ctx, "third")
+	if _, err := f.Embed(ctx, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Embed(ctx, "second"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Embed(ctx, "third"); err != nil {
+		t.Fatal(err)
+	}
 
 	if f.CallCount() != 3 {
 		t.Errorf("CallCount() = %d, want 3", f.CallCount())
@@ -166,7 +181,9 @@ func TestFakeEmbedding_Reset(t *testing.T) {
 	f := NewFakeEmbedding()
 	ctx := context.Background()
 
-	f.Embed(ctx, "test")
+	if _, err := f.Embed(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
 	f.SetError(errors.New("boom"))
 
 	f.Reset()

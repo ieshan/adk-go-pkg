@@ -84,24 +84,25 @@ func (e *FinalResponseMatchV2Evaluator) aggregateSamples(samples []PerInvocation
 	var positive, negative []PerInvocationResult
 	for _, s := range samples {
 		if s.Score != nil {
-			if *s.Score == 1.0 {
+			switch *s.Score {
+			case 1.0:
 				positive = append(positive, s)
-			} else if *s.Score == 0.0 {
+			case 0.0:
 				negative = append(negative, s)
 			}
 		}
 	}
 
-	if len(positive) == 0 && len(negative) == 0 {
-		if len(samples) > 0 {
-			return samples[0]
-		}
-		return PerInvocationResult{}
-	}
-	if len(positive) > len(negative) {
+	if len(positive) > len(negative) && len(positive) > 0 {
 		return positive[0]
 	}
-	return negative[0]
+	if len(negative) > 0 {
+		return negative[0]
+	}
+	if len(samples) > 0 {
+		return samples[0]
+	}
+	return PerInvocationResult{}
 }
 
 func (e *FinalResponseMatchV2Evaluator) aggregateInvocations(perInvocation []PerInvocationResult) EvaluationResult {

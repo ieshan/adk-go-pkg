@@ -22,16 +22,18 @@ func TestLoad_JSON(t *testing.T) {
 		]
 	}`)
 
-	f, err := os.CreateTemp(t.TempDir(), "agent-*.json")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
-	}
-	if _, err := f.Write(data); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = f.Close()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
-	appCfg, err := Load(f.Name())
+	appCfg, err := Load(root, "agent.json")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -89,16 +91,18 @@ sub_agents:
 func TestLoad_YML(t *testing.T) {
 	yamlData := []byte("name: yml-agent\nagent_class: LlmAgent\n")
 
-	f, err := os.CreateTemp(t.TempDir(), "agent-*.yml")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
-	}
-	if _, err := f.Write(yamlData); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yml")
+	if err := os.WriteFile(path, yamlData, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = f.Close()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
-	appCfg, err := Load(f.Name())
+	appCfg, err := Load(root, "agent.yml")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -166,14 +170,18 @@ func TestParse_YAML(t *testing.T) {
 
 // TestLoad_UnknownExtension verifies that Load returns an error for unsupported extensions.
 func TestLoad_UnknownExtension(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "agent-*.txt")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.txt")
+	if err := os.WriteFile(path, []byte("name: oops"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
-	_, _ = f.Write([]byte("name: oops"))
-	_ = f.Close()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
-	_, err = Load(f.Name())
+	_, err = Load(root, "agent.txt")
 	if err == nil {
 		t.Fatal("expected error for .txt extension, got nil")
 	}
@@ -181,7 +189,13 @@ func TestLoad_UnknownExtension(t *testing.T) {
 
 // TestLoad_MissingFile verifies that Load returns an error when the file doesn't exist.
 func TestLoad_MissingFile(t *testing.T) {
-	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.json"))
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	_, err = Load(root, "nonexistent.json")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -1263,16 +1277,18 @@ context_cache_config:
   ttl_seconds: 3600
   min_tokens: 50
 `)
-	f, err := os.CreateTemp(t.TempDir(), "agent-*.yaml")
-	if err != nil {
-		t.Fatalf("temp file: %v", err)
-	}
-	if _, err := f.Write(content); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	if err := os.WriteFile(path, content, 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = f.Close()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
-	appCfg, err := Load(f.Name())
+	appCfg, err := Load(root, "agent.yaml")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

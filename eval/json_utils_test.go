@@ -31,7 +31,13 @@ func TestLoadEvalSetFromFile_NewFormat(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	es, err := LoadEvalSetFromFile(path)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	es, err := LoadEvalSetFromFile(root, "test_eval_set.json")
 	if err != nil {
 		t.Fatalf("LoadEvalSetFromFile failed: %v", err)
 	}
@@ -63,7 +69,13 @@ func TestLoadEvalSetFromFile_OldFormat(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	es, err := LoadEvalSetFromFile(path)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	es, err := LoadEvalSetFromFile(root, "old_eval_set.json")
 	if err != nil {
 		t.Fatalf("LoadEvalSetFromFile failed: %v", err)
 	}
@@ -76,7 +88,13 @@ func TestLoadEvalSetFromFile_OldFormat(t *testing.T) {
 }
 
 func TestLoadEvalSetFromFile_NotFound(t *testing.T) {
-	_, err := LoadEvalSetFromFile("/nonexistent/path/eval_set.json")
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	_, err = LoadEvalSetFromFile(root, "nonexistent/eval_set.json")
 	if err == nil {
 		t.Error("expected error for non-existent file")
 	}

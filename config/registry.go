@@ -92,7 +92,7 @@ func StaticSchema(s *genai.Schema) SchemaFactory {
 //	r.RegisterTool("search", searchFactory)
 //	r.RegisterSkill("filesystem", filesystemSkillFactory) // built-in
 //
-//	agent, err := config.LoadAndBuild(ctx, "agent.yaml", r)
+//	agent, err := config.LoadAndBuild(ctx, root, "agent.yaml", r)
 type Registry struct {
 	mu                    sync.RWMutex
 	models                map[string]ModelFactory

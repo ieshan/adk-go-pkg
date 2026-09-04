@@ -68,10 +68,13 @@ func AggregateTokenUsage(entries []TokenUsage) []TokenUsage {
 
 	out := make([]TokenUsage, 0, len(order))
 	for _, key := range order {
+		a, ok := aggs[key]
+		if !ok || a == nil {
+			continue
+		}
 		// Recover provider/model from the key by splitting on the separator.
 		provider, model := splitUsageKey(key)
 		u := TokenUsage{Provider: provider, Model: model}
-		a := aggs[key]
 		if a.hasIn {
 			v := a.in
 			u.InputTokens = &v

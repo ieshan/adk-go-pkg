@@ -141,6 +141,9 @@ func buildNestedValue(pathSuffix string, value any) any {
 		return value
 	}
 	segs := splitPath(pathSuffix)
+	if len(segs) == 0 {
+		return value
+	}
 	cur := value
 	for i := len(segs) - 1; i >= 0; i-- {
 		cur = map[string]any{segs[i]: cur}

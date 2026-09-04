@@ -40,9 +40,11 @@ func TestFakeSessionService_CreateDuplicate(t *testing.T) {
 	svc := NewFakeSessionService()
 	ctx := context.Background()
 
-	svc.Create(ctx, &session.CreateRequest{
+	if _, err := svc.Create(ctx, &session.CreateRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	_, err := svc.Create(ctx, &session.CreateRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
 	})
@@ -65,9 +67,11 @@ func TestFakeSessionService_Delete(t *testing.T) {
 	svc := NewFakeSessionService()
 	ctx := context.Background()
 
-	svc.Create(ctx, &session.CreateRequest{
+	if _, err := svc.Create(ctx, &session.CreateRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	err := svc.Delete(ctx, &session.DeleteRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
@@ -88,9 +92,15 @@ func TestFakeSessionService_List(t *testing.T) {
 	svc := NewFakeSessionService()
 	ctx := context.Background()
 
-	svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"})
-	svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s2"})
-	svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user2", SessionID: "s3"})
+	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user2", SessionID: "s3"}); err != nil {
+		t.Fatal(err)
+	}
 
 	listResp, err := svc.List(ctx, &session.ListRequest{
 		AppName: "app", UserID: "user1",
@@ -110,6 +120,9 @@ func TestFakeSessionService_AppendEvent(t *testing.T) {
 	createResp, _ := svc.Create(ctx, &session.CreateRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
 	})
+	if createResp == nil {
+		t.Fatal("nil response")
+	}
 
 	event := NewTextEvent(context.Background(), "model", "hello")
 	err := svc.AppendEvent(ctx, createResp.Session, event)
@@ -122,6 +135,9 @@ func TestFakeSessionService_AppendEvent(t *testing.T) {
 
 	// Verify event was added to the session.
 	fs := svc.GetSession("app", "user1", "sess1")
+	if fs == nil {
+		t.Fatal("GetSession returned nil")
+	}
 	if fs.Events().Len() != 1 {
 		t.Errorf("session events after AppendEvent = %d, want 1", fs.Events().Len())
 	}
@@ -134,6 +150,9 @@ func TestFakeSessionService_AppendEventTempKeyRemoval(t *testing.T) {
 	createResp, _ := svc.Create(ctx, &session.CreateRequest{
 		AppName: "app", UserID: "user1", SessionID: "sess1",
 	})
+	if createResp == nil {
+		t.Fatal("nil response")
+	}
 
 	event := NewTextEvent(context.Background(), "model", "hello")
 	event.Actions.StateDelta = map[string]any{
@@ -158,7 +177,9 @@ func TestFakeSessionService_CallTracking(t *testing.T) {
 	svc := NewFakeSessionService()
 	ctx := context.Background()
 
-	svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"})
+	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
 
 	if svc.CreateCount() != 1 {
 		t.Errorf("CreateCount() = %d, want 1", svc.CreateCount())

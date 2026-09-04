@@ -3227,7 +3227,7 @@ func TestBridge_MessagesSnapshotOnInterrupt(t *testing.T) {
 	collected := collectEvents(t, bridgeAgent, defaultInput())
 
 	// Find MESSAGES_SNAPSHOT and verify it appears before RUN_FINISHED.
-	var msgSnapIdx, runFinIdx int = -1, -1
+	var msgSnapIdx, runFinIdx = -1, -1
 	for i, ev := range collected {
 		if ev.Type() == events.EventTypeMessagesSnapshot {
 			msgSnapIdx = i
@@ -3389,7 +3389,6 @@ func TestBridge_StateStatusOnError(t *testing.T) {
 	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
 			yield(nil, fmt.Errorf("agent crashed"))
-			return
 		}
 	})
 
@@ -3609,7 +3608,6 @@ func TestBridge_EmptyModelStream(t *testing.T) {
 	// RUN_STARTED and RUN_FINISHED.
 	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
-			return
 		}
 	})
 

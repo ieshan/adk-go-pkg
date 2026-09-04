@@ -69,7 +69,7 @@ func WithParentMessageID(id string) SubagentStartedOption {
 // BaseEvent type-check (which only knows canonical AG-UI types) since
 // SUBAGENT_STARTED is a protocol extension.
 func (e *SubagentStartedEvent) Validate() error {
-	if e.BaseEvent == nil || e.BaseEvent.EventType == "" {
+	if e.BaseEvent == nil || e.EventType == "" {
 		return fmt.Errorf("SubagentStartedEvent validation failed: type field is required")
 	}
 	if e.SubagentRunID == "" {
@@ -153,7 +153,7 @@ func WithSubagentSuspendedOutcome(interrupts []any) SubagentFinishedOption {
 // Validate validates the sub-agent finished event. It skips the SDK's
 // BaseEvent type-check since SUBAGENT_FINISHED is a protocol extension.
 func (e *SubagentFinishedEvent) Validate() error {
-	if e.BaseEvent == nil || e.BaseEvent.EventType == "" {
+	if e.BaseEvent == nil || e.EventType == "" {
 		return fmt.Errorf("SubagentFinishedEvent validation failed: type field is required")
 	}
 	if e.SubagentRunID == "" {
@@ -203,7 +203,7 @@ func WithSubagentErrorCode(code string) SubagentErrorOption {
 // Validate validates the sub-agent error event. It skips the SDK's
 // BaseEvent type-check since SUBAGENT_ERROR is a protocol extension.
 func (e *SubagentErrorEvent) Validate() error {
-	if e.BaseEvent == nil || e.BaseEvent.EventType == "" {
+	if e.BaseEvent == nil || e.EventType == "" {
 		return fmt.Errorf("SubagentErrorEvent validation failed: type field is required")
 	}
 	if e.SubagentRunID == "" {

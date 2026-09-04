@@ -152,7 +152,9 @@ func TestFakeCallbackContext(t *testing.T) {
 	}
 
 	// State
-	cb.State().Set("key", "val")
+	if err := cb.State().Set("key", "val"); err != nil {
+		t.Fatal(err)
+	}
 	v, err := cb.State().Get("key")
 	if err != nil || v != "val" {
 		t.Errorf("State Get(key) = %v, %v; want val, nil", v, err)

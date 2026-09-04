@@ -72,6 +72,9 @@ func TestInMemoryEvalSetsManager_CRUD(t *testing.T) {
 		t.Fatalf("DeleteEvalCase failed: %v", err)
 	}
 	got, _ = manager.GetEvalSet(ctx, "app", "test-set")
+	if got == nil {
+		t.Fatal("nil eval set")
+	}
 	if len(got.EvalCases) != 0 {
 		t.Errorf("len(EvalCases) after delete = %d, want 0", len(got.EvalCases))
 	}

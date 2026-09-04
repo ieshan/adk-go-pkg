@@ -260,13 +260,13 @@ func (e *PerTurnUserSimulatorQualityV1Evaluator) aggregateSamples(samples []PerI
 			negative = append(negative, s)
 		}
 	}
-	if len(positive) == 0 && len(negative) == 0 {
-		return samples[0]
-	}
-	if len(positive) > len(negative) {
+	if len(positive) > len(negative) && len(positive) > 0 {
 		return positive[0]
 	}
-	return negative[0]
+	if len(negative) > 0 {
+		return negative[0]
+	}
+	return samples[0]
 }
 
 // aggregateConversationResults computes the fraction of turns that passed.

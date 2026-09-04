@@ -10,7 +10,7 @@ a configuration file. The `config` package:
 
 1. Parses YAML/JSON into the sealed `AgentConfig` interface backed by type-specific structs (`LLMAgentConfig`, `SequentialAgentConfig`, `ParallelAgentConfig`, `LoopAgentConfig`).
 2. Uses a `Registry` of model and tool factories to resolve references.
-3. Recursively builds the full agent tree via `Build`.
+3. Recursively builds the full agent tree via `BuildWithPath` or `LoadAndBuild`.
 
 ## Schema Reference
 
@@ -99,12 +99,15 @@ References another agent by file path or registered code name.
 
 ```go
 type AgentRefConfig struct {
-    ConfigPath string // Path to agent config file (relative or absolute).
+    ConfigPath string // Root-relative path to agent config file.
     Code       string // Registered agent name in Registry.
 }
 ```
 
-Exactly one of `config_path` or `code` must be set.
+Exactly one of `config_path` or `code` must be set. `config_path` is resolved
+relative to the parent config's directory inside the `*os.Root` passed to
+`BuildWithPath`/`LoadAndBuild`; absolute paths and paths that escape the root
+are rejected by the `os.Root` boundary.
 
 **YAML Example:**
 
@@ -393,7 +396,7 @@ instruction_template:
   name: "greeting"
 ```
 
-**File-based template:**
+**File-based template (path is resolved relative to the `*os.Root` passed to `BuildWithPath`/`LoadAndBuild`):**
 ```yaml
 name: my-agent
 agent_class: LlmAgent
@@ -407,11 +410,11 @@ instruction_template:
 ### Load
 
 ```go
-func Load(path string) (*AppConfig, error)
+func Load(root *os.Root, path string) (*AppConfig, error)
 ```
 
-Reads a config file. Format is inferred from extension: `.json`, `.yaml`, `.yml`.
-Returns the sealed `AgentConfig` interface — type-assert to `*LLMAgentConfig`, `*SequentialAgentConfig`, etc. to access type-specific fields.
+Reads a config file beneath `root`. Format is inferred from extension: `.json`, `.yaml`, `.yml`.
+`path` is interpreted relative to `root`; the `*os.Root` enforces kernel-level path traversal protection so callers cannot escape the configured boundary. Returns an `*AppConfig` whose `.AgentConfig` field is the sealed `AgentConfig` interface — type-assert to `*LLMAgentConfig`, `*SequentialAgentConfig`, etc. to access type-specific fields.
 
 ### Parse
 
@@ -420,20 +423,20 @@ func Parse(data []byte, format string) (*AppConfig, error)
 ```
 
 Parses raw bytes. `format` must be `"json"` or `"yaml"`.
-YAML parsing validates type-specific field restrictions — setting an LLM-only field on a non-LLM agent type returns an error.
+Both formats validate type-specific field restrictions — setting an LLM-only field on a non-LLM agent type returns an error.
 
 ### BuildWithPath
 
 ```go
-func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPath string) (agent.Agent, error)
+func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, error)
 ```
 
-Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor. The `configPath` parameter is used to resolve relative `config_path` references in `AgentRefConfig`; pass an empty string when not loading from a file.
+Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor. `root` scopes all filesystem access for sub-agent `config_path` references and file-based instruction templates; pass `nil` when the config tree contains no file references. The `configPath` parameter is the root-relative path of the parent config, used to resolve relative `config_path` references in `AgentRefConfig`; pass an empty string when not loading from a file.
 
 ### BuildAppWithPath
 
 ```go
-func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
+func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
 ```
 
 Like `BuildWithPath`, but accepts a full `*AppConfig` (which wraps an `AgentConfig` alongside optional `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig`) and returns the resolved runtime configs alongside the built agent. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
@@ -441,10 +444,10 @@ Like `BuildWithPath`, but accepts a full `*AppConfig` (which wraps an `AgentConf
 ### LoadAndBuild
 
 ```go
-func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
+func LoadAndBuild(ctx context.Context, root *os.Root, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
 ```
 
-Convenience function combining `Load` and `BuildAppWithPath`. Reads the config file at `path`, builds the agent tree, and returns the runtime configs. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
+Convenience function combining `Load` and `BuildAppWithPath`. Reads the config file at `path` beneath `root`, builds the agent tree, and returns the runtime configs. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
 
 ## TranslateGenerateConfig
 
@@ -589,7 +592,13 @@ reg.RegisterModel("openai", openaiFactory)
 reg.RegisterTool("search", searchFactory)
 reg.RegisterTool("scrape", scrapeFactory)
 
-agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(ctx, "agents/orchestrator.yaml", reg)
+root, err := os.OpenRoot(".")
+if err != nil {
+    log.Fatal(err)
+}
+defer root.Close()
+
+agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(ctx, root, "agents/orchestrator.yaml", reg)
 if err != nil {
     log.Fatal(err)
 }
@@ -602,15 +611,16 @@ _ = ctxCacheCfg
 
 ## Parse-Only Types
 
-The following types are parsed for schema parity but are not wired into agent execution in the current release:
+The following types are parsed from config and returned by `BuildAppWithPath`/`LoadAndBuild` but are not wired into agent execution in the current release:
 
-- `RunConfig` — runtime behavior configuration (streaming mode, max LLM calls, etc.)
+- `RunConfig` — runtime behavior configuration (streaming mode, save live blob, custom metadata)
+- `LiveRunConfig` — live run configuration (max LLM calls, etc.)
 - `ContextCacheConfig` — context caching intervals and TTL
 
 Programmatic construction with typed configs:
 
 ```go
-root := &config.SequentialAgentConfig{
+orchestrator := &config.SequentialAgentConfig{
     BaseAgentConfig: config.BaseAgentConfig{Name: "orchestrator"},
 }
 
@@ -628,9 +638,9 @@ writer := &config.LLMAgentConfig{
     DisallowTransferToParent: true,
 }
 
-root.SubAgentEntries = []config.SubAgentEntry{
+orchestrator.SubAgentEntries = []config.SubAgentEntry{
     {Inline: researcher},
     {Inline: writer},
 }
-agent, err := config.BuildWithPath(ctx, root, reg, "")
+agent, err := config.BuildWithPath(ctx, orchestrator, reg, nil, "")
 ```

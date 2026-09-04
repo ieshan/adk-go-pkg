@@ -121,7 +121,7 @@ func isEmptyValue(v any) bool {
 		return rv.Complex() == 0
 	case reflect.String:
 		return rv.String() == ""
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return rv.IsNil()
 	default:
 		return false

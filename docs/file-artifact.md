@@ -10,13 +10,18 @@ Each `Save` call creates a new version; `Load` retrieves any version (or the
 latest by default). The service supports both session-scoped and user-scoped
 artifacts.
 
+All filesystem access is scoped beneath an `*os.Root` opened from
+`Config.RootDir` in the constructor, providing kernel-level path traversal
+protection. Callers must call `Close` to release the underlying file
+descriptor when the service is no longer needed.
+
 ### Storage Layout
 
 Session-scoped artifacts:
 
 ```
 {RootDir}/users/{userID}/sessions/{sessionID}/artifacts/{fileName}/versions/{version}/
-  +-- {filename}.txt       # text payload (or original name for binary)
+  +-- {filename}.txt       # text payload (or {filename} for binary, preserving original name)
   +-- metadata.json        # version metadata
 ```
 
@@ -24,11 +29,13 @@ User-scoped artifacts (filenames prefixed with `user:`):
 
 ```
 {RootDir}/users/{userID}/artifacts/{fileName}/versions/{version}/
-  +-- {filename}.txt
+  +-- {filename}.txt       # text payload (or {filename} for binary)
   +-- metadata.json
 ```
 
-Version numbering starts at 0 and increments by 1 on each `Save`.
+Version numbering starts at 0. Each `Save` assigns the next version as
+`max(existing) + 1`. `Delete` removes all versions of an artifact (it
+ignores the `Version` field in the request).
 
 ## API Reference
 
@@ -44,11 +51,23 @@ type Config struct {
 ### New
 
 ```go
-func New(cfg Config) (artifact.Service, error)
+func New(cfg Config) (*Service, error)
 ```
 
-Creates an `artifact.Service` backed by the local filesystem. Returns an error
-when `RootDir` is empty or cannot be created.
+Creates a `*Service` (which implements `artifact.Service`) backed by the local
+filesystem. The root directory is created (with mode `0750`) if it does not
+already exist, and an `*os.Root` is opened from it. Returns an error when
+`RootDir` is empty or cannot be created/opened.
+
+### Close
+
+```go
+func (s *Service) Close() error
+```
+
+Releases the underlying `*os.Root` file descriptor. Safe to call multiple
+times. Callers should call this when the service is no longer needed,
+typically via `defer svc.Close()`.
 
 ### VersionMetadata
 
@@ -74,6 +93,7 @@ svc, err := file.New(file.Config{RootDir: "/tmp/artifacts"})
 if err != nil {
     log.Fatal(err)
 }
+defer svc.Close()
 
 resp, err := svc.Save(ctx, &artifact.SaveRequest{
     AppName:   "myapp",
@@ -91,7 +111,11 @@ fmt.Println("saved version:", resp.Version) // 0
 ### Save a Binary Artifact
 
 ```go
-imageData, _ := os.ReadFile("photo.png")
+// Caller reads its own input from a host path before calling Save.
+imageData, err := os.ReadFile("photo.png")
+if err != nil {
+    log.Fatal(err)
+}
 
 resp, err := svc.Save(ctx, &artifact.SaveRequest{
     AppName:   "myapp",
@@ -109,7 +133,7 @@ resp, err := svc.Save(ctx, &artifact.SaveRequest{
 
 ### Load an Artifact
 
-> **Note:** `Version: 0` in Load and Delete always resolves to "latest".
+> **Note:** `Version: 0` in Load always resolves to "latest". Delete ignores the `Version` field and removes all versions of the artifact.
 > The first saved artifact is version 0. When only one version exists, both "latest"
 > and "specific version 0" resolve to the same content.
 

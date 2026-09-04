@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -35,22 +36,26 @@ import (
 // An error is returned for any unknown type, unresolvable model prefix,
 // unresolvable tool name, or invalid MaxIterations value.
 //
-// The configPath parameter is used to resolve relative config_path references
-// in sub-agents. Pass an empty string when not loading from a file.
+// The root parameter scopes all filesystem access for sub-agent config_path
+// references and file-based instruction templates. Pass nil when the config
+// tree contains no file references. The configPath parameter is the
+// root-relative path of the parent config, used to resolve relative
+// config_path references in sub-agents. Pass an empty string when not
+// loading from a file.
 //
 // Example:
 //
 //	reg := config.NewRegistry()
 //	reg.RegisterModel("gemini", geminiFactory)
 //	reg.RegisterTool("search", searchFactory)
-//	//	cfg, _ := config.Load("agent.yaml")
-//	a, err := config.BuildWithPath(ctx, cfg, reg, "")
+//	//	cfg, _ := config.Load(root, "agent.yaml")
+//	a, err := config.BuildWithPath(ctx, cfg, reg, root, "")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPath string) (agent.Agent, error) {
+func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("config.Build: nil config")
+		return nil, fmt.Errorf("config.BuildWithPath: nil config")
 	}
 
 	// Resolve sub-agent entries (inline + refs).
@@ -58,7 +63,7 @@ func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPa
 	entries := cfg.SubAgentEntries()
 	if len(entries) > 0 {
 		var err error
-		subAgents, err = buildSubAgentEntries(ctx, entries, reg, configPath)
+		subAgents, err = buildSubAgentEntries(ctx, entries, reg, root, configPath)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +71,7 @@ func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPa
 
 	switch c := cfg.(type) {
 	case *LLMAgentConfig:
-		return buildLLMAgent(ctx, c, reg, subAgents)
+		return buildLLMAgent(ctx, c, reg, root, subAgents)
 	case *SequentialAgentConfig:
 		return buildSequentialAgent(c, reg, subAgents)
 	case *ParallelAgentConfig:
@@ -74,7 +79,7 @@ func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, configPa
 	case *LoopAgentConfig:
 		return buildLoopAgent(c, reg, subAgents)
 	default:
-		return nil, fmt.Errorf("config.Build: unknown agent config type %T", cfg)
+		return nil, fmt.Errorf("config.BuildWithPath: unknown agent config type %T", cfg)
 	}
 }
 
@@ -101,10 +106,9 @@ func toAgentLiveRunConfig(cfg *LiveRunConfig) *agent.LiveRunConfig {
 // ([agent.RunConfig], [agent.LiveRunConfig], and [ContextCacheConfig])
 // alongside the built agent.
 //
-// The configPath parameter is used to resolve relative config_path references
-// in sub-agents. Pass an empty string when not loading from a file.
-func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
-	ag, err := BuildWithPath(ctx, appCfg.AgentConfig, reg, configPath)
+// root and configPath have the same semantics as in [BuildWithPath].
+func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	ag, err := BuildWithPath(ctx, appCfg.AgentConfig, reg, root, configPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -112,18 +116,19 @@ func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, con
 }
 
 // LoadAndBuild is a convenience function that combines Load and BuildAppWithPath.
-// It reads the agent configuration from path, constructs the live agent tree,
-// and returns runtime configs ([agent.RunConfig], [agent.LiveRunConfig],
-// and [ContextCacheConfig]) alongside the agent.
-func LoadAndBuild(ctx context.Context, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
-	appCfg, err := Load(path)
+// It reads the agent configuration from path beneath root, constructs the live
+// agent tree, and returns runtime configs ([agent.RunConfig],
+// [agent.LiveRunConfig], and [ContextCacheConfig]) alongside the agent.
+// root must not be nil.
+func LoadAndBuild(ctx context.Context, root *os.Root, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	appCfg, err := Load(root, path)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("config.LoadAndBuild: %w", err)
 	}
-	return BuildAppWithPath(ctx, appCfg, reg, path)
+	return BuildAppWithPath(ctx, appCfg, reg, root, path)
 }
 
-func buildSubAgentEntries(ctx context.Context, entries []SubAgentEntry, reg *Registry, parentPath string) ([]agent.Agent, error) {
+func buildSubAgentEntries(ctx context.Context, entries []SubAgentEntry, reg *Registry, root *os.Root, parentPath string) ([]agent.Agent, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -136,20 +141,20 @@ func buildSubAgentEntries(ctx context.Context, entries []SubAgentEntry, reg *Reg
 			if entry.Ref.Code != "" {
 				a, err := reg.ResolveAgent(entry.Ref.Code)
 				if err != nil {
-					return nil, fmt.Errorf("config.Build: resolve sub-agent code ref %q: %w", entry.Ref.Code, err)
+					return nil, fmt.Errorf("config.BuildWithPath: resolve sub-agent code ref %q: %w", entry.Ref.Code, err)
 				}
 				agents = append(agents, a)
 				continue
 			}
 			var err error
-			cfg, err = ResolveAgentRef(entry.Ref, parentPath)
+			cfg, err = ResolveAgentRef(entry.Ref, root, parentPath)
 			if err != nil {
-				return nil, fmt.Errorf("config.Build: resolve sub-agent ref: %w", err)
+				return nil, fmt.Errorf("config.BuildWithPath: resolve sub-agent ref: %w", err)
 			}
 		} else {
-			return nil, fmt.Errorf("config.Build: empty SubAgentEntry")
+			return nil, fmt.Errorf("config.BuildWithPath: empty SubAgentEntry")
 		}
-		a, err := BuildWithPath(ctx, cfg, reg, parentPath)
+		a, err := BuildWithPath(ctx, cfg, reg, root, parentPath)
 		if err != nil {
 			return nil, err
 		}
@@ -158,7 +163,7 @@ func buildSubAgentEntries(ctx context.Context, entries []SubAgentEntry, reg *Reg
 	return agents, nil
 }
 
-func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subAgents []agent.Agent) (agent.Agent, error) {
+func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, root *os.Root, subAgents []agent.Agent) (agent.Agent, error) {
 	var llm model.LLM
 	var err error
 
@@ -179,7 +184,7 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 
 	tools := make([]tool.Tool, 0, len(cfg.Tools))
 	for _, ref := range cfg.Tools {
-		t, err := reg.ResolveTool(ref.Name, ref.Args)
+		t, err := reg.ResolveTool(ref.Name, ref.Args) //nolint:shadow -- loop-scoped err, acceptable per AGENTS.md
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
 		}
@@ -188,7 +193,7 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 
 	var toolsets []tool.Toolset
 	for _, ref := range cfg.Skillsets {
-		source, err := reg.ResolveSkill(ref.Name, ref.Config)
+		source, err := reg.ResolveSkill(ref.Name, ref.Config) //nolint:shadow -- loop-scoped err, acceptable per AGENTS.md
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
 		}
@@ -254,7 +259,7 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 
 	var instructionProvider llmagent.InstructionProvider
 	if cfg.InstructionTemplate != nil && cfg.InstructionTemplate.IsSet() {
-		if err := cfg.InstructionTemplate.Validate(); err != nil {
+		if err := cfg.InstructionTemplate.Validate(); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
 			return nil, fmt.Errorf("config.Build [llm %q]: instruction_template: %w", cfg.Name(), err)
 		}
 		var engine *prompt.TemplateEngine
@@ -263,8 +268,8 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, subA
 		} else {
 			engine = prompt.New()
 		}
-		loader := prompt.NewLoader(engine, nil)
-		tmpl, err := cfg.InstructionTemplate.Resolve(reg.TemplateRegistry(), loader)
+		loader := prompt.NewLoader(engine, root)
+		tmpl, err := cfg.InstructionTemplate.Resolve(reg.TemplateRegistry(), loader) //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
 		if err != nil {
 			return nil, fmt.Errorf("config.Build [llm %q]: resolve instruction_template: %w", cfg.Name(), err)
 		}

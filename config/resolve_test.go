@@ -9,11 +9,16 @@ import (
 func TestResolveAgentRef_AbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	subContent := "name: sub-agent\nagent_class: LlmAgent\nmodel: gemini/gemini-pro\n"
-	subPath := filepath.Join(dir, "sub.yaml")
-	_ = os.WriteFile(subPath, []byte(subContent), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "sub.yaml"), []byte(subContent), 0644)
 
-	ref := &AgentRefConfig{ConfigPath: subPath}
-	cfg, err := ResolveAgentRef(ref, filepath.Join(dir, "parent.yaml"))
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	ref := &AgentRefConfig{ConfigPath: "sub.yaml"}
+	cfg, err := ResolveAgentRef(ref, root, "parent.yaml")
 	if err != nil {
 		t.Fatalf("ResolveAgentRef: %v", err)
 	}
@@ -27,9 +32,14 @@ func TestResolveAgentRef_RelativePath(t *testing.T) {
 	subContent := "name: sub-agent\nagent_class: LlmAgent\nmodel: gemini/gemini-pro\n"
 	_ = os.WriteFile(filepath.Join(dir, "sub.yaml"), []byte(subContent), 0644)
 
-	parentPath := filepath.Join(dir, "parent.yaml")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	ref := &AgentRefConfig{ConfigPath: "sub.yaml"}
-	cfg, err := ResolveAgentRef(ref, parentPath)
+	cfg, err := ResolveAgentRef(ref, root, "parent.yaml")
 	if err != nil {
 		t.Fatalf("ResolveAgentRef: %v", err)
 	}
@@ -39,8 +49,14 @@ func TestResolveAgentRef_RelativePath(t *testing.T) {
 }
 
 func TestResolveAgentRef_MissingFile(t *testing.T) {
-	ref := &AgentRefConfig{ConfigPath: "/nonexistent.yaml"}
-	_, err := ResolveAgentRef(ref, "/parent.yaml")
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	ref := &AgentRefConfig{ConfigPath: "nonexistent.yaml"}
+	_, err = ResolveAgentRef(ref, root, "parent.yaml")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -48,7 +64,7 @@ func TestResolveAgentRef_MissingFile(t *testing.T) {
 
 func TestResolveAgentRef_BothFieldsError(t *testing.T) {
 	ref := &AgentRefConfig{ConfigPath: "a.yaml", Code: "x"}
-	_, err := ResolveAgentRef(ref, "")
+	_, err := ResolveAgentRef(ref, nil, "")
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -56,7 +72,7 @@ func TestResolveAgentRef_BothFieldsError(t *testing.T) {
 
 func TestResolveAgentRef_NeitherFieldError(t *testing.T) {
 	ref := &AgentRefConfig{}
-	_, err := ResolveAgentRef(ref, "")
+	_, err := ResolveAgentRef(ref, nil, "")
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

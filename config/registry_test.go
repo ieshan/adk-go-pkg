@@ -368,6 +368,9 @@ func TestRegistry_ResolveAndInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve agent: %v", err)
 	}
+	if a == nil {
+		t.Fatal("nil agent")
+	}
 	if a.Name() != "sub" {
 		t.Errorf("expected name sub, got %q", a.Name())
 	}

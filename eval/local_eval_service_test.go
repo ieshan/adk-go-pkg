@@ -9,11 +9,25 @@ import (
 	"google.golang.org/genai"
 )
 
+func newTestLocalEvalService(t *testing.T) (*LocalEvalSetsManager, *LocalEvalSetResultsManager) {
+	t.Helper()
+	dir := t.TempDir()
+	setsMgr, err := NewLocalEvalSetsManager(dir)
+	if err != nil {
+		t.Fatalf("NewLocalEvalSetsManager: %v", err)
+	}
+	t.Cleanup(func() { _ = setsMgr.Close() })
+	resultsMgr, err := NewLocalEvalSetResultsManager(dir)
+	if err != nil {
+		t.Fatalf("NewLocalEvalSetResultsManager: %v", err)
+	}
+	t.Cleanup(func() { _ = resultsMgr.Close() })
+	return setsMgr, resultsMgr
+}
+
 func TestLocalEvalService_PerformInference(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	setsMgr := NewLocalEvalSetsManager(dir)
-	resultsMgr := NewLocalEvalSetResultsManager(dir)
+	setsMgr, resultsMgr := newTestLocalEvalService(t)
 
 	_, err := setsMgr.CreateEvalSet(ctx, "app", "test-set")
 	if err != nil {
@@ -76,9 +90,7 @@ func TestLocalEvalService_PerformInference(t *testing.T) {
 
 func TestLocalEvalService_PerformInference_EvalSetNotFound(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	setsMgr := NewLocalEvalSetsManager(dir)
-	resultsMgr := NewLocalEvalSetResultsManager(dir)
+	setsMgr, resultsMgr := newTestLocalEvalService(t)
 	runner := &fakeAgentRunner{}
 
 	svc := NewLocalEvalService(setsMgr, resultsMgr, nil, runner, nil)
@@ -96,9 +108,7 @@ func TestLocalEvalService_PerformInference_EvalSetNotFound(t *testing.T) {
 
 func TestLocalEvalService_PerformInference_EmptyEvalSet(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	setsMgr := NewLocalEvalSetsManager(dir)
-	resultsMgr := NewLocalEvalSetResultsManager(dir)
+	setsMgr, resultsMgr := newTestLocalEvalService(t)
 
 	_, err := setsMgr.CreateEvalSet(ctx, "app", "empty-set")
 	if err != nil {
@@ -127,9 +137,7 @@ func TestLocalEvalService_PerformInference_EmptyEvalSet(t *testing.T) {
 
 func TestLocalEvalService_Evaluate(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	setsMgr := NewLocalEvalSetsManager(dir)
-	resultsMgr := NewLocalEvalSetResultsManager(dir)
+	setsMgr, resultsMgr := newTestLocalEvalService(t)
 
 	_, err := setsMgr.CreateEvalSet(ctx, "app", "test-set")
 	if err != nil {

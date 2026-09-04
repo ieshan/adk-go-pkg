@@ -54,8 +54,12 @@ func TestFakeSession_Events(t *testing.T) {
 	if s.Events().Len() != 2 {
 		t.Errorf("Len() = %d, want 2", s.Events().Len())
 	}
-	if s.Events().At(0).Author != "user" {
-		t.Errorf("At(0).Author = %q, want %q", s.Events().At(0).Author, "user")
+	ev0 := s.Events().At(0)
+	if ev0 == nil {
+		t.Fatal("nil event")
+	}
+	if ev0.Author != "user" {
+		t.Errorf("At(0).Author = %q, want %q", ev0.Author, "user")
 	}
 	if s.Events().At(99) != nil {
 		t.Error("At(99) should be nil")

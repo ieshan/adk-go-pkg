@@ -2,18 +2,20 @@ package eval
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"google.golang.org/genai"
 )
 
-// LoadEvalSetFromFile loads an eval set from a JSON file, handling both
-// new and old formats.
-func LoadEvalSetFromFile(path string) (*EvalSet, error) {
-	data, err := os.ReadFile(path)
+// LoadEvalSetFromFile loads an eval set from a JSON file beneath root, handling
+// both new and old formats. The path is interpreted relative to root.
+func LoadEvalSetFromFile(root *os.Root, path string) (*EvalSet, error) {
+	data, err := root.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, NewNotFoundError("eval set file", path)
 		}
 		return nil, fmt.Errorf("failed to read eval set file: %w", err)

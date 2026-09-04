@@ -30,7 +30,7 @@
 //
 // # Loading a file
 //
-//	appCfg, err := config.Load("agents/my-agent.yaml")
+//	appCfg, err := config.Load(root, "agents/my-agent.yaml")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -51,7 +51,9 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -329,8 +331,12 @@ type SkillsetRef struct {
 
 // AgentRefConfig references another agent by config file path or code name.
 type AgentRefConfig struct {
+	// ConfigPath is a root-relative path to an agent config file.
+	// It is resolved relative to the parent config's directory inside the
+	// *os.Root passed to BuildWithPath/LoadAndBuild.
 	ConfigPath string `json:"config_path,omitempty" yaml:"config_path,omitempty"`
-	Code       string `json:"code,omitempty" yaml:"code,omitempty"`
+	// Code is a registered agent name in the Registry, resolved at Build time.
+	Code string `json:"code,omitempty" yaml:"code,omitempty"`
 }
 
 // Validate returns an error if neither or both fields are set.
@@ -535,18 +541,23 @@ type AppConfig struct {
 	ContextCacheConfig *ContextCacheConfig // nil when absent in source
 }
 
-// Load reads an agent configuration from a file at path.
+// Load reads an agent configuration from a file at path beneath root.
 // The file format is inferred from the extension:
 //   - .json  → JSON
 //   - .yaml  → YAML
 //   - .yml   → YAML
 //
-// Any other extension returns an error.
+// Any other extension returns an error. path is interpreted relative to root;
+// root must not be nil. The *os.Root enforces filesystem boundary protection,
+// rejecting absolute paths and traversal that escapes the root.
 //
 // Example:
 //
-//	appCfg, err := config.Load("config/agent.yaml")
-func Load(path string) (*AppConfig, error) {
+//	appCfg, err := config.Load(root, "config/agent.yaml")
+func Load(root *os.Root, path string) (*AppConfig, error) {
+	if root == nil {
+		return nil, errors.New("config.Load: root must not be nil")
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 	var format string
 	switch ext {
@@ -558,7 +569,7 @@ func Load(path string) (*AppConfig, error) {
 		return nil, fmt.Errorf("config.Load: unsupported file extension %q (use .json, .yaml, or .yml)", ext)
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := root.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config.Load: %w", err)
 	}
@@ -1178,8 +1189,14 @@ func toInt32(v any) (int32, error) {
 	case int32:
 		return t, nil
 	case int:
+		if t > math.MaxInt32 || t < math.MinInt32 {
+			return 0, fmt.Errorf("cannot convert %d to int32: overflow", t)
+		}
 		return int32(t), nil
 	case int64:
+		if t > math.MaxInt32 || t < math.MinInt32 {
+			return 0, fmt.Errorf("cannot convert %d to int32: overflow", t)
+		}
 		return int32(t), nil
 	case float32:
 		return int32(t), nil

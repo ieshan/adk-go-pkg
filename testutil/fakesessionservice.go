@@ -143,6 +143,10 @@ func (f *FakeSessionService) AppendEvent(ctx context.Context, sess session.Sessi
 		return fmt.Errorf("session not found: %s", key)
 	}
 
+	if event == nil {
+		return nil
+	}
+
 	// Remove temporary state keys from the event's StateDelta.
 	if event.Actions.StateDelta != nil {
 		for k := range event.Actions.StateDelta {

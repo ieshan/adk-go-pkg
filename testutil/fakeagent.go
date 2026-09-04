@@ -79,9 +79,9 @@ func MustNewFakeAgent(name string) *FakeAgent {
 // invariant violation rather than an expected caller error.
 func (f *FakeAgent) WithDescription(desc string) *FakeAgent {
 	ag, err := agent.New(agent.Config{
-		Name:        f.Agent.Name(),
+		Name:        f.Name(),
 		Description: desc,
-		SubAgents:   f.Agent.SubAgents(),
+		SubAgents:   f.SubAgents(),
 		Run:         f.trackedRun,
 	})
 	if err != nil {
@@ -99,8 +99,8 @@ func (f *FakeAgent) WithDescription(desc string) *FakeAgent {
 // invariant violation rather than an expected caller error.
 func (f *FakeAgent) WithSubAgents(agents ...agent.Agent) *FakeAgent {
 	ag, err := agent.New(agent.Config{
-		Name:        f.Agent.Name(),
-		Description: f.Agent.Description(),
+		Name:        f.Name(),
+		Description: f.Description(),
 		SubAgents:   agents,
 		Run:         f.trackedRun,
 	})

@@ -150,6 +150,9 @@ func (a *AgentEvaluator) EvaluateWithOptions(
 				bestResult = caseResult
 			}
 		}
+		if bestResult == nil {
+			return nil, fmt.Errorf("no result generated for eval case %q", evalCase.EvalID)
+		}
 		caseResults = append(caseResults, *bestResult)
 		if bestResult.FinalEvalStatus != EvalStatusPassed {
 			failures = append(failures, bestResult.EvalID)
@@ -183,33 +186,33 @@ func (a *AgentEvaluator) printResultsTable(
 	metrics []EvalMetric,
 ) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "App:\t%s\n", appName)
-	fmt.Fprintf(tw, "Eval Set:\t%s\n", evalSetID)
-	fmt.Fprintf(tw, "Cases:\t%d\n", len(caseResults))
-	fmt.Fprintln(tw, "")
-	fmt.Fprintf(tw, "Eval ID\tStatus\t")
+	_, _ = fmt.Fprintf(tw, "App:\t%s\n", appName)
+	_, _ = fmt.Fprintf(tw, "Eval Set:\t%s\n", evalSetID)
+	_, _ = fmt.Fprintf(tw, "Cases:\t%d\n", len(caseResults))
+	_, _ = fmt.Fprintln(tw, "")
+	_, _ = fmt.Fprintf(tw, "Eval ID\tStatus\t")
 	for _, m := range metrics {
-		fmt.Fprintf(tw, "%s\t", m.MetricName)
+		_, _ = fmt.Fprintf(tw, "%s\t", m.MetricName)
 	}
-	fmt.Fprintln(tw)
+	_, _ = fmt.Fprintln(tw)
 
 	for _, cr := range caseResults {
-		fmt.Fprintf(tw, "%s\t%s\t", cr.EvalID, cr.FinalEvalStatus)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t", cr.EvalID, cr.FinalEvalStatus)
 		for _, m := range metrics {
 			for _, mr := range cr.OverallEvalMetricResults {
-				if mr.EvalMetric.MetricName == m.MetricName {
+				if mr.MetricName == m.MetricName {
 					scoreStr := "N/A"
 					if mr.Score != nil {
 						scoreStr = fmt.Sprintf("%.2f", *mr.Score)
 					}
-					fmt.Fprintf(tw, "%s (%s)\t", scoreStr, mr.EvalStatus)
+					_, _ = fmt.Fprintf(tw, "%s (%s)\t", scoreStr, mr.EvalStatus)
 					break
 				}
 			}
 		}
-		fmt.Fprintln(tw)
+		_, _ = fmt.Fprintln(tw)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }
 
 func (a *AgentEvaluator) evaluateCase(
@@ -246,6 +249,9 @@ func (a *AgentEvaluator) evaluateCase(
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to get evaluator for metric %q: %w", metric.MetricName, err)
+		}
+		if evaluator == nil {
+			return nil, fmt.Errorf("nil evaluator returned for metric %q", metric.MetricName)
 		}
 
 		result, err := evaluator.EvaluateInvocations(

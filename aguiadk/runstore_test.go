@@ -126,6 +126,9 @@ func TestRunStore_SaveCopiesCallerData(t *testing.T) {
 	state["status"] = "mutated"
 
 	loaded, _ := s.Load(key)
+	if loaded == nil {
+		t.Fatal("nil load result")
+	}
 	if loaded.Pending[0].ID != "fc-1" {
 		t.Errorf("Pending[0].ID = %q, want %q (caller mutation leaked)", loaded.Pending[0].ID, "fc-1")
 	}

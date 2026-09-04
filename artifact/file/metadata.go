@@ -3,7 +3,6 @@ package file
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -31,33 +30,35 @@ type VersionMetadata struct {
 	CreateTime time.Time `json:"createTime"`
 
 	// CanonicalURI is the fully qualified storage URI that uniquely identifies
-	// this version (e.g. "gs://bucket/appName/userID/sessionID/fileName/3").
+	// this version (e.g. "file://appName/userID/sessionID/fileName/3").
 	CanonicalURI string `json:"canonicalUri"`
 
-	// CustomMetadata holds arbitrary caller-supplied key-value pairs associated
-	// with this version. It is optional; the field is omitted from JSON when nil.
+	// CustomMetadata is reserved for caller-supplied key-value pairs. The
+	// current Service does not populate this field; it is always nil for
+	// artifacts created via Save. It is omitted from JSON when nil.
 	CustomMetadata map[string]any `json:"customMetadata,omitempty"`
 }
 
 // writeMetadata serialises meta as indented JSON and writes it to
-// filepath.Join(dir, "metadata.json"), creating or truncating the file as
-// needed. The file is written with mode 0644.
+// filepath.Join(dir, "metadata.json") beneath the service's [os.Root],
+// creating or truncating the file as needed. The file is written with mode 0600.
 //
 // Returns a wrapped error on marshal failure or I/O error.
-func writeMetadata(dir string, meta *VersionMetadata) error {
+func (s *Service) writeMetadata(dir string, meta *VersionMetadata) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0644)
+	return s.root.WriteFile(filepath.Join(dir, "metadata.json"), data, 0600)
 }
 
-// readMetadata reads and parses the metadata.json file located inside dir.
+// readMetadata reads and parses the metadata.json file located inside dir
+// (relative to the service's [os.Root]).
 //
 // It returns a pointer to the populated VersionMetadata on success, or a
 // wrapped error if the file cannot be read or the JSON is malformed.
-func readMetadata(dir string) (*VersionMetadata, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+func (s *Service) readMetadata(dir string) (*VersionMetadata, error) {
+	data, err := s.root.ReadFile(filepath.Join(dir, "metadata.json"))
 	if err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
 	}

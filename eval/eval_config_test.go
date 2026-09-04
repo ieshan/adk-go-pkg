@@ -2,25 +2,32 @@ package eval
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
 func TestGetEvaluationCriteriaOrDefault_EmptyPath(t *testing.T) {
-	config := GetEvaluationCriteriaOrDefault("")
+	config := GetEvaluationCriteriaOrDefault(nil, "")
 	if len(config.Criteria) == 0 {
 		t.Error("expected default criteria to be non-empty")
 	}
 }
 
 func TestGetEvaluationCriteriaOrDefault_NonExistentFile(t *testing.T) {
-	config := GetEvaluationCriteriaOrDefault("/nonexistent/path.json")
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	config := GetEvaluationCriteriaOrDefault(root, "nonexistent/path.json")
 	if len(config.Criteria) == 0 {
 		t.Error("expected default criteria to be non-empty")
 	}
 }
 
 func TestGetEvaluationCriteriaOrDefault_DefaultValues(t *testing.T) {
-	config := GetEvaluationCriteriaOrDefault("")
+	config := GetEvaluationCriteriaOrDefault(nil, "")
 	if _, ok := config.Criteria["tool_trajectory_avg_score"]; !ok {
 		t.Error("expected tool_trajectory_avg_score in default config")
 	}

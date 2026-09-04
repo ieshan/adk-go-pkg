@@ -7,17 +7,30 @@ import (
 	"path/filepath"
 )
 
-// TemplateLoader loads templates from strings, files, or an embed.FS.
+// TemplateLoader loads templates from strings, files beneath an *os.Root,
+// or files in an arbitrary fs.FS (embed.FS, fstest.MapFS, etc.).
+// Use [NewLoader] with an *os.Root or [NewLoaderFromFS] with an fs.FS.
 type TemplateLoader struct {
 	engine *TemplateEngine
-	fsys   fs.FS // nil means use os.ReadFile
+	fsys   fs.FS // nil means no filesystem available
 }
 
-// NewLoader creates a TemplateLoader.
+// NewLoader creates a TemplateLoader backed by an [os.Root].
 //
-// If fsys is nil, LoadFromFile reads from the host filesystem with os.ReadFile.
-// If fsys is non-nil, LoadFromFile reads from fsys.
-func NewLoader(engine *TemplateEngine, fsys fs.FS) *TemplateLoader {
+// If root is nil, LoadFromFile returns an error (no filesystem available).
+// LoadFromString still works regardless of root.
+func NewLoader(engine *TemplateEngine, root *os.Root) *TemplateLoader {
+	if root == nil {
+		return &TemplateLoader{engine: engine}
+	}
+	return &TemplateLoader{engine: engine, fsys: root.FS()}
+}
+
+// NewLoaderFromFS creates a TemplateLoader backed by an arbitrary [fs.FS].
+// Use this for embed.FS, fstest.MapFS, or other custom filesystems.
+// If fsys is nil, LoadFromFile returns an error (no filesystem available).
+// LoadFromString still works regardless of fsys.
+func NewLoaderFromFS(engine *TemplateEngine, fsys fs.FS) *TemplateLoader {
 	return &TemplateLoader{engine: engine, fsys: fsys}
 }
 
@@ -31,17 +44,16 @@ func (l *TemplateLoader) LoadFromString(name, text string) (*Template, error) {
 	return l.engine.Parse(name, text)
 }
 
-// LoadFromFile reads and parses a template from path.
+// LoadFromFile reads and parses a template from path beneath the loader's filesystem.
 //
 // The template name is set to filepath.Base(path).
+// Returns an error if no filesystem was configured (nil root passed to
+// NewLoader or nil fs.FS passed to NewLoaderFromFS).
 func (l *TemplateLoader) LoadFromFile(path string) (*Template, error) {
-	var b []byte
-	var err error
-	if l.fsys != nil {
-		b, err = fs.ReadFile(l.fsys, path)
-	} else {
-		b, err = os.ReadFile(path)
+	if l.fsys == nil {
+		return nil, fmt.Errorf("load template file %q: no filesystem available", path)
 	}
+	b, err := fs.ReadFile(l.fsys, path)
 	if err != nil {
 		return nil, fmt.Errorf("load template file %q: %w", path, err)
 	}

@@ -40,7 +40,7 @@ func TestBuild_LLMAgent(t *testing.T) {
 		Tools:           []ToolRef{{Name: "search"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestBuild_SequentialAgent(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuild_ParallelAgent(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestBuild_LoopAgent(t *testing.T) {
 		MaxIterations: 3,
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestBuild_NestedTree(t *testing.T) {
 		Model: "mock/fast",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestBuild_NestedTree(t *testing.T) {
 
 // TestBuild_NilConfig verifies that Build returns an error for nil
 func TestBuild_NilConfig(t *testing.T) {
-	_, err := BuildWithPath(context.Background(), nil, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), nil, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected an error for nil config, got nil")
 	}
@@ -179,7 +179,7 @@ func TestBuild_ModelNotFound(t *testing.T) {
 		BaseAgentConfig: BaseAgentConfig{Name: "bot"},
 		Model:           "unregistered/gpt-x",
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected an error for unregistered model prefix, got nil")
 	}
@@ -193,7 +193,7 @@ func TestBuild_ToolNotFound(t *testing.T) {
 		Model:           "mock/fast",
 		Tools:           []ToolRef{{Name: "nonexistent-tool"}},
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected an error for unregistered tool, got nil")
 	}
@@ -208,7 +208,7 @@ func TestBuild_LLMAgent_WithTransferFlags(t *testing.T) {
 		DisallowTransferToPeers:  true,
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestBuild_LLMAgent_DefaultTransferFlags(t *testing.T) {
 		Model:           "mock/fast",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -247,8 +247,13 @@ model: mock/fast
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write temp YAML file: %v", err)
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
-	a, runCfg, liveRunCfg, cacheCfg, err := LoadAndBuild(context.Background(), path, testRegistry())
+	a, runCfg, liveRunCfg, cacheCfg, err := LoadAndBuild(context.Background(), root, "agent.yaml", testRegistry())
 	if err != nil {
 		t.Fatalf("LoadAndBuild returned unexpected error: %v", err)
 	}
@@ -276,17 +281,22 @@ model: mock/fast
 `
 	subPath := filepath.Join(dir, "sub.yaml")
 	_ = os.WriteFile(subPath, []byte(subContent), 0644)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
 	cfg := &SequentialAgentConfig{
 		BaseAgentConfig: BaseAgentConfig{
 			Name: "root",
 			SubAgentEntries: []SubAgentEntry{
-				{Ref: &AgentRefConfig{ConfigPath: subPath}},
+				{Ref: &AgentRefConfig{ConfigPath: "sub.yaml"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), dir)
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -316,7 +326,7 @@ func TestBuild_SubAgentFromCode(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -342,7 +352,7 @@ func TestBuild_LLMAgent_WithModelCode(t *testing.T) {
 		Instruction:     "hi",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -359,7 +369,7 @@ func TestBuild_LLMAgent_ModelAndModelCodeError(t *testing.T) {
 		ModelCode:       &CodeConfig{Name: "myapp.models.custom"},
 		Instruction:     "hi",
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected error when both model and modelCode set")
 	}
@@ -379,7 +389,7 @@ func TestBuild_LLMAgent_WithCallbacks(t *testing.T) {
 		BeforeModelCallbacks: []CodeConfig{{Name: "my.cb"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -397,7 +407,7 @@ func TestBuild_LLMAgent_WithOutputKey(t *testing.T) {
 		OutputKey:       "result",
 		IncludeContents: "none",
 	}
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -421,7 +431,7 @@ func TestBuild_LLMAgent_WithSchemaRefs(t *testing.T) {
 		OutputSchema:    &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.output"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -445,7 +455,7 @@ func TestBuild_LLMAgent_WithInlineSchema(t *testing.T) {
 		}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -465,7 +475,7 @@ func TestBuild_LLMAgent_WithSchemaShorthand(t *testing.T) {
 		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.input"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -482,7 +492,7 @@ func TestBuild_LLMAgent_MissingSchemaRef(t *testing.T) {
 		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.missing"}},
 	}
 
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing schema registration, got nil")
 	}
@@ -528,7 +538,7 @@ func TestBuild_Sequential_WithCallbacks(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -546,7 +556,7 @@ func TestBuildApp_ReturnsAgent(t *testing.T) {
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
+	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -580,7 +590,7 @@ func TestBuildApp_ReturnsRunConfig(t *testing.T) {
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
+	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -613,7 +623,7 @@ func TestBuildApp_NilRunConfig(t *testing.T) {
 		},
 	}
 
-	_, runCfg, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
+	_, runCfg, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -634,7 +644,7 @@ func TestBuildApp_ReturnsLiveRunConfig(t *testing.T) {
 		},
 	}
 
-	_, _, liveRunCfg, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
+	_, _, liveRunCfg, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -660,7 +670,7 @@ func TestBuildApp_ReturnsContextCacheConfig(t *testing.T) {
 		},
 	}
 
-	_, _, _, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), "")
+	_, _, _, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
@@ -694,7 +704,7 @@ func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -715,7 +725,7 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Inline(t *testing.T) {
 		InstructionTemplate: &prompt.TemplateRef{Inline: "You are {{.Agent.Name}}."},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -742,7 +752,7 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Name(t *testing.T) {
 		InstructionTemplate: &prompt.TemplateRef{Name: "greeting"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, "")
+	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -757,14 +767,19 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Path(t *testing.T) {
 	dir := t.TempDir()
 	tmplPath := filepath.Join(dir, "instruction.tmpl")
 	_ = os.WriteFile(tmplPath, []byte("You are a helpful assistant."), 0644)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
 	cfg := &LLMAgentConfig{
 		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-path-bot"},
 		Model:               "mock/fast",
-		InstructionTemplate: &prompt.TemplateRef{Path: tmplPath},
+		InstructionTemplate: &prompt.TemplateRef{Path: "instruction.tmpl"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -783,7 +798,7 @@ func TestBuild_LLMAgent_InstructionTemplatePrecedence(t *testing.T) {
 		InstructionTemplate: &prompt.TemplateRef{Inline: "templated instruction"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -804,7 +819,7 @@ func TestBuild_LLMAgent_InvalidInstructionTemplate(t *testing.T) {
 		},
 	}
 
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), "")
+	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
 		t.Fatal("expected error for invalid InstructionTemplate, got nil")
 	}
@@ -820,6 +835,11 @@ model: mock/fast
 `
 	subPath := filepath.Join(dir, "sub.yaml")
 	_ = os.WriteFile(subPath, []byte(subContent), 0644)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
 
 	appCfg := &AppConfig{
 		AgentConfig: &SequentialAgentConfig{
@@ -832,8 +852,7 @@ model: mock/fast
 		},
 	}
 
-	rootPath := filepath.Join(dir, "root.yaml")
-	a, _, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), rootPath)
+	a, _, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), root, "root.yaml")
 	if err != nil {
 		t.Fatalf("BuildAppWithPath: %v", err)
 	}

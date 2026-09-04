@@ -56,6 +56,9 @@ func TestInferCapabilities_WithSubAgents(t *testing.T) {
 	}
 
 	caps := InferCapabilities(parent, Config{Agent: parent})
+	if caps == nil {
+		t.Fatal("nil capabilities")
+	}
 	if caps.Activities == nil {
 		t.Error("expected activity capabilities for agent with sub-agents")
 	}

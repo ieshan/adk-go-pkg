@@ -33,7 +33,7 @@ func (r *TemplateRegistry) Engine() *TemplateEngine {
 }
 
 // Register parses and stores a template under name.
-// Returns an error if name is already registered.
+// Returns an error if parsing fails or if name is already registered.
 func (r *TemplateRegistry) Register(name, text string) error {
 	tmpl, err := r.engine.Parse(name, text)
 	if err != nil {
@@ -49,9 +49,10 @@ func (r *TemplateRegistry) Register(name, text string) error {
 	return nil
 }
 
-// RegisterFile reads and registers a template from path under name.
-func (r *TemplateRegistry) RegisterFile(name, path string) error {
-	b, err := os.ReadFile(path)
+// RegisterFile reads and registers a template from path under the provided
+// *os.Root, storing it under name. root must not be nil.
+func (r *TemplateRegistry) RegisterFile(name string, root *os.Root, path string) error {
+	b, err := root.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("register template file %q: %w", path, err)
 	}
@@ -69,7 +70,7 @@ func (r *TemplateRegistry) Get(name string) (*Template, bool) {
 // Render executes the named template with data built from ctx.
 func (r *TemplateRegistry) Render(name string, ctx agent.ReadonlyContext) (string, error) {
 	tmpl, ok := r.Get(name)
-	if !ok {
+	if !ok || tmpl == nil {
 		return "", fmt.Errorf("template %q not found", name)
 	}
 	return tmpl.Execute(BuildDataFromReadonlyContext(ctx))

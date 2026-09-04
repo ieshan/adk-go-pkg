@@ -198,10 +198,10 @@ func (s *LlmBackedUserSimulator) summarizeConversation(events []*session.Event) 
 				text.WriteString(part.Text)
 			}
 			if s.config.IncludeFunctionCalls && part.FunctionCall != nil {
-				text.WriteString(fmt.Sprintf(" [Function call: %s(%v)]", part.FunctionCall.Name, part.FunctionCall.Args))
+				fmt.Fprintf(&text, " [Function call: %s(%v)]", part.FunctionCall.Name, part.FunctionCall.Args)
 			}
 			if s.config.IncludeFunctionCalls && part.FunctionResponse != nil {
-				text.WriteString(fmt.Sprintf(" [Function response: %s]", part.FunctionResponse.Name))
+				fmt.Fprintf(&text, " [Function response: %s]", part.FunctionResponse.Name)
 			}
 		}
 		if text.Len() > 0 {

@@ -2,8 +2,6 @@ package file
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -157,20 +155,32 @@ func TestVersionMetadata_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestWriteMetadata writes a VersionMetadata to a temp directory via
-// writeMetadata and then reads the raw file back to verify its contents.
+// newTestService creates a Service backed by a temp directory and registers
+// cleanup to close the root.
+func newTestService(t *testing.T) *Service {
+	t.Helper()
+	svc, err := New(Config{RootDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestWriteMetadata writes a VersionMetadata via (*Service).writeMetadata and
+// then reads the raw file back to verify its contents.
 func TestWriteMetadata(t *testing.T) {
-	dir := t.TempDir()
+	svc := newTestService(t)
 	meta := sampleMeta()
 
-	if err := writeMetadata(dir, meta); err != nil {
+	if err := svc.writeMetadata(".", meta); err != nil {
 		t.Fatalf("writeMetadata: %v", err)
 	}
 
-	// Read the raw file and verify the JSON.
-	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	// Read the raw file back via the service root to verify the JSON.
+	data, err := svc.root.ReadFile("metadata.json")
 	if err != nil {
-		t.Fatalf("os.ReadFile: %v", err)
+		t.Fatalf("read metadata.json: %v", err)
 	}
 
 	var got map[string]any
@@ -194,10 +204,11 @@ func TestWriteMetadata(t *testing.T) {
 	}
 }
 
-// TestReadMetadata writes a metadata.json to a temp directory directly and
-// reads it back via readMetadata, verifying all fields are parsed correctly.
+// TestReadMetadata writes a metadata.json directly to the service root and
+// reads it back via (*Service).readMetadata, verifying all fields are parsed
+// correctly.
 func TestReadMetadata(t *testing.T) {
-	dir := t.TempDir()
+	svc := newTestService(t)
 	raw := `{
   "version": 7,
   "fileName": "image.png",
@@ -206,11 +217,11 @@ func TestReadMetadata(t *testing.T) {
   "canonicalUri": "gs://bucket/image.png/7",
   "customMetadata": {"label": "cover"}
 }`
-	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(raw), 0644); err != nil {
-		t.Fatalf("os.WriteFile: %v", err)
+	if err := svc.root.WriteFile("metadata.json", []byte(raw), 0600); err != nil {
+		t.Fatalf("write metadata.json: %v", err)
 	}
 
-	meta, err := readMetadata(dir)
+	meta, err := svc.readMetadata(".")
 	if err != nil {
 		t.Fatalf("readMetadata: %v", err)
 	}
@@ -238,7 +249,9 @@ func TestReadMetadata(t *testing.T) {
 // TestReadMetadata_NotFound verifies that readMetadata returns an error when
 // the target directory (or metadata.json within it) does not exist.
 func TestReadMetadata_NotFound(t *testing.T) {
-	_, err := readMetadata("/nonexistent/path/that/does/not/exist")
+	svc := newTestService(t)
+
+	_, err := svc.readMetadata("nonexistent")
 	if err == nil {
 		t.Fatal("expected an error for non-existent path, got nil")
 	}

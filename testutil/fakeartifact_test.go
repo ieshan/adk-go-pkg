@@ -50,6 +50,9 @@ func TestFakeArtifactService_Versioning(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "file.txt", Part: &genai.Part{Text: "v1"},
 	})
+	if resp1 == nil {
+		t.Fatal("nil response")
+	}
 	if resp1.Version != 1 {
 		t.Errorf("v1 = %d, want 1", resp1.Version)
 	}
@@ -59,6 +62,9 @@ func TestFakeArtifactService_Versioning(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "file.txt", Part: &genai.Part{Text: "v2"},
 	})
+	if resp2 == nil {
+		t.Fatal("nil response")
+	}
 	if resp2.Version != 2 {
 		t.Errorf("v2 = %d, want 2", resp2.Version)
 	}
@@ -80,6 +86,9 @@ func TestFakeArtifactService_Versioning(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "file.txt",
 	})
+	if loadResp2 == nil {
+		t.Fatal("nil response")
+	}
 	if loadResp2.Part.Text != "v2" {
 		t.Errorf("Load(latest) text = %q, want %q", loadResp2.Part.Text, "v2")
 	}
@@ -89,6 +98,9 @@ func TestFakeArtifactService_Versioning(t *testing.T) {
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "file.txt",
 	})
+	if verResp == nil {
+		t.Fatal("nil response")
+	}
 	if len(verResp.Versions) != 2 {
 		t.Errorf("Versions() count = %d, want 2", len(verResp.Versions))
 	}
@@ -98,14 +110,18 @@ func TestFakeArtifactService_List(t *testing.T) {
 	svc := NewFakeArtifactService()
 	ctx := context.Background()
 
-	svc.Save(ctx, &artifact.SaveRequest{
+	if _, err := svc.Save(ctx, &artifact.SaveRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "a.txt", Part: &genai.Part{Text: "a"},
-	})
-	svc.Save(ctx, &artifact.SaveRequest{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Save(ctx, &artifact.SaveRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "b.txt", Part: &genai.Part{Text: "b"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	listResp, err := svc.List(ctx, &artifact.ListRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
@@ -126,10 +142,12 @@ func TestFakeArtifactService_Delete(t *testing.T) {
 	svc := NewFakeArtifactService()
 	ctx := context.Background()
 
-	svc.Save(ctx, &artifact.SaveRequest{
+	if _, err := svc.Save(ctx, &artifact.SaveRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "del.txt", Part: &genai.Part{Text: "del"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	err := svc.Delete(ctx, &artifact.DeleteRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
@@ -168,14 +186,18 @@ func TestFakeArtifactService_CallTracking(t *testing.T) {
 	svc := NewFakeArtifactService()
 	ctx := context.Background()
 
-	svc.Save(ctx, &artifact.SaveRequest{
+	if _, err := svc.Save(ctx, &artifact.SaveRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "f.txt", Part: &genai.Part{Text: "x"},
-	})
-	svc.Load(ctx, &artifact.LoadRequest{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Load(ctx, &artifact.LoadRequest{
 		AppName: "app", UserID: "user", SessionID: "sess",
 		FileName: "f.txt",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if svc.SaveCount() != 1 {
 		t.Errorf("SaveCount() = %d, want 1", svc.SaveCount())
@@ -183,8 +205,12 @@ func TestFakeArtifactService_CallTracking(t *testing.T) {
 	if svc.LoadCount() != 1 {
 		t.Errorf("LoadCount() = %d, want 1", svc.LoadCount())
 	}
-	if svc.LastSave().FileName != "f.txt" {
-		t.Errorf("LastSave().FileName = %q, want %q", svc.LastSave().FileName, "f.txt")
+	lastSave := svc.LastSave()
+	if lastSave == nil {
+		t.Fatal("nil response")
+	}
+	if lastSave.FileName != "f.txt" {
+		t.Errorf("LastSave().FileName = %q, want %q", lastSave.FileName, "f.txt")
 	}
 }
 

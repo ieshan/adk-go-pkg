@@ -17,12 +17,13 @@ import (
 
 // --- helpers ---
 
-func newService(t *testing.T) artifact.Service {
+func newService(t *testing.T) *file.Service {
 	t.Helper()
 	svc, err := file.New(file.Config{RootDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 	return svc
 }
 
@@ -57,6 +58,7 @@ func TestSave_NewArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 
 	resp, err := svc.Save(context.Background(), &artifact.SaveRequest{
 		AppName:   testApp,
@@ -108,6 +110,7 @@ func TestSave_BinaryContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 
 	data := []byte{0x89, 0x50, 0x4e, 0x47} // PNG magic bytes
 	resp, err := svc.Save(context.Background(), &artifact.SaveRequest{
@@ -231,6 +234,7 @@ func TestDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(func() { _ = svc.Close() })
 
 	saveText(t, svc, "todel.txt", "to be deleted")
 
@@ -499,5 +503,37 @@ func TestGetArtifactVersion_InvalidFileName(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for path traversal filename, got nil")
+	}
+}
+
+// TestService_Close verifies that Close releases the underlying os.Root and
+// that operations after Close return an error. It also verifies that double
+// Close is safe.
+func TestService_Close(t *testing.T) {
+	svc := newService(t)
+
+	// Save should work before Close.
+	saveText(t, svc, "before.txt", "before close")
+
+	// Close the service manually. t.Cleanup will call Close again (idempotent).
+	if err := svc.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+
+	// Double close should not panic.
+	if err := svc.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	// Save after Close should fail.
+	_, err := svc.Save(context.Background(), &artifact.SaveRequest{
+		AppName:   testApp,
+		UserID:    testUser,
+		SessionID: testSession,
+		FileName:  "after.txt",
+		Part:      &genai.Part{Text: "after close"},
+	})
+	if err == nil {
+		t.Fatal("expected error after Close, got nil")
 	}
 }

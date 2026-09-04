@@ -134,7 +134,7 @@ func TestNewEvalSet(t *testing.T) {
 }
 
 func TestSessionStateTypeAlias(t *testing.T) {
-	var s SessionState = map[string]any{"key": "value"}
+	var s = SessionState(map[string]any{"key": "value"})
 	if s["key"] != "value" {
 		t.Error("SessionState map not working")
 	}

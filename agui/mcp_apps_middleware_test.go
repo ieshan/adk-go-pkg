@@ -329,6 +329,9 @@ func TestMCPAppsMiddleware_PendingUIToolExecution(t *testing.T) {
 	if !hasActivitySnapshot {
 		t.Error("expected ACTIVITY_SNAPSHOT event")
 	}
+	if len(evs) == 0 {
+		t.Fatal("no events collected")
+	}
 	if evs[len(evs)-1].Type() != events.EventTypeRunFinished {
 		t.Errorf("last event: got %s, want RUN_FINISHED", evs[len(evs)-1].Type())
 	}

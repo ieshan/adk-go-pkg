@@ -179,7 +179,7 @@ func (e *RubricBasedMultiTurnTrajectoryEvaluator) assembleDialogueHistory(invoca
 		if inv.FinalResponse != nil {
 			agentName := "agent"
 			if inv.IntermediateData != nil {
-				if events := inv.IntermediateData.GetInvocationEvents(); events != nil && len(events) > 0 {
+				if events := inv.IntermediateData.GetInvocationEvents(); len(events) > 0 {
 					agentName = events[0].Author
 				}
 			}

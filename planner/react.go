@@ -267,12 +267,7 @@ func parsePlanJSON(raw string) (*Plan, error) {
 		Steps:     make([]PlanStep, 0, len(pj.Steps)),
 	}
 	for _, sj := range pj.Steps {
-		step := PlanStep{
-			Description: sj.Description,
-			ToolName:    sj.ToolName,
-			Args:        sj.Args,
-			DependsOn:   sj.DependsOn,
-		}
+		step := PlanStep(sj)
 		if step.Args == nil {
 			step.Args = make(map[string]any)
 		}

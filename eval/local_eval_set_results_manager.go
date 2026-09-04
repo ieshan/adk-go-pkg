@@ -3,25 +3,43 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // LocalEvalSetResultsManager stores eval set results as .evalset_result.json
-// files on disk.
+// files on disk. All filesystem access is scoped beneath an [os.Root] opened
+// from agentsDir.
 type LocalEvalSetResultsManager struct {
-	agentsDir string
+	root *os.Root
 }
 
-// NewLocalEvalSetResultsManager creates a new LocalEvalSetResultsManager.
-func NewLocalEvalSetResultsManager(agentsDir string) *LocalEvalSetResultsManager {
-	return &LocalEvalSetResultsManager{agentsDir: agentsDir}
+// NewLocalEvalSetResultsManager creates a new LocalEvalSetResultsManager backed
+// by agentsDir. The directory is created if it does not exist. Callers must
+// call Close to release the underlying file descriptor.
+func NewLocalEvalSetResultsManager(agentsDir string) (*LocalEvalSetResultsManager, error) {
+	if err := os.MkdirAll(agentsDir, 0750); err != nil {
+		return nil, fmt.Errorf("create eval results dir: %w", err)
+	}
+	root, err := os.OpenRoot(agentsDir)
+	if err != nil {
+		return nil, fmt.Errorf("open eval results root: %w", err)
+	}
+	return &LocalEvalSetResultsManager{root: root}, nil
+}
+
+// Close releases the underlying [os.Root] file descriptor.
+// It is safe to call multiple times.
+func (m *LocalEvalSetResultsManager) Close() error {
+	return m.root.Close()
 }
 
 func (m *LocalEvalSetResultsManager) resultsDir(appName string) string {
-	return filepath.Join(m.agentsDir, appName, ".adk", "eval_history")
+	return filepath.Join(appName, ".adk", "eval_history")
 }
 
 func (m *LocalEvalSetResultsManager) resultPath(appName, resultID string) string {
@@ -36,14 +54,14 @@ func (m *LocalEvalSetResultsManager) SaveEvalSetResult(ctx context.Context, appN
 	result := CreateEvalSetResult(appName, evalSetID, results)
 	path := m.resultPath(appName, SanitizeEvalSetResultName(result.EvalSetResultID))
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := m.root.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create results directory: %w", err)
 	}
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal eval set result: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := m.root.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write eval set result file: %w", err)
 	}
 	return nil
@@ -58,9 +76,9 @@ func (m *LocalEvalSetResultsManager) GetEvalSetResult(ctx context.Context, appNa
 		return nil, err
 	}
 	path := m.resultPath(appName, evalSetResultID)
-	data, err := os.ReadFile(path)
+	data, err := m.root.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, NewNotFoundError("eval set result", evalSetResultID)
 		}
 		return nil, fmt.Errorf("failed to read eval set result: %w", err)
@@ -74,9 +92,9 @@ func (m *LocalEvalSetResultsManager) ListEvalSetResults(ctx context.Context, app
 		return nil, err
 	}
 	dir := m.resultsDir(appName)
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(m.root.FS(), dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("failed to list eval set results: %w", err)

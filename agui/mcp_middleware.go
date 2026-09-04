@@ -192,7 +192,7 @@ func (m *mcpMiddleware) runLoop(ctx context.Context, input types.RunAgentInput, 
 		}
 
 		if runErr != nil {
-			emitter.RunErrorWithOptions(fmt.Sprintf("agui: agent error: %v", runErr))
+			_ = emitter.RunErrorWithOptions(fmt.Sprintf("agui: agent error: %v", runErr))
 			return
 		}
 
@@ -266,7 +266,7 @@ func (m *mcpMiddleware) runLoop(ctx context.Context, input types.RunAgentInput, 
 				content = fmt.Sprintf("Error: %v", res.err)
 			}
 			resultMsgID := events.GenerateMessageID()
-			emitter.ToolCallResult(resultMsgID, res.toolCallID, content)
+			_ = emitter.ToolCallResult(resultMsgID, res.toolCallID, content)
 
 			// Add tool result message to the conversation
 			messages = append(messages, types.Message{

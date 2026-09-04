@@ -3,28 +3,46 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // LocalEvalSetsManager stores eval sets as .evalset.json files on disk.
+// All filesystem access is scoped beneath an [os.Root] opened from agentsDir.
 type LocalEvalSetsManager struct {
-	agentsDir string
+	root *os.Root
 }
 
-// NewLocalEvalSetsManager creates a new LocalEvalSetsManager.
-func NewLocalEvalSetsManager(agentsDir string) *LocalEvalSetsManager {
-	return &LocalEvalSetsManager{agentsDir: agentsDir}
+// NewLocalEvalSetsManager creates a new LocalEvalSetsManager backed by agentsDir.
+// The directory is created if it does not exist. Callers must call Close to
+// release the underlying file descriptor.
+func NewLocalEvalSetsManager(agentsDir string) (*LocalEvalSetsManager, error) {
+	if err := os.MkdirAll(agentsDir, 0750); err != nil {
+		return nil, fmt.Errorf("create eval sets dir: %w", err)
+	}
+	root, err := os.OpenRoot(agentsDir)
+	if err != nil {
+		return nil, fmt.Errorf("open eval sets root: %w", err)
+	}
+	return &LocalEvalSetsManager{root: root}, nil
+}
+
+// Close releases the underlying [os.Root] file descriptor.
+// It is safe to call multiple times.
+func (m *LocalEvalSetsManager) Close() error {
+	return m.root.Close()
 }
 
 func (m *LocalEvalSetsManager) evalSetPath(appName, evalSetID string) string {
-	return filepath.Join(m.agentsDir, appName, "eval", evalSetID+".evalset.json")
+	return filepath.Join(appName, "eval", evalSetID+".evalset.json")
 }
 
 func (m *LocalEvalSetsManager) evalDir(appName string) string {
-	return filepath.Join(m.agentsDir, appName, "eval")
+	return filepath.Join(appName, "eval")
 }
 
 func (m *LocalEvalSetsManager) validateAndPath(appName, evalSetID string) (string, error) {
@@ -43,7 +61,7 @@ func (m *LocalEvalSetsManager) GetEvalSet(ctx context.Context, appName, evalSetI
 	if err != nil {
 		return nil, err
 	}
-	return LoadEvalSetFromFile(path)
+	return LoadEvalSetFromFile(m.root, path)
 }
 
 // CreateEvalSet creates a new empty eval set file on disk.
@@ -52,7 +70,7 @@ func (m *LocalEvalSetsManager) CreateEvalSet(ctx context.Context, appName, evalS
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(path); err == nil {
+	if _, err := m.root.Stat(path); err == nil {
 		return nil, fmt.Errorf("%w: eval set %q already exists", ErrAlreadyExists, evalSetID)
 	}
 	evalSet := NewEvalSet(evalSetID)
@@ -68,9 +86,9 @@ func (m *LocalEvalSetsManager) ListEvalSets(ctx context.Context, appName string)
 		return nil, err
 	}
 	dir := m.evalDir(appName)
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(m.root.FS(), dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("failed to list eval sets: %w", err)
@@ -108,7 +126,7 @@ func (m *LocalEvalSetsManager) AddEvalCase(ctx context.Context, appName, evalSet
 	if err != nil {
 		return err
 	}
-	evalSet, err := LoadEvalSetFromFile(path)
+	evalSet, err := LoadEvalSetFromFile(m.root, path)
 	if err != nil {
 		return err
 	}
@@ -125,7 +143,7 @@ func (m *LocalEvalSetsManager) UpdateEvalCase(ctx context.Context, appName, eval
 	if err != nil {
 		return err
 	}
-	evalSet, err := LoadEvalSetFromFile(path)
+	evalSet, err := LoadEvalSetFromFile(m.root, path)
 	if err != nil {
 		return err
 	}
@@ -142,7 +160,7 @@ func (m *LocalEvalSetsManager) DeleteEvalCase(ctx context.Context, appName, eval
 	if err != nil {
 		return err
 	}
-	evalSet, err := LoadEvalSetFromFile(path)
+	evalSet, err := LoadEvalSetFromFile(m.root, path)
 	if err != nil {
 		return err
 	}
@@ -155,14 +173,14 @@ func (m *LocalEvalSetsManager) DeleteEvalCase(ctx context.Context, appName, eval
 
 func (m *LocalEvalSetsManager) saveEvalSet(path string, evalSet *EvalSet) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := m.root.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create eval directory: %w", err)
 	}
 	data, err := json.MarshalIndent(evalSet, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal eval set: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := m.root.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write eval set file: %w", err)
 	}
 	return nil

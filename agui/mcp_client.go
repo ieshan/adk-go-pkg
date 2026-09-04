@@ -87,7 +87,7 @@ func ListMCPTools(ctx context.Context, config MCPClientConfig) ([]*mcp.Tool, err
 	if err != nil {
 		return nil, err
 	}
-	defer closeFn()
+	defer func() { _ = closeFn() }()
 
 	var allTools []*mcp.Tool
 	cursor := ""
@@ -112,7 +112,7 @@ func CallMCPTool(ctx context.Context, config MCPClientConfig, name string, args 
 	if err != nil {
 		return nil, err
 	}
-	defer closeFn()
+	defer func() { _ = closeFn() }()
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
@@ -130,7 +130,7 @@ func ReadMCPResource(ctx context.Context, config MCPClientConfig, uri string) (a
 	if err != nil {
 		return nil, err
 	}
-	defer closeFn()
+	defer func() { _ = closeFn() }()
 
 	result, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
 	if err != nil {
@@ -161,7 +161,7 @@ func ExecuteMCPRequest(ctx context.Context, config MCPClientConfig, method strin
 		if err != nil {
 			return nil, err
 		}
-		defer closeFn()
+		defer func() { _ = closeFn() }()
 		if err := session.Ping(ctx, nil); err != nil {
 			return nil, fmt.Errorf("agui: ping to %q: %w", config.URL, err)
 		}

@@ -101,6 +101,9 @@ func TestHandler_BasicRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -157,6 +160,9 @@ func TestHandler_StreamsTextMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 
 	eventTypes := parseSSEEvents(t, resp.Body)
 	expected := []string{
@@ -206,6 +212,9 @@ func TestHandler_RunError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 
 	rawEvents := parseSSEEventsRaw(t, resp.Body)
 
@@ -244,6 +253,9 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// GET / without configured capabilities returns 404 (discovery is
@@ -271,6 +283,9 @@ func TestHandler_InvalidBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -558,10 +573,16 @@ func TestHandler_Keepalive(t *testing.T) {
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
+	if req == nil {
+		t.Fatal("nil request")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("nil response")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -605,6 +626,9 @@ func TestHandler_MaxBodySize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		t.Fatal("nil response")
+	}
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -637,11 +661,17 @@ func TestHandler_DisconnectCancelsAgent(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(body))
+	if req == nil {
+		t.Fatal("nil request")
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("nil response")
 	}
 
 	cancel()

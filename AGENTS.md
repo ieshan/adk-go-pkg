@@ -88,7 +88,7 @@ Detects variable declarations that shadow outer-scope declarations. Shadowed var
 gocheck shadow ./...
 ```
 
-**Known acceptable shadows**: Loop-scoped `t, err :=` inside `for` loops and `if err :=` scoped error checks in `config/builder.go` are standard Go patterns and do not need fixing.
+**Known acceptable shadows**: Loop-scoped `t, err :=` inside `for` loops and `if err :=` scoped error checks in `config/builder.go`, `session/rewind/rewind.go`, and `config/config_test.go` are standard Go patterns and do not need fixing. Each site is marked with a `//nolint:shadow` inline comment so AI agents do not attempt to "fix" them. The `shadow` analyzer has no inline suppression mechanism, so these 10 warnings will still appear in output — they are expected and acceptable.
 
 ### nilness (impossible nil conditions detector)
 
@@ -113,6 +113,8 @@ If a `golangci-lint` config is needed, create `.golangci.yml` at the repo root. 
 ```bash
 gocheck gosec ./...
 ```
+
+**Suppressed findings**: None. Filesystem-owning services (`artifact/file.Service`, `eval.LocalEvalSetsManager`, `eval.LocalEvalSetResultsManager`) scope all I/O beneath an `*os.Root` opened from a base directory in their constructors. Standalone APIs (`config.Load`, `config.ResolveAgentRef`, `eval.LoadEvalSetFromFile`, `eval.GetEvaluationCriteriaOrDefault`, `prompt.NewLoader`, `prompt.TemplateRegistry.RegisterFile`) accept a `*os.Root` and use root-relative paths. The gosec count should be 0.
 
 ### nilaway (nilability analyzer)
 

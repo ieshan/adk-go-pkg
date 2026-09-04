@@ -38,11 +38,15 @@ type EvalConfig struct {
 	UserSimulatorConfig json.RawMessage `json:"userSimulatorConfig,omitempty"`
 }
 
-// GetEvaluationCriteriaOrDefault loads eval config from the given path.
-// If the file doesn't exist, returns a default config with
-// tool_trajectory_avg_score=1.0 and response_match_score=0.8.
-func GetEvaluationCriteriaOrDefault(configPath string) EvalConfig {
-	data, err := os.ReadFile(configPath)
+// GetEvaluationCriteriaOrDefault loads eval config from the given path beneath
+// root. If root is nil or configPath is empty, or the file doesn't exist,
+// returns a default config with tool_trajectory_avg_score=1.0 and
+// response_match_score=0.8.
+func GetEvaluationCriteriaOrDefault(root *os.Root, configPath string) EvalConfig {
+	if root == nil || configPath == "" {
+		return defaultEvalConfig()
+	}
+	data, err := root.ReadFile(configPath)
 	if err != nil {
 		return defaultEvalConfig()
 	}

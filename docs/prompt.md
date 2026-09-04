@@ -197,16 +197,29 @@ engine := prompt.New()
 registry := prompt.NewRegistry(engine)
 
 // Register from string
-registry.Register("greeting", "Hello {{.Input.name}}!")
+if err := registry.Register("greeting", "Hello {{.Input.name}}!"); err != nil {
+    log.Fatal(err)
+}
 
-// Register from file
-registry.RegisterFile("system_prompt", "prompts/system.tmpl")
+// Register from file beneath an os.Root
+root, err := os.OpenRoot(".")
+if err != nil {
+    log.Fatal(err)
+}
+defer root.Close()
+if err := registry.RegisterFile("system_prompt", root, "prompts/system.tmpl"); err != nil {
+    log.Fatal(err)
+}
 
 // Get a template
 tmpl, ok := registry.Get("greeting")
 
-// Render by name with agent context
+// Render by name with agent context (ctx is an agent.ReadonlyContext)
 rendered, err := registry.Render("greeting", ctx)
+if err != nil {
+    log.Fatal(err)
+}
+_ = rendered
 
 // List all registered template names (sorted)
 names := registry.Names()
@@ -214,25 +227,39 @@ names := registry.Names()
 
 ### TemplateLoader
 
-Loads templates from strings, files, or an `embed.FS`.
+Loads templates from strings, files beneath an `*os.Root`, or an `embed.FS`/custom `fs.FS`.
 
 ```go
 engine := prompt.New()
 
-// Host filesystem (os.ReadFile)
-loader := prompt.NewLoader(engine, nil)
+// os.Root-backed (paths are scoped beneath root)
+root, err := os.OpenRoot(".")
+if err != nil {
+    log.Fatal(err)
+}
+defer root.Close()
+rootLoader := prompt.NewLoader(engine, root)
 
-// embed.FS
+// embed.FS or any fs.FS
 //go:embed templates/*.tmpl
 var templateFS embed.FS
-loader := prompt.NewLoader(engine, templateFS)
+fsLoader := prompt.NewLoaderFromFS(engine, templateFS)
 
-// Load from string
-tmpl, err := loader.LoadFromString("inline", "value={{.Input.v}}")
+// Load from string (works on any loader regardless of filesystem)
+tmpl, err := rootLoader.LoadFromString("inline", "value={{.Input.v}}")
 
-// Load from file (name = filepath.Base(path))
-tmpl, err := loader.LoadFromFile("prompts/system.tmpl")
+// Load from file (name = filepath.Base(path)); path is resolved within the
+// loader's filesystem. For rootLoader the path is root-relative; for
+// fsLoader it is relative to the embed.FS root.
+tmpl, err = fsLoader.LoadFromFile("templates/system.tmpl")
 ```
+
+> **Note:** Passing a nil root to `NewLoader` or a nil `fs.FS` to
+> `NewLoaderFromFS` creates a loader with no filesystem attached.
+> `LoadFromFile` will return an error on such a loader; `LoadFromString`
+> still works. Use `NewLoader(engine, root)` with an `*os.Root` or
+> `NewLoaderFromFS(engine, fsys)` with an `embed.FS`/custom `fs.FS` to
+> enable file loading.
 
 ### TemplateRef
 
@@ -392,7 +419,7 @@ func main() {
 	var llm model.LLM // your model
 
 	engine := prompt.New()
-	loader := prompt.NewLoader(engine, promptFS)
+	loader := prompt.NewLoaderFromFS(engine, promptFS)
 
 	tmpl, err := loader.LoadFromFile("prompts/system.tmpl")
 	if err != nil {
@@ -446,8 +473,12 @@ func main() {
 	engine := prompt.New()
 	registry := prompt.NewRegistry(engine)
 
-	registry.Register("formal", "Greetings. You are {{.Agent.Name}}. How may I assist?")
-	registry.Register("casual", "Hey! I'm {{.Agent.Name}}. What's up?")
+	if err := registry.Register("formal", "Greetings. You are {{.Agent.Name}}. How may I assist?"); err != nil {
+		log.Fatal(err)
+	}
+	if err := registry.Register("casual", "Hey! I'm {{.Agent.Name}}. What's up?"); err != nil {
+		log.Fatal(err)
+	}
 
 	// Select a template at runtime (e.g. based on config, user preference, etc.)
 	tmpl, ok := registry.Get("casual")
@@ -890,7 +921,7 @@ var promptFS embed.FS
 
 func main() {
 	engine := prompt.New()
-	loader := prompt.NewLoader(engine, promptFS)
+	loader := prompt.NewLoaderFromFS(engine, promptFS)
 
 	tmpl, err := loader.LoadFromFile("prompts/system.tmpl")
 	if err != nil {

@@ -88,17 +88,25 @@ func TestFakeMemoryService_WithAddSessionFunc(t *testing.T) {
 
 func TestFakeMemoryService_CallTracking(t *testing.T) {
 	svc := NewFakeMemoryService()
-	svc.SearchMemory(context.Background(), &memory.SearchRequest{
+	if _, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
 		Query: "q1", UserID: "u", AppName: "a",
-	})
-	svc.SearchMemory(context.Background(), &memory.SearchRequest{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
 		Query: "q2", UserID: "u", AppName: "a",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if svc.SearchCount() != 2 {
 		t.Errorf("SearchCount() = %d, want 2", svc.SearchCount())
 	}
-	if svc.LastSearch().Query != "q2" {
-		t.Errorf("LastSearch().Query = %q, want %q", svc.LastSearch().Query, "q2")
+	lastSearch := svc.LastSearch()
+	if lastSearch == nil {
+		t.Fatal("nil search")
+	}
+	if lastSearch.Query != "q2" {
+		t.Errorf("LastSearch().Query = %q, want %q", lastSearch.Query, "q2")
 	}
 }

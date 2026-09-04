@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -41,7 +42,11 @@ func (p *RequestIntercepterPlugin) BeforeModelCallback(ctx agent.Context, req *m
 	p.requests[id] = req
 	p.mu.Unlock()
 
-	ctx.State().Set(requestIntercepterStateKey, id)
+	if state := ctx.State(); state != nil {
+		if err := state.Set(requestIntercepterStateKey, id); err != nil {
+			return nil, fmt.Errorf("request intercepter: set state key: %w", err)
+		}
+	}
 
 	return nil, nil
 }
@@ -53,7 +58,10 @@ func (p *RequestIntercepterPlugin) AfterModelCallback(ctx agent.Context, resp *m
 		return resp, respErr
 	}
 
-	idVal, _ := ctx.State().Get(requestIntercepterStateKey)
+	var idVal any
+	if state := ctx.State(); state != nil {
+		idVal, _ = state.Get(requestIntercepterStateKey)
+	}
 	id, _ := idVal.(string)
 	if id == "" {
 		return resp, respErr

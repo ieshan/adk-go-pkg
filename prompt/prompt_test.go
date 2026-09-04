@@ -486,7 +486,13 @@ func TestLoader(t *testing.T) {
 		if err := os.WriteFile(path, []byte("name={{.Input.name}}"), 0o644); err != nil {
 			t.Fatalf("write file: %v", err)
 		}
-		tmpl, err := loader.LoadFromFile(path)
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatalf("OpenRoot: %v", err)
+		}
+		defer func() { _ = root.Close() }()
+		fileLoader := NewLoader(e, root)
+		tmpl, err := fileLoader.LoadFromFile("test.tmpl")
 		if err != nil {
 			t.Fatalf("load file: %v", err)
 		}
@@ -500,9 +506,22 @@ func TestLoader(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, err := loader.LoadFromFile(filepath.Join(t.TempDir(), "missing.tmpl"))
+		root, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatalf("OpenRoot: %v", err)
+		}
+		defer func() { _ = root.Close() }()
+		fileLoader := NewLoader(e, root)
+		_, err = fileLoader.LoadFromFile("missing.tmpl")
 		if err == nil {
 			t.Error("expected error for missing file")
+		}
+	})
+
+	t.Run("nil root", func(t *testing.T) {
+		_, err := loader.LoadFromFile("test.tmpl")
+		if err == nil {
+			t.Error("expected error for nil filesystem")
 		}
 	})
 
@@ -510,7 +529,7 @@ func TestLoader(t *testing.T) {
 		fsys := fstest.MapFS{
 			"templates/test.tmpl": &fstest.MapFile{Data: []byte("x={{.Input.x}}")},
 		}
-		loaderWithFS := NewLoader(e, fsys)
+		loaderWithFS := NewLoaderFromFS(e, fsys)
 		tmpl, err := loaderWithFS.LoadFromFile("templates/test.tmpl")
 		if err != nil {
 			t.Fatalf("load from fs: %v", err)
@@ -547,8 +566,12 @@ func TestRegistry(t *testing.T) {
 	})
 
 	t.Run("names", func(t *testing.T) {
-		r.Register("b", "b")
-		r.Register("a", "a")
+		if err := r.Register("b", "b"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Register("a", "a"); err != nil {
+			t.Fatal(err)
+		}
 		names := r.Names()
 		want := []string{"a", "b", "hello"}
 		if len(names) != len(want) || names[0] != "a" || names[1] != "b" || names[2] != "hello" {
@@ -558,7 +581,9 @@ func TestRegistry(t *testing.T) {
 
 	t.Run("render", func(t *testing.T) {
 		ctx := testutil.NewFakeReadonlyContext().WithReadonlyState(testutil.NewFakeStateWithData(map[string]any{"x": 1}))
-		r.Register("state", "{{.State.Get \"x\"}}")
+		if err := r.Register("state", "{{.State.Get \"x\"}}"); err != nil {
+			t.Fatal(err)
+		}
 		got, err := r.Render("state", ctx)
 		if err != nil || got != "1" {
 			t.Errorf("got %q err=%v", got, err)
@@ -579,9 +604,12 @@ func TestRegistry(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				name := "tmpl" + string(rune('a'+i%26))
-				r.Register(name, "{{.Input.i}}")
+				_ = r.Register(name, "{{.Input.i}}")
 				if tmpl, ok := r.Get(name); ok {
-					tmpl.Execute(BuildData(map[string]any{"i": i}))
+					if _, err := tmpl.Execute(BuildData(map[string]any{"i": i})); err != nil {
+						t.Errorf("execute template %q: %v", name, err)
+						return
+					}
 				}
 			}(i)
 		}
@@ -592,7 +620,9 @@ func TestRegistry(t *testing.T) {
 func TestTemplateRef(t *testing.T) {
 	e := New()
 	r := NewRegistry(e)
-	r.Register("named", "{{.Input.v}}")
+	if err := r.Register("named", "{{.Input.v}}"); err != nil {
+		t.Fatal(err)
+	}
 	loader := NewLoader(e, nil)
 
 	t.Run("validate", func(t *testing.T) {
@@ -646,9 +676,17 @@ func TestTemplateRef(t *testing.T) {
 	t.Run("resolve path", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "file.tmpl")
-		os.WriteFile(path, []byte("p={{.Input.p}}"), 0o644)
-		ref := &TemplateRef{Path: path}
-		tmpl, err := ref.Resolve(r, loader)
+		if err := os.WriteFile(path, []byte("p={{.Input.p}}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatalf("OpenRoot: %v", err)
+		}
+		defer func() { _ = root.Close() }()
+		fileLoader := NewLoader(e, root)
+		ref := &TemplateRef{Path: "file.tmpl"}
+		tmpl, err := ref.Resolve(r, fileLoader)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -657,6 +695,39 @@ func TestTemplateRef(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+}
+
+// TestRegistry_RegisterFile verifies that RegisterFile reads a template from
+// a file beneath an os.Root and registers it under the given name.
+func TestRegistry_RegisterFile(t *testing.T) {
+	e := New()
+	r := NewRegistry(e)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "greeting.tmpl")
+	if err := os.WriteFile(path, []byte("Hello {{.Input.name}}"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if rerr := r.RegisterFile("greeting", root, "greeting.tmpl"); rerr != nil {
+		t.Fatalf("RegisterFile: %v", rerr)
+	}
+	tmpl, ok := r.Get("greeting")
+	if !ok || tmpl == nil {
+		t.Fatal("template not found after RegisterFile")
+	}
+	got, err := tmpl.Execute(BuildData(map[string]any{"name": "world"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got != "Hello world" {
+		t.Errorf("got %q, want %q", got, "Hello world")
+	}
 }
 
 func TestExampleFullFlow(t *testing.T) {

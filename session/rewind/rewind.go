@@ -64,7 +64,11 @@ func Rewind(ctx context.Context, svc session.Service, appName, userID, sessionID
 
 	targetIndex := -1
 	for i := range n {
-		if evts.At(i).ID == targetEventID {
+		ev := evts.At(i)
+		if ev == nil {
+			continue
+		}
+		if ev.ID == targetEventID {
 			targetIndex = i
 			break
 		}
@@ -136,7 +140,11 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	// Collect the events to retain (indices 0..targetIndex inclusive).
 	kept := make([]*session.Event, targetIndex+1)
 	for i := range targetIndex + 1 {
-		kept[i] = evts.At(i)
+		ev := evts.At(i)
+		if ev == nil {
+			return nil, fmt.Errorf("rewind: event at index %d is nil", i)
+		}
+		kept[i] = ev
 	}
 
 	// Recalculate state by replaying StateDelta of kept events (session-scoped keys only).
@@ -159,7 +167,7 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	tmpSess := tmpResp.Session
 
 	for _, ev := range kept {
-		if err := svc.AppendEvent(ctx, tmpSess, ev); err != nil {
+		if err := svc.AppendEvent(ctx, tmpSess, ev); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
 			return nil, fmt.Errorf("rewind: failed to append event to temp session: %w", err)
 		}
 		// Refresh tmpSess so AppendEvent has the up-to-date handle.
@@ -170,7 +178,7 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	}
 
 	// --- Step 3: delete original session ---
-	if err := svc.Delete(ctx, &session.DeleteRequest{
+	if err := svc.Delete(ctx, &session.DeleteRequest{ //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
@@ -192,7 +200,7 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 
 	// --- Step 5: append kept events to new session ---
 	for _, ev := range kept {
-		if err := svc.AppendEvent(ctx, newSess, ev); err != nil {
+		if err := svc.AppendEvent(ctx, newSess, ev); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
 			return nil, fmt.Errorf("rewind: failed to append event to new session: %w", err)
 		}
 		newSess, err = fetchSession(ctx, svc, appName, userID, sessionID)
@@ -221,6 +229,9 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 func replayState(kept []*session.Event) map[string]any {
 	state := make(map[string]any)
 	for _, ev := range kept {
+		if ev == nil {
+			continue
+		}
 		for k, v := range ev.Actions.StateDelta {
 			if strings.HasPrefix(k, session.KeyPrefixApp) ||
 				strings.HasPrefix(k, session.KeyPrefixUser) ||

@@ -16,14 +16,7 @@ var positiveLabels = map[string]bool{
 	"not_applicable": true,
 }
 
-// negativeLabels are labels that count as hallucinated.
-var negativeLabels = map[string]bool{
-	"unsupported":   true,
-	"contradictory": true,
-	"disputed":      true,
-}
-
-// sentenceRegex extracts sentences wrapped in <sentence>...</sentence> tags.
+// sentenceRegex extracts sentences wrapped in <sentence>...</sentence> tags.// sentenceRegex extracts sentences wrapped in <sentence>...</sentence> tags.
 var sentenceRegex = regexp.MustCompile(`(?s)<sentence>(.*?)</sentence>`)
 
 // labelLineRegex extracts the label value from a "label: ..." line.

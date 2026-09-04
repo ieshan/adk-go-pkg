@@ -22,6 +22,8 @@ type LocalEvalService struct {
 }
 
 // NewLocalEvalService creates a new LocalEvalService.
+// Callers are responsible for closing evalSetsMgr and resultsMgr if they
+// implement io.Closer (e.g. LocalEvalSetsManager and LocalEvalSetResultsManager).
 func NewLocalEvalService(
 	evalSetsMgr EvalSetsManager,
 	resultsMgr EvalSetResultsManager,
@@ -251,6 +253,9 @@ func (s *LocalEvalService) evaluateInferenceResult(
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to get evaluator for metric %q: %w", metric.MetricName, err)
+		}
+		if evaluator == nil {
+			return nil, fmt.Errorf("nil evaluator returned for metric %q", metric.MetricName)
 		}
 
 		result, err := evaluator.EvaluateInvocations(

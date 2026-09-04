@@ -9,10 +9,19 @@ import (
 	"google.golang.org/genai"
 )
 
+func newTestEvalSetsManager(t *testing.T) *LocalEvalSetsManager {
+	t.Helper()
+	mgr, err := NewLocalEvalSetsManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalEvalSetsManager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr
+}
+
 func TestLocalEvalSetsManager_CRUD(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr := newTestEvalSetsManager(t)
 
 	_, err := mgr.CreateEvalSet(ctx, "app", "test-set")
 	if err != nil {
@@ -71,15 +80,17 @@ func TestLocalEvalSetsManager_CRUD(t *testing.T) {
 		t.Fatalf("DeleteEvalCase failed: %v", err)
 	}
 	got, _ = mgr.GetEvalSet(ctx, "app", "test-set")
+	if got == nil {
+		t.Fatal("nil eval set")
+	}
 	if len(got.EvalCases) != 0 {
 		t.Errorf("len(EvalCases) after delete = %d, want 0", len(got.EvalCases))
 	}
 }
 
 func TestLocalEvalSetsManager_DuplicateCreate(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr := newTestEvalSetsManager(t)
 
 	_, err := mgr.CreateEvalSet(ctx, "app", "dup-set")
 	if err != nil {
@@ -93,9 +104,8 @@ func TestLocalEvalSetsManager_DuplicateCreate(t *testing.T) {
 }
 
 func TestLocalEvalSetsManager_GetNotFound(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr := newTestEvalSetsManager(t)
 
 	_, err := mgr.GetEvalSet(ctx, "app", "nonexistent")
 	if err == nil {
@@ -104,9 +114,8 @@ func TestLocalEvalSetsManager_GetNotFound(t *testing.T) {
 }
 
 func TestLocalEvalSetsManager_InvalidPath(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr := newTestEvalSetsManager(t)
 
 	_, err := mgr.GetEvalSet(ctx, "../etc", "test")
 	if err == nil {
@@ -115,9 +124,8 @@ func TestLocalEvalSetsManager_InvalidPath(t *testing.T) {
 }
 
 func TestLocalEvalSetsManager_ListEmpty(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr := newTestEvalSetsManager(t)
 
 	sets, err := mgr.ListEvalSets(ctx, "app")
 	if err != nil {
@@ -145,7 +153,11 @@ func TestLocalEvalSetsManager_OldFormatMigration(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	mgr := NewLocalEvalSetsManager(dir)
+	mgr, err := NewLocalEvalSetsManager(dir)
+	if err != nil {
+		t.Fatalf("NewLocalEvalSetsManager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
 	got, err := mgr.GetEvalSet(ctx, "app", "old-set")
 	if err != nil {
 		t.Fatalf("GetEvalSet with old format failed: %v", err)

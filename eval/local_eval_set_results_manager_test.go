@@ -5,10 +5,19 @@ import (
 	"testing"
 )
 
+func newTestEvalSetResultsManager(t *testing.T) *LocalEvalSetResultsManager {
+	t.Helper()
+	mgr, err := NewLocalEvalSetResultsManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalEvalSetResultsManager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr
+}
+
 func TestLocalEvalSetResultsManager_SaveAndGet(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetResultsManager(dir)
+	mgr := newTestEvalSetResultsManager(t)
 
 	results := []EvalCaseResult{
 		{EvalID: "case-1", FinalEvalStatus: EvalStatusPassed},
@@ -41,9 +50,8 @@ func TestLocalEvalSetResultsManager_SaveAndGet(t *testing.T) {
 }
 
 func TestLocalEvalSetResultsManager_GetNotFound(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetResultsManager(dir)
+	mgr := newTestEvalSetResultsManager(t)
 
 	_, err := mgr.GetEvalSetResult(ctx, "app", "nonexistent")
 	if err == nil {
@@ -52,9 +60,8 @@ func TestLocalEvalSetResultsManager_GetNotFound(t *testing.T) {
 }
 
 func TestLocalEvalSetResultsManager_ListEmpty(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetResultsManager(dir)
+	mgr := newTestEvalSetResultsManager(t)
 
 	list, err := mgr.ListEvalSetResults(ctx, "app")
 	if err != nil {
@@ -66,9 +73,8 @@ func TestLocalEvalSetResultsManager_ListEmpty(t *testing.T) {
 }
 
 func TestLocalEvalSetResultsManager_InvalidPath(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewLocalEvalSetResultsManager(dir)
+	mgr := newTestEvalSetResultsManager(t)
 
 	err := mgr.SaveEvalSetResult(ctx, "../etc", "test", nil)
 	if err == nil {

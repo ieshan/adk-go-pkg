@@ -52,6 +52,9 @@ func TestFakeLLM_NonStreaming(t *testing.T) {
 
 	// Third call should repeat the last response.
 	got = collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
+	if len(got) == 0 {
+		t.Fatal("no responses")
+	}
 	if got[0].Content.Parts[0].Text != "world" {
 		t.Errorf("third call text = %q, want %q (repeated)", got[0].Content.Parts[0].Text, "world")
 	}
@@ -146,11 +149,17 @@ func TestFakeLLM_CallRecording(t *testing.T) {
 	}
 
 	last := f.LastCall()
+	if last == nil {
+		t.Fatal("nil call")
+	}
 	if last.Contents[0].Parts[0].Text != "second" {
 		t.Errorf("LastCall text = %q, want %q", last.Contents[0].Parts[0].Text, "second")
 	}
 
 	at0 := f.CallsAt(0)
+	if at0 == nil {
+		t.Fatal("nil call")
+	}
 	if at0.Contents[0].Parts[0].Text != "first" {
 		t.Errorf("CallsAt(0) text = %q, want %q", at0.Contents[0].Parts[0].Text, "first")
 	}
@@ -168,6 +177,9 @@ func TestFakeLLM_AddResponse(t *testing.T) {
 
 	collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
+	if len(got) == 0 {
+		t.Fatal("no responses collected")
+	}
 	if got[0].Content.Parts[0].Text != "second" {
 		t.Errorf("second call text = %q, want %q", got[0].Content.Parts[0].Text, "second")
 	}

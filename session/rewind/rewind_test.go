@@ -62,9 +62,10 @@ func TestRewind_ByID(t *testing.T) {
 	svc := testutil.NewFakeSessionService()
 	sessID := "rewind-by-id"
 
-	sess := createSession(t, ctx, svc, sessID)
+	createSession(t, ctx, svc, sessID)
 
 	var eventIDs []string
+	var sess session.Session
 	for i := range 5 {
 		// Need fresh session handle each time for AppendEvent to work
 		sess = getSession(t, ctx, svc, sessID)
@@ -75,6 +76,9 @@ func TestRewind_ByID(t *testing.T) {
 	}
 
 	// Rewind to event at index 2 (3rd event, 0-based)
+	if len(eventIDs) == 0 {
+		t.Fatal("no events")
+	}
 	targetEventID := eventIDs[2]
 	result, err := rewind.Rewind(ctx, svc, testApp, testUser, sessID, targetEventID)
 	if err != nil {
@@ -88,6 +92,9 @@ func TestRewind_ByID(t *testing.T) {
 
 	// Verify the last retained event ID matches the target
 	lastEvent := result.Events().At(2)
+	if lastEvent == nil {
+		t.Fatal("nil event")
+	}
 	if lastEvent.ID != targetEventID {
 		t.Errorf("last event ID = %q, want %q", lastEvent.ID, targetEventID)
 	}
@@ -123,6 +130,12 @@ func TestRewind_ByIndex(t *testing.T) {
 
 	// Verify the last retained event matches index 2
 	lastEvent := result.Events().At(2)
+	if lastEvent == nil {
+		t.Fatal("nil event")
+	}
+	if len(eventIDs) == 0 {
+		t.Fatal("no events")
+	}
 	if lastEvent.ID != eventIDs[2] {
 		t.Errorf("last event ID = %q, want %q", lastEvent.ID, eventIDs[2])
 	}
@@ -231,6 +244,9 @@ func TestRewind_StateRecalculation(t *testing.T) {
 	}
 
 	// Rewind to event 1 (second event, sets "b"=2)
+	if len(eventIDs) == 0 {
+		t.Fatal("no events")
+	}
 	result, err := rewind.Rewind(ctx, svc, testApp, testUser, sessID, eventIDs[1])
 	if err != nil {
 		t.Fatalf("Rewind returned error: %v", err)
@@ -287,6 +303,9 @@ func TestRewindToIndex_Zero(t *testing.T) {
 	}
 
 	ev := result.Events().At(0)
+	if ev == nil {
+		t.Fatal("nil event")
+	}
 	if ev.ID != firstID {
 		t.Errorf("retained event ID = %q, want %q", ev.ID, firstID)
 	}

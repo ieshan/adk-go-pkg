@@ -101,7 +101,7 @@ func (m *mcpAppsMiddleware) runLoop(ctx context.Context, input types.RunAgentInp
 
 	for ev, err := range m.next.Run(ctx, augmentedInput) {
 		if err != nil {
-			emitter.RunErrorWithOptions(fmt.Sprintf("agui: agent error: %v", err))
+			_ = emitter.RunErrorWithOptions(fmt.Sprintf("agui: agent error: %v", err))
 			return
 		}
 		switch e := ev.(type) {
@@ -148,7 +148,7 @@ func (m *mcpAppsMiddleware) runLoop(ctx context.Context, input types.RunAgentInp
 		}
 
 		resultMsgID := events.GenerateMessageID()
-		emitter.ToolCallResult(resultMsgID, tc.ID, content)
+		_ = emitter.ToolCallResult(resultMsgID, tc.ID, content)
 
 		// Emit ACTIVITY_SNAPSHOT
 		activityContent := map[string]any{
@@ -159,7 +159,7 @@ func (m *mcpAppsMiddleware) runLoop(ctx context.Context, input types.RunAgentInp
 			"toolInput":   args,
 		}
 		replace := true
-		emitter.ActivitySnapshot(tc.ID, MCPAppsActivityType, activityContent, &replace)
+		_ = emitter.ActivitySnapshot(tc.ID, MCPAppsActivityType, activityContent, &replace)
 	}
 
 	// Flush buffered RUN_FINISHED
@@ -177,10 +177,10 @@ func (m *mcpAppsMiddleware) handleProxiedRequest(ctx context.Context, input type
 		serverConfig, ok = m.serverByHash[req.ServerHash]
 	}
 
-	emitter.RunStarted(input.ThreadID, input.RunID)
+	_ = emitter.RunStarted(input.ThreadID, input.RunID)
 
 	if !ok {
-		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
+		_ = emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
 			events.WithResult(map[string]any{
 				"error": fmt.Sprintf("agui: unknown MCP server (id=%q, hash=%q)", req.ServerID, req.ServerHash),
 			}))
@@ -189,14 +189,14 @@ func (m *mcpAppsMiddleware) handleProxiedRequest(ctx context.Context, input type
 
 	result, err := ExecuteMCPRequest(ctx, serverConfig, req.Method, req.Params)
 	if err != nil {
-		emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
+		_ = emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
 			events.WithResult(map[string]any{
 				"error": fmt.Sprintf("agui: proxied MCP request failed: %v", err),
 			}))
 		return
 	}
 
-	emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
+	_ = emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
 		events.WithSuccessOutcome(),
 		events.WithResult(result))
 }

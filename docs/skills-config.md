@@ -110,7 +110,7 @@ name: my-agent
 agent_class: LlmAgent
 model: gemini/gemini-2.5-flash
 instruction: "You are a helpful assistant with access to specialized skills."
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./skills"
@@ -123,7 +123,7 @@ Restrict agent to specific skills from a larger set:
 ```yaml
 name: restricted-agent
 agent_class: LlmAgent
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./skills"  # Contains 20+ skills
@@ -145,7 +145,7 @@ Load all skills into memory for fastest access:
 ```yaml
 name: fast-agent
 agent_class: LlmAgent
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./skills"
@@ -159,11 +159,11 @@ Override the default skill guidance:
 ```yaml
 name: custom-skills-agent
 agent_class: LlmAgent
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./skills"
-    systemInstruction: |
+    system_instruction: |
       You have access to domain-specific skills. When a user asks about
       weather or cooking, load the relevant skill before responding.
 ```
@@ -175,7 +175,7 @@ Combine skills from different sources:
 ```yaml
 name: multi-source-agent
 agent_class: LlmAgent
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./local-skills"
@@ -216,7 +216,7 @@ func main() {
     })
 
     // Now you can use it in YAML:
-    // skillsets:
+    // skill_sets:
     //   - name: s3
     //     config:
     //       bucket: "my-skills"
@@ -244,17 +244,28 @@ type Source interface {
 package main
 
 import (
+    "context"
     "log"
+    "os"
 
     "github.com/ieshan/adk-go-pkg/config"
 )
 
 func main() {
+    ctx := context.Background()
     // Registry already has filesystem factory registered
     reg := config.NewRegistry()
 
+    // Open a root for the project directory so config and skill paths
+    // are scoped beneath it.
+    root, err := os.OpenRoot(".")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer root.Close()
+
     // Load agent with skills from YAML
-    agent, _, _, _, err := config.LoadAndBuild(ctx, "agents/skills-agent.yaml", reg)
+    agent, _, _, _, err := config.LoadAndBuild(ctx, root, "agents/skills-agent.yaml", reg)
     if err != nil {
         log.Fatal(err)
     }

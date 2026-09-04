@@ -62,6 +62,7 @@ type Invocation struct {
     UserContent      *genai.Content   `json:"userContent,omitempty"`
     FinalResponse    *genai.Content   `json:"finalResponse,omitempty"`
     IntermediateData IntermediateData `json:"-"`
+    CreationTimestamp float64         `json:"creationTimestamp,omitempty"`
     Rubrics          []Rubric         `json:"rubrics,omitempty"`
     AppDetails       *AppDetails      `json:"appDetails,omitempty"`
 }
@@ -71,10 +72,10 @@ type Invocation struct {
 
 `IntermediateData` is an interface with two implementations:
 
-- **`InvocationEventsData`** (current format): Stores a list of `InvocationEvent` objects, each containing `Author` and `Content`.
-- **`LegacyIntermediateData`** (legacy format): Stores `ToolUses` and `ToolResponses` as flat slices.
+- **`InvocationEventsData`** (current format): Stores a list of `InvocationEvent` objects, each containing `Author` and `Content`. JSON key: `invocationEvents`.
+- **`LegacyIntermediateData`** (legacy format): Stores `ToolUses`, `ToolResponses`, and `IntermediateResponses` as flat slices. JSON keys: `toolUses`, `toolResponses`, `intermediateResponses`.
 
-The `UnmarshalIntermediateData` function auto-detects the format by checking for `"events"` or `"tool_uses"`/`"tool_responses"` keys in the JSON.
+The `UnmarshalIntermediateData` function auto-detects the format by checking for the `invocationEvents` key (new format) or falling back to `toolUses`/`toolResponses` (legacy format).
 
 ### SessionInput
 
@@ -82,9 +83,9 @@ The `UnmarshalIntermediateData` function auto-detects the format by checking for
 
 ```go
 type SessionInput struct {
-    AppState  map[string]any `json:"appState,omitempty"`
-    UserState map[string]any `json:"userState,omitempty"`
-    SessionState SessionState `json:"sessionState,omitempty"`
+    AppName string         `json:"appName,omitempty"`
+    UserID  string         `json:"userId,omitempty"`
+    State   map[string]any `json:"state,omitempty"`
 }
 ```
 
@@ -207,7 +208,7 @@ The registry registers 13 built-in metrics via `DefaultMetricEvaluatorRegistry()
 | `multi_turn_tool_use_quality_v1` | No* | Evaluates function calls during multi-turn conversations. | [0, 1] |
 | `rubric_based_multi_turn_trajectory_quality_v1` | Yes | Evaluates multi-turn trajectory against rubrics using LLM as judge. | [0, 1] |
 
-**\*** Metrics marked with asterisks use `StubVertexAiEvalFacade` which returns `NOT_EVALUATED` when GCP dependencies are not configured. To enable them, set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` and provide a real `VertexAiEvalFacade` implementation.
+**\*** Metrics marked with asterisks return `NOT_EVALUATED` when GCP dependencies are not configured. To enable them, set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` and provide a real Vertex AI evaluation backend.
 
 ### MatchType (Trajectory)
 
@@ -305,7 +306,7 @@ evaluator, err := registry.GetEvaluator(evalMetric)
 evaluator, err := registry.GetEvaluatorWithLLM(evalMetric, llm)
 
 // List all registered metrics
-metrics := registry.ListAllMetrics()
+metrics := registry.GetRegisteredMetrics()
 ```
 
 ## Custom Evaluators
@@ -377,7 +378,7 @@ type EvalSetsManager interface {
 ### Implementations
 
 - **`InMemoryEvalSetsManager`** — Thread-safe in-memory storage. Useful for testing.
-- **`LocalEvalSetsManager`** — File-based storage. Eval sets are stored as `.evalset.json` files under `<agentsDir>/<appName>/eval/<evalSetID>.evalset.json`.
+- **`LocalEvalSetsManager`** — File-based storage. Eval sets are stored as `.evalset.json` files under `<agentsDir>/<appName>/eval/<evalSetID>.evalset.json`. All filesystem access is scoped beneath an `*os.Root` opened from `agentsDir` in the constructor. The constructor returns `(manager, error)` and callers must call `Close` to release the underlying file descriptor when the manager is no longer needed.
 
 ### Helper Functions
 
@@ -400,12 +401,12 @@ type EvalSetResultsManager interface {
 
 ### Implementations
 
-- **`LocalEvalSetResultsManager`** — File-based storage. Results are stored as `.evalset_result.json` files under `<agentsDir>/<appName>/.adk/eval_history/`.
+- **`LocalEvalSetResultsManager`** — File-based storage. Results are stored as `.evalset_result.json` files under `<agentsDir>/<appName>/.adk/eval_history/`. All filesystem access is scoped beneath an `*os.Root` opened from `agentsDir` in the constructor. The constructor returns `(manager, error)` and callers must call `Close` to release the underlying file descriptor when the manager is no longer needed.
 
 ### Result Types
 
-- **`EvalCaseResult`** — Per-case results with `FinalEvalStatus`, `OverallEvalMetricResults`, and `EvalMetricResultPerInvocation`.
-- **`EvalSetResult`** — Aggregated results for an entire eval set with `EvalSetResultID`, `EvalCaseResults`, and `CreationTimestamp`.
+- **`EvalCaseResult`** — Per-case results with `EvalSetID`, `EvalID`, `FinalEvalStatus`, `OverallEvalMetricResults`, `EvalMetricResultPerInvocation`, `SessionID`, and `UserID`.
+- **`EvalSetResult`** — Aggregated results for an entire eval set with `EvalSetResultID`, `EvalSetResultName`, `EvalSetID`, `EvalCaseResults`, and `CreationTimestamp`.
 
 ## AgentEvaluator
 
@@ -507,16 +508,19 @@ The simulation subpackage provides user simulator implementations for dynamic co
 
 ```go
 type UserSimulator interface {
-    GetNextUserMessage(ctx context.Context, events []*genai.Content) (*NextUserMessage, error)
-    GetSimulationEvaluator() (eval.Evaluator, error)
+    GetNextUserMessage(ctx context.Context, events []*session.Event) (*NextUserMessage, error)
 }
 ```
+
+> **Note:** Concrete simulators (e.g. `LlmBackedUserSimulator`) may also
+> implement `GetSimulationEvaluator() (eval.Evaluator, error)`, but it is
+> not part of the `UserSimulator` interface.
 
 ### NextUserMessage
 
 ```go
 type NextUserMessage struct {
-    Status      Status          // success, no_message_generated, turn_limit_reached, stop_signal_detected
+    Status      UserSimulatorStatus // success, no_message_generated, turn_limit_reached, stop_signal_detected
     UserMessage *genai.Content
 }
 ```
@@ -532,7 +536,7 @@ type LlmBackedUserSimulatorConfig struct {
     Model                 string                       // default: "gemini-2.5-flash"
     ModelConfiguration    *genai.GenerateContentConfig
     MaxAllowedInvocations int                          // default: 20
-    CustomInstructions    string                       // must contain {{ stop_signal }}, {{ conversation_plan }}, {{ conversation_history }}
+    CustomInstructions    string                       // must contain {{.Input.stop_signal}}, {{.Input.conversation_plan}}, {{.Input.conversation_history}}
     IncludeFunctionCalls  bool
 }
 ```
@@ -623,11 +627,11 @@ type ConversationGenerationConfig struct {
 }
 ```
 
-`VertexAiScenarioGenerationFacade` is the interface for scenario generation. `StubVertexAiScenarioGenerationFacade` returns an error indicating GCP is required.
+Scenario generation requires a Vertex AI backend; when GCP is not configured the generator returns an error indicating GCP is required.
 
 ## Vertex AI Stubs
 
-The following evaluators use `StubVertexAiEvalFacade` which returns `NOT_EVALUATED` for all invocations when GCP is not configured:
+The following evaluators return `NOT_EVALUATED` for all invocations when GCP is not configured:
 
 - `safety_v1` (safety)
 - `response_evaluation_score` (coherence)
@@ -635,7 +639,7 @@ The following evaluators use `StubVertexAiEvalFacade` which returns `NOT_EVALUAT
 - `multi_turn_trajectory_quality_v1`
 - `multi_turn_tool_use_quality_v1`
 
-To enable these metrics, provide a real `VertexAiEvalFacade` implementation that delegates to the Vertex AI Eval SDK.
+To enable these metrics, configure GCP credentials (`GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`) and provide a real Vertex AI evaluation backend.
 
 ## Utility Functions
 
@@ -647,7 +651,7 @@ To enable these metrics, provide a real `VertexAiEvalFacade` implementation that
 | `GetAllToolResponses(invocation)` | Extracts all `FunctionResponse` from intermediate data. |
 | `GetAllToolCallsWithResponses(invocation)` | Pairs tool calls with their responses. |
 | `GetTextFromContent(content)` | Extracts text from a `genai.Content`. |
-| `GetEvalStatus(score, threshold)` | Returns `PASSED` if score >= threshold, else `FAILED`. |
+| `GetEvalStatus(score, threshold)` | Returns `NOT_EVALUATED` if either `*float64` argument is nil, `PASSED` if score >= threshold, else `FAILED`. |
 | `GetSessionID()` | Generates a unique eval session ID (`___eval___session___<uuid>`). |
 
 ## JSON Eval Set File Format
@@ -673,7 +677,7 @@ Eval sets are stored as `.evalset.json` files:
             "parts": [{"text": "The weather in London is 15°C and rainy."}]
           },
           "intermediateData": {
-            "events": [
+            "invocationEvents": [
               {
                 "author": "model",
                 "content": {
@@ -711,13 +715,17 @@ Eval sets are stored as `.evalset.json` files:
 ```go
 ctx := context.Background()
 setsMgr := eval.NewInMemoryEvalSetsManager()
-setsMgr.CreateEvalSet(ctx, "my-app", "basic-eval")
-setsMgr.AddEvalCase(ctx, "my-app", "basic-eval", eval.EvalCase{
+if _, err := setsMgr.CreateEvalSet(ctx, "my-app", "basic-eval"); err != nil {
+    log.Fatal(err)
+}
+if err := setsMgr.AddEvalCase(ctx, "my-app", "basic-eval", eval.EvalCase{
     EvalID: "case-1",
     Conversation: []eval.Invocation{
         {UserContent: genai.NewContentFromText("Hello", "user")},
     },
-})
+}); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### Running Evaluation with AgentEvaluator
@@ -745,6 +753,14 @@ service := eval.NewLocalEvalService(
     setsMgr, resultsMgr, nil, agentRunner, llm,
 )
 
+// EvalConfig (see the AgentEvaluator example above for construction).
+evalConfig := eval.EvalConfig{
+    Criteria: map[string]json.RawMessage{
+        "tool_trajectory_avg_score": json.RawMessage(`{"threshold": 0.8}`),
+        "final_response_match_v2":   json.RawMessage(`{"threshold": 0.7, "judgeModelOptions": {"judgeModel": "gemini-2.5-flash", "numSamples": 3}}`),
+    },
+}
+
 // Phase 1: Inference
 var inferenceResults []eval.InferenceResult
 for result, err := range service.PerformInference(ctx, &eval.InferenceRequest{
@@ -760,7 +776,7 @@ for result, err := range service.PerformInference(ctx, &eval.InferenceRequest{
 for caseResult, err := range service.Evaluate(ctx, &eval.EvaluateRequest{
     InferenceResults: inferenceResults,
     EvaluateConfig: eval.EvaluateConfig{
-        EvalMetrics:  eval.GetEvalMetricsFromConfig(config),
+        EvalMetrics:  eval.GetEvalMetricsFromConfig(evalConfig),
         Parallelism:   4,
     },
 }) {
@@ -802,8 +818,17 @@ registry.RegisterEvaluator(
 ### File-Based Eval Set Management
 
 ```go
-setsMgr := eval.NewLocalEvalSetsManager("./agents")
-resultsMgr := eval.NewLocalEvalSetResultsManager("./agents")
+setsMgr, err := eval.NewLocalEvalSetsManager("./agents")
+if err != nil {
+    log.Fatal(err)
+}
+defer setsMgr.Close()
+
+resultsMgr, err := eval.NewLocalEvalSetResultsManager("./agents")
+if err != nil {
+    log.Fatal(err)
+}
+defer resultsMgr.Close()
 
 // Eval sets stored at: ./agents/my-app/eval/basic-eval.evalset.json
 // Results stored at:   ./agents/my-app/.adk/eval_history/*.evalset_result.json
