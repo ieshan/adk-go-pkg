@@ -83,14 +83,16 @@ func WithClientToolsContext(
 ) context.Context {
 	mode := ClientToolModeNextRun
 	timeout := time.Duration(0)
+	var resultHandler *agui.ToolResultHandler
 	if cfg != nil {
 		mode = cfg.Mode
 		timeout = cfg.Timeout
+		resultHandler = cfg.ResultHandler
 	}
 	return WithClientTools(ctx, clientToolsCtx{
 		tools:         tools,
 		emitter:       emitter,
-		resultHandler: nil,
+		resultHandler: resultHandler,
 		mode:          mode,
 		timeout:       timeout,
 	})
@@ -133,7 +135,7 @@ func (c *ClientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 
 // makeClientProxyTool creates a single ADK FunctionTool from an AG-UI client
 // tool definition. For NextRun mode, IsLongRunning=true causes ADK to pause
-// the run after the handler returns nil (base_flow.go:1169-1171), emitting
+// the run after the handler returns nil, emitting
 // LongRunningToolIDs so the bridge can finish with an interrupt. For Inline
 // mode, IsLongRunning=false and the handler blocks on the ToolResultHandler
 // until the client submits a result via /tool-result.
@@ -166,12 +168,11 @@ func makeClientProxyTool(t types.Tool, ctc clientToolsCtx) (tool.Tool, error) {
 // when it sees the FunctionCall in the ADK event stream, so this handler does
 // not emit anything itself.
 //
-// ADK calls the tool handler *before* checking IsLongRunning
-// (base_flow.go:1161-1171): a nil result with IsLongRunning=true causes ADK to
-// pause the run and emit LongRunningToolIDs, which the bridge's interrupt path
-// (Phase 4) turns into a RUN_FINISHED with Interrupts. This is the NextRun
-// hand-back — the client fulfills the tool call and starts a new run with the
-// result.
+// ADK calls the tool handler *before* checking IsLongRunning: a nil result
+// with IsLongRunning=true causes ADK to pause the run and emit
+// LongRunningToolIDs, which the bridge's interrupt path turns into a
+// RUN_FINISHED with Interrupts. This is the NextRun hand-back — the client
+// fulfills the tool call and starts a new run with the result.
 //
 // For Inline mode, the handler waits for the client to submit a result via the
 // /tool-result endpoint (ToolResultHandler.Wait).

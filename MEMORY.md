@@ -1,8 +1,6 @@
-# MEMORY.md
-
 ## Purpose
 Portable Go memory for AI coding agents.
-This file is intentionally **project-agnostic** and can be dropped into any Go repository to provide up-to-date (through Go 1.26) guidance on language features, engineering practices, tooling, API design, security, and error handling.
+This file is intentionally **project-agnostic** and can be dropped into any Go repository to provide up-to-date (through Go 1.27) guidance on language features, engineering practices, tooling, API design, security, and error handling.
 
 ---
 
@@ -16,7 +14,7 @@ This file is intentionally **project-agnostic** and can be dropped into any Go r
 
 ---
 
-## Go Language & Stdlib Features to Know (1.20 → 1.26)
+## Go Language & Stdlib Features to Know (1.20 → 1.27)
 
 ### Go 1.20
 - Multi-error wrapping improvements:
@@ -60,6 +58,17 @@ This file is intentionally **project-agnostic** and can be dropped into any Go r
 - Green Tea GC enabled by default
 - `errors.AsType[E error]` for typed generic extraction
 
+### Go 1.27
+- Generic methods: a method may declare its own type parameters (independent of receiver's); interfaces still cannot declare generic methods
+- Struct literal keys may be any valid field selector (promoted/embedded fields settable directly)
+- Generalized function type inference in composite literals, conversions, and channel sends
+- `time` channels always unbuffered (synchronous); `asynctimerchan` GODEBUG removed
+- `encoding/json/v2` + `encoding/json/jsontext` (GA; v1 backed by v2, stricter defaults)
+- `uuid` package (RFC 9562; `NewV7` for time-ordered IDs)
+- `strings.CutLast` / `bytes.CutLast`
+- `hash/maphash.Hasher[T]` / `ComparableHasher[T]`
+- `testing/synctest.Sleep`; `httptest.NewTestServer` (in-memory, auto-cleanup)
+
 ---
 
 ## Core Best Practices
@@ -101,6 +110,63 @@ This file is intentionally **project-agnostic** and can be dropped into any Go r
 - Avoid leaks via blocked sends/receives.
 - Use context cancellation and channel closure patterns deliberately.
 - Be explicit with ownership of shared mutable state.
+- `time` channels (`time.After`, `time.NewTimer`, `time.NewTicker`, …) are now always unbuffered
+  (synchronous). Do not rely on the old buffered send behavior; if you depended on
+  `asynctimerchan=1`, refactor to explicit receives.
+
+## 7) Pointer-to-primitive values (Go 1.26+)
+- Use `new(expr)` to create a pointer to a primitive value; the type is inferred from the expression.
+- Prefer `new(true)` / `new(false)` over helper functions like `ptrBool(v bool) *bool`.
+- Prefer `new(42)` over `i := 42; &i` for pointer-to-int literals.
+- `new(T)` (type only) still returns a zero-valued `*T` — use `new(false)` for explicitness when the zero value is intentional but readability matters.
+- For optional struct fields (e.g. `*bool` in JSON/YAML configs), `new(expr)` eliminates boilerplate:
+
+```go
+// Before (helper function)
+func ptrBool(v bool) *bool { return &v }
+cfg.Flag = ptrBool(true)
+
+// After (Go 1.26)
+cfg.Flag = new(true)
+```
+
+## 8) Generic methods (Go 1.27+)
+- A method may declare its own type parameters, independent of the receiver's — prefer this over
+  package-level generic helper functions when the operation belongs to the type's namespace.
+- Hard restriction: interface methods cannot declare type parameters, and a generic method cannot
+  satisfy an interface method. If you need a polymorphic interface contract, expose a non-generic
+  method that delegates, or a package-level generic function.
+
+```go
+type Box[T any] struct{ v T }
+
+// Map declares its own type parameter U, independent of T.
+func (b Box[T]) Map[U any](f func(T) U) Box[U] { return Box[U]{v: f(b.v)} }
+```
+
+## 9) Struct literals and type inference (Go 1.27+)
+- Initialize promoted/embedded fields directly in struct literals. Use it when readability improves;
+  keep the nested form when the embedding is non-obvious.
+- Let type inference work in composite literals, conversions, and channel sends — drop explicit
+  type arguments when the element/target type drives inference unambiguously; add them back when
+  inference would pick a wider type than intended.
+
+```go
+// Before: User{Base: Base{ID: 7}, Name: "Mittens"}
+u := User{ID: 7, Name: "Mittens"}
+
+// Inference now works in slices of function types (previously required first[int], last[int]):
+ops := []func([]int) int{first, last}
+```
+
+## 10) JSON v2 (Go 1.27+)
+- `encoding/json/v2` and `encoding/json/jsontext` are GA; `encoding/json` (v1) is backed by v2.
+  Prefer `encoding/json/v2` for new code; no migration required for existing v1 code.
+- v2 defaults are stricter: it rejects invalid UTF-8 in strings and duplicate object names. If you
+  depend on v1's leniency, use the v2 `Options` that pin v1 semantics.
+- v2 does NOT sort map keys by default (v1 always did). Pass `json.Deterministic` when stable output
+  matters (golden files, cached responses, signed payloads).
+- Prefer `json.MarshalWrite` / `json.UnmarshalRead` for streaming to avoid intermediate buffers.
 
 ---
 
@@ -113,14 +179,14 @@ Prefer semantic checks over string matching or direct equality on wrapped errors
 var ErrNotFound = errors.New("not found")
 
 func lookup(id string) error {
-	if id == "" {
-		return fmt.Errorf("lookup %q: %w", id, ErrNotFound)
-	}
-	return nil
+        if id == "" {
+                return fmt.Errorf("lookup %q: %w", id, ErrNotFound)
+        }
+        return nil
 }
 
 func handle(err error) bool {
-	return errors.Is(err, ErrNotFound)
+        return errors.Is(err, ErrNotFound)
 }
 ```
 
@@ -130,7 +196,7 @@ Useful for batch operations, cleanup failures, fan-out execution.
 ```go
 err := errors.Join(errA, errB, errC)
 if errors.Is(err, errB) {
-	// true
+        // true
 }
 ```
 
@@ -138,7 +204,7 @@ if errors.Is(err, errB) {
 
 ```go
 if pe, ok := errors.AsType[*os.PathError](err); ok {
-	_ = pe.Path
+        _ = pe.Path
 }
 ```
 
@@ -175,6 +241,12 @@ Use cause-aware context APIs and inspect with `context.Cause(ctx)` where cancell
 
 ## 6) Static checks
 - Run `go vet ./...` for suspicious constructs.
+
+## 7) Concurrency and time in tests
+- Use `testing/synctest` (stable since 1.25) for deterministic concurrent tests; in Go 1.27 prefer
+  `synctest.Sleep(d)` over the manual `time.Sleep` + `synctest.Wait` two-step.
+- Use `httptest.NewTestServer(t, handler)` for in-memory HTTP tests — no real TCP port, automatic
+  `t.Cleanup`, and compatible with `synctest` for synthetic-time round-trips.
 
 ---
 
@@ -237,6 +309,9 @@ Before finishing:
 - Go 1.24: https://go.dev/doc/go1.24
 - Go 1.25: https://go.dev/doc/go1.25
 - Go 1.26: https://go.dev/doc/go1.26
+- Go 1.27: https://go.dev/doc/go1.27
+- `encoding/json/v2`: https://pkg.go.dev/encoding/json/v2
+- `uuid`: https://pkg.go.dev/uuid
 - Modules: https://go.dev/doc/modules/managing-dependencies
 - go.mod reference: https://go.dev/doc/modules/gomod-ref
 - `errors`: https://pkg.go.dev/errors

@@ -18,11 +18,12 @@ type SessionManagerConfig struct {
 // SessionManager maps AG-UI thread IDs to ADK session IDs.
 // It is safe for concurrent use.
 type SessionManager struct {
-	cfg     SessionManagerConfig
-	mu      sync.RWMutex
-	threads map[string]threadEntry // threadID -> entry
-	done    chan struct{}
-	wg      sync.WaitGroup
+	cfg      SessionManagerConfig
+	mu       sync.RWMutex
+	threads  map[string]threadEntry // threadID -> entry
+	done     chan struct{}
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 type threadEntry struct {
@@ -120,9 +121,12 @@ func (m *SessionManager) Resolve(ctx context.Context, threadID, appName, userID 
 }
 
 // Stop signals the background cleanup goroutine to exit and waits for it
-// to finish (with a 5-second timeout).
+// to finish (with a 5-second timeout). It is safe to call multiple times;
+// subsequent calls are no-ops.
 func (m *SessionManager) Stop() {
-	close(m.done)
+	m.stopOnce.Do(func() {
+		close(m.done)
+	})
 	done := make(chan struct{})
 	go func() {
 		m.wg.Wait()

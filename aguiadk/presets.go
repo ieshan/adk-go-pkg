@@ -17,9 +17,12 @@ func AgenticChatPreset(base Config) Config {
 	return base
 }
 
-// GenerativeUIPreset returns a Config for a generative-UI agent that prefers
-// structured tool calls over prose answers. Client tools are accepted in
-// NextRun mode with streaming tool calls.
+// GenerativeUIPreset returns a Config for a generative-UI agent. It is
+// currently equivalent to AgenticChatPreset — client tools are accepted in
+// NextRun mode and state snapshots are enabled. The preset exists as a
+// semantic marker for generative-UI agents; future versions may add
+// structured-output or streaming-tool configuration. Use AgenticGenerativeUIPreset
+// for agents that drive UI state through tool calls mapped to STATE_DELTA events.
 func GenerativeUIPreset(base Config) Config {
 	base.EmitStateSnapshot = boolPtr(true)
 	base.SessionTimeout = 20 * time.Minute

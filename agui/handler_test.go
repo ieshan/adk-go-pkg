@@ -246,8 +246,10 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", resp.StatusCode)
+	// GET / without configured capabilities returns 404 (discovery is
+	// opt-in). Previously returned 405 before capabilities discovery.
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }
 
@@ -434,6 +436,95 @@ func TestHandler_CORSWithCustomHeaders(t *testing.T) {
 		}
 		if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "true" {
 			t.Errorf("Allow-Credentials = %q, want true", got)
+		}
+	})
+}
+
+// TestHandler_CORSCredentialsWithWildcardOrigin verifies that when
+// AllowCredentials is true and AllowOrigins defaults to ["*"], the server
+// reflects the request Origin header instead of sending "*" — the W3C CORS
+// spec forbids "*" with credentials and browsers reject that combination.
+func TestHandler_CORSCredentialsWithWildcardOrigin(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil)
+			yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+		}
+	})
+
+	h, err := agui.Handler(agui.Config{
+		Agent: agent,
+		CORS: &agui.CORSConfig{
+			AllowCredentials: true,
+			// AllowOrigins left empty → defaults to ["*"]
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	t.Run("OPTIONS reflects request origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodOptions, srv.URL, nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		origin := resp.Header.Get("Access-Control-Allow-Origin")
+		if origin == "*" {
+			t.Fatal("W3C CORS violation: Access-Control-Allow-Origin cannot be '*' when Allow-Credentials is true")
+		}
+		if origin != "http://localhost:3000" {
+			t.Errorf("expected origin 'http://localhost:3000', got %q", origin)
+		}
+		if resp.Header.Get("Vary") != "Origin" {
+			t.Errorf("expected Vary: Origin header, got %q", resp.Header.Get("Vary"))
+		}
+		if resp.Header.Get("Access-Control-Allow-Credentials") != "true" {
+			t.Errorf("expected Allow-Credentials: true")
+		}
+	})
+
+	t.Run("POST reflects request origin", func(t *testing.T) {
+		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+		body, _ := json.Marshal(input)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://localhost:3000")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		origin := resp.Header.Get("Access-Control-Allow-Origin")
+		if origin == "*" {
+			t.Fatal("W3C CORS violation: Access-Control-Allow-Origin cannot be '*' when Allow-Credentials is true")
+		}
+		if origin != "http://localhost:3000" {
+			t.Errorf("expected origin 'http://localhost:3000', got %q", origin)
+		}
+	})
+
+	t.Run("no Origin header still gets wildcard", func(t *testing.T) {
+		// Non-browser clients without an Origin header should still get a
+		// permissive response.
+		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
+		body, _ := json.Marshal(input)
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		origin := resp.Header.Get("Access-Control-Allow-Origin")
+		if origin != "*" {
+			t.Errorf("expected wildcard for no-Origin request, got %q", origin)
 		}
 	})
 }

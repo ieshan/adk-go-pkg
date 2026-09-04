@@ -1,9 +1,11 @@
 package agui_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
@@ -519,5 +521,37 @@ func TestEventEmitter_TransportErrorOnClosedChannel(t *testing.T) {
 	}
 	if !errors.Is(err, agui.ErrTransport) {
 		t.Errorf("expected ErrTransport, got %v", err)
+	}
+}
+
+// TestEventEmitter_ContextCancellationUnblocks verifies that an emitter
+// constructed with NewEventEmitterWithContext unblocks a pending emit call
+// when the context is cancelled, instead of blocking forever on a full
+// channel with no consumer. This is the core goroutine-leak prevention
+// guarantee.
+func TestEventEmitter_ContextCancellationUnblocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan events.Event) // unbuffered: any emit blocks until received
+	em := agui.NewEventEmitterWithContext(ctx, ch)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- em.RunStarted("t1", "r1")
+	}()
+
+	// Give the goroutine a moment to block on the send, then cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error when context cancelled during emit, got nil")
+		}
+		if !errors.Is(err, agui.ErrTransport) && !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected transport or canceled error, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("emitter blocked indefinitely despite context cancellation")
 	}
 }

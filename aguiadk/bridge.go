@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"iter"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,9 +97,12 @@ type Config struct {
 	// emitted around LLM and tool-execution phases. Default: false (off).
 	EmitStepEvents *bool
 
-	// MaxIterations caps the number of model turns per run. If the agent
-	// exceeds this without producing a final response, the bridge emits a
-	// RUN_ERROR with a descriptive message. Default: 0 (unlimited).
+	// MaxIterations caps the number of completed model turns per run. A model
+	// turn is counted when an ADK event has Partial=false and
+	// TurnComplete=true (the final event of a model response, including
+	// function-call responses). If the agent exceeds this without producing a
+	// final response, the bridge emits a RUN_ERROR with a descriptive message.
+	// Default: 0 (unlimited).
 	MaxIterations int
 
 	// CustomEventEmitter is an optional callback invoked after the runner
@@ -130,9 +134,10 @@ type Config struct {
 
 	// Provider names the LLM provider for multimodal content gating. When
 	// set, inputContentsToGenaiParts filters content types by provider
-	// capability: "openai" receives image parts; other providers get
-	// text-only fallback. Empty means no gating (all content types
-	// forwarded). Default: "".
+	// capability: "openai" receives image, audio, video, and document parts;
+	// other non-empty providers get text-only fallback for audio/video/document
+	// content (images are always forwarded). Empty means no gating (all content
+	// types forwarded). Default: "".
 	Provider string
 }
 
@@ -323,23 +328,36 @@ func WithHTTPRequest(ctx context.Context, r *http.Request) context.Context {
 
 // Run implements the agui.Agent interface.
 func (b *bridge) Run(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
-	ch := make(chan events.Event, 64)
-	emitter := agui.NewEventEmitter(ch)
+	return func(yield func(events.Event, error) bool) {
+		// runCtx is cancelled when the consumer stops iterating (via the
+		// deferred cancel below) or when the parent ctx is cancelled. Binding
+		// the emitter to runCtx ensures runInternal's emit calls unblock
+		// promptly instead of leaking a goroutine blocked on a full channel.
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-	go func() {
-		defer close(ch)
-		defer func() {
-			if r := recover(); r != nil {
-				_ = emitter.RunErrorWithOptions(
-					fmt.Sprintf("internal panic: %v", r),
-					events.WithRunID(input.RunID),
-				)
-			}
+		ch := make(chan events.Event, 64)
+		emitter := agui.NewEventEmitterWithContext(runCtx, ch)
+
+		go func() {
+			defer close(ch)
+			defer func() {
+				if r := recover(); r != nil {
+					_ = emitter.RunErrorWithOptions(
+						fmt.Sprintf("internal panic: %v", r),
+						events.WithRunID(input.RunID),
+					)
+				}
+			}()
+			b.runInternal(runCtx, input, emitter)
 		}()
-		b.runInternal(ctx, input, emitter)
-	}()
 
-	return agui.ChanToIter(ctx, ch)
+		for ev, err := range agui.ChanToIter(runCtx, ch) {
+			if !yield(ev, err) {
+				return
+			}
+		}
+	}
 }
 
 // runInternal performs the actual bridge logic, emitting events via the emitter.
@@ -374,13 +392,42 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 		_ = emitter.StateSnapshot(snapshot)
 	}
 
-	// Translate the last user message to genai.Content.
-	msg := lastUserMessage(input.Messages, b.cfg.Provider)
+	// Convert the full inbound message history to genai.Content for the
+	// current turn and prior session events for multi-turn context. This
+	// preserves prior user/assistant/system/developer messages and converts
+	// RoleTool messages to FunctionResponse parts.
+	msg, priorEvents, err := convertInboundMessages(input.Messages, b.cfg.Provider)
+	if err != nil {
+		_ = emitter.RunErrorWithOptions(
+			fmt.Sprintf("inbound message conversion failed: %v", err),
+			events.WithRunID(input.RunID),
+		)
+		return
+	}
+
+	// Seed prior events into the session so multi-turn history survives.
+	// Only seed when the session is freshly created (has no events yet) to
+	// avoid duplicating history on subsequent runs within the same thread.
+	if len(priorEvents) > 0 && adkSession.Events().Len() == 0 {
+		for _, ev := range priorEvents {
+			if appendErr := b.sessSvc.AppendEvent(ctx, adkSession, ev); appendErr != nil {
+				_ = emitter.RunErrorWithOptions(
+					fmt.Sprintf("session history seed failed: %v", appendErr),
+					events.WithRunID(input.RunID),
+				)
+				return
+			}
+		}
+	}
 
 	// Process resume entries: re-emit the paused run's tool proposals, settle
 	// each against the user's approval decision, and include FunctionResponse
 	// parts in the user message so the ADK runner's buildResumeResponses
 	// detects them and calls wf.Resume instead of wf.Run.
+	// savedState captures the paused run's session state for restoration
+	// on resume. It is nil for non-resume runs.
+	var savedState map[string]any
+
 	if len(input.Resume) > 0 {
 		key := RunKey(input.ThreadID, input.RunID)
 		store := b.runStoreFor()
@@ -427,6 +474,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			)
 			return
 		}
+		savedState = saved.State
 
 		// Re-surface the proposals in this new stream so a client rendering
 		// tool cards has the call to attach the result to — the original
@@ -437,7 +485,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			_ = emitter.ToolCallArgs(p.ID, string(argsJSON))
 			_ = emitter.ToolCallEnd(p.ID)
 			// For approved calls, emit a tool_use activity snapshot (matching
-			// the example server's settlePendingToolCalls, loop.go:567-568).
+			// the example server's settlePendingToolCalls.
 			// Denied calls get no tool_use snapshot — they don't execute.
 			if approvals[p.ID] {
 				_ = emitter.ActivitySnapshot(
@@ -448,7 +496,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			}
 
 			// Settle: emit TOOL_CALL_RESULT reflecting the user's decision.
-			msgID := emitter.GenerateMessageID()
+			msgID := "result-" + p.ID
 			if approvals[p.ID] {
 				_ = emitter.ToolCallResult(msgID, p.ID, string(argsJSON))
 			} else {
@@ -480,21 +528,60 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 		msg.Parts = append(resumeParts, msg.Parts...)
 	}
 
-	// Build run options from input.State.
+	// Build run options from input.State, merged with the paused run's
+	// saved state (if resuming). The saved state was captured at interrupt
+	// time and restores any session state that may have changed between the
+	// pause and resume. input.State takes precedence (the resume request's
+	// state is the most recent user-supplied value).
 	var runOpts []runner.RunOption
+	mergedState := map[string]any{}
+	if len(savedState) > 0 {
+		for k, v := range savedState {
+			mergedState[k] = v
+		}
+	}
 	if input.State != nil {
 		if stateMap, ok := input.State.(map[string]any); ok {
-			if len(stateMap) > 0 {
-				runOpts = append(runOpts, runner.WithStateDelta(stateMap))
+			for k, v := range stateMap {
+				mergedState[k] = v
 			}
 		} else {
 			if data, err := json.Marshal(input.State); err == nil {
 				var stateMap map[string]any
-				if json.Unmarshal(data, &stateMap) == nil && len(stateMap) > 0 {
-					runOpts = append(runOpts, runner.WithStateDelta(stateMap))
+				if json.Unmarshal(data, &stateMap) == nil {
+					for k, v := range stateMap {
+						mergedState[k] = v
+					}
 				}
 			}
 		}
+	}
+	if len(mergedState) > 0 {
+		runOpts = append(runOpts, runner.WithStateDelta(mergedState))
+	}
+
+	// Propagate AG-UI protocol envelope fields (ParentRunID, Context,
+	// ForwardedProps) into the runner context and session state so downstream
+	// agents, tools, and callbacks can read them via RunEnvelopeFrom or the
+	// typed helpers.
+	envelope := RunEnvelope{
+		ParentRunID:    input.ParentRunID,
+		Context:        input.Context,
+		ForwardedProps: input.ForwardedProps,
+	}
+	if envelope.ParentRunID != nil || len(envelope.Context) > 0 || envelope.ForwardedProps != nil {
+		ctx = WithRunEnvelope(ctx, envelope)
+		envelopeState := map[string]any{}
+		if envelope.ParentRunID != nil {
+			envelopeState[stateKeyAGUIParentRunID] = *envelope.ParentRunID
+		}
+		if len(envelope.Context) > 0 {
+			envelopeState[stateKeyAGUIContext] = envelope.Context
+		}
+		if envelope.ForwardedProps != nil {
+			envelopeState[stateKeyAGUIForwardedProps] = envelope.ForwardedProps
+		}
+		runOpts = append(runOpts, runner.WithStateDelta(envelopeState))
 	}
 
 	// Run the ADK agent.
@@ -518,17 +605,42 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	}
 
 	emitSteps := b.cfg.EmitStepEvents != nil && *b.cfg.EmitStepEvents
-	translator := newEventTranslator(emitter, b.cfg.SuppressToolEvents, b.cfg.ToolToStateMapper, emitSteps, b.cfg.EmitActivityDeltas)
 
-	var nonPartialCount int
+	// Build the client-delegated tool name set from input.Tools so the
+	// translator can disambiguate server-side tools from client-delegated
+	// tools. When ClientTools is configured and the client declared
+	// tools via input.Tools, function calls NOT in this set are server-side
+	// and emit ACTIVITY_SNAPSHOT instead of TOOL_CALL_START/ARGS/END.
+	var clientToolNames map[string]struct{}
+	if b.cfg.ClientTools != nil && len(input.Tools) > 0 {
+		clientToolNames = make(map[string]struct{}, len(input.Tools))
+		for _, t := range input.Tools {
+			if t.Name != "" {
+				clientToolNames[t.Name] = struct{}{}
+			}
+		}
+	}
+	translator := newEventTranslatorWithClientTools(
+		emitter, b.cfg.SuppressToolEvents, b.cfg.ToolToStateMapper,
+		emitSteps, b.cfg.EmitActivityDeltas, b.cfg.Agent.Name(), clientToolNames,
+	)
+
+	// turnCount tracks completed model turns (non-partial events with
+	// TurnComplete=true) for MaxIterations enforcement. Only the final event
+	// of a model response sets TurnComplete, so this counts one event per turn
+	// regardless of how many function-call or function-response events the
+	// turn produces.
+	var turnCount int
 	for adkEvent, err := range b.runner.Run(ctx, userID, adkSession.ID(), msg, runCfg, runOpts...) {
 		if err != nil {
 			translator.closeOpenMessage()
+			translator.closeOpenSubagent()
 			translator.closeOpenStep()
 			translator.closeStreamedToolCalls()
 			b.emitStatusDelta(emitter, "error")
-			_ = emitter.RunErrorWithOptions(
+			_ = emitter.RunErrorWithUsage(
 				fmt.Sprintf("agent error: %v", err),
+				translator.collectedUsage(),
 				events.WithRunID(input.RunID),
 			)
 			return
@@ -539,10 +651,11 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 
 		translator.translate(adkEvent)
 
-		if !adkEvent.Partial {
-			nonPartialCount++
-			if b.cfg.MaxIterations > 0 && nonPartialCount > b.cfg.MaxIterations {
+		if !adkEvent.Partial && adkEvent.TurnComplete {
+			turnCount++
+			if b.cfg.MaxIterations > 0 && turnCount > b.cfg.MaxIterations {
 				translator.closeOpenMessage()
+				translator.closeOpenSubagent()
 				translator.closeOpenStep()
 				translator.closeStreamedToolCalls()
 				b.emitStatusDelta(emitter, "error")
@@ -553,8 +666,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 						_ = emitter.MessagesSnapshot(msgs)
 					}
 				}
-				_ = emitter.RunErrorWithOptions(
-					fmt.Sprintf("agent did not converge within %d iterations", b.cfg.MaxIterations),
+				_ = emitter.RunErrorWithUsage(
+					fmt.Sprintf("agent did not converge within %d model turns", b.cfg.MaxIterations),
+					translator.collectedUsage(),
 					events.WithRunID(input.RunID),
 				)
 				return
@@ -577,7 +691,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 					}
 				}
 				b.emitStatusDelta(emitter, "done")
-				_ = emitter.RunFinishedWithOptions(input.ThreadID, input.RunID)
+				_ = emitter.RunFinishedWithUsage(input.ThreadID, input.RunID, translator.collectedUsage())
 				return
 			}
 
@@ -636,16 +750,18 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				}
 			}
 
-			_ = emitter.RunFinishedWithOptions(
+			_ = emitter.RunFinishedWithUsage(
 				input.ThreadID, input.RunID,
+				translator.collectedUsage(),
 				events.WithInterruptOutcome(interrupts),
 			)
 			return
 		}
 	}
 
-	// Close any open text message, step, and streamed tool calls.
+	// Close any open text message, step, streamed tool calls, and sub-agent.
 	translator.closeOpenMessage()
+	translator.closeOpenSubagent()
 	translator.closeOpenStep()
 	translator.closeStreamedToolCalls()
 	b.emitStatusDelta(emitter, "done")
@@ -665,58 +781,88 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 		}
 	}
 
-	// Emit RUN_FINISHED.
-	if err := emitter.RunFinishedWithOptions(input.ThreadID, input.RunID); err != nil {
+	// Emit RUN_FINISHED with aggregated token usage telemetry.
+	if err := emitter.RunFinishedWithUsage(input.ThreadID, input.RunID, translator.collectedUsage()); err != nil {
 		return
 	}
 }
 
 // eventTranslator holds per-run state for translating ADK events to AG-UI events.
 type eventTranslator struct {
-	emitter            *agui.EventEmitter
+	emitter            *agui.EventEmitter // base emitter for lifecycle events
+	activeEmitter      *agui.EventEmitter // current emitter for stream events (base or subagent-attributed)
 	currentMsgID       string
 	msgOpen            bool
 	prevText           string            // accumulated text for computing deltas
 	reasoningOpen      bool              // whether a reasoning block is currently open
 	currentReasoningID string            // message ID for the open reasoning block
+	prevThoughtText    string            // accumulated thought text for computing reasoning deltas
 	toolCallIDs        map[string]string // ADK function call ID/name → AG-UI tool call ID
 	toolCallDetails    map[string]toolCallDetail
 	startedTools       map[string]bool // tool call IDs that have emitted TOOL_CALL_START
 	openTools          map[string]bool // tool call IDs with START emitted but END pending
+	hadPartialArgs     map[string]bool // tool call IDs that received partial args deltas (skip final full-args re-send)
 	suppressTools      bool
 	toolToStateMapper  ToolToStateMapper
-	emitSteps          bool              // whether to emit STEP_STARTED/STEP_FINISHED events
-	stepOpen           bool              // whether a step is currently open
-	stepName           string            // name of the currently open step
-	emitActivityDeltas bool              // whether to emit ACTIVITY_DELTA during streaming tool calls
-	activityMsgIDs     map[string]string // tool call ID → activity message ID for deltas
+	emitSteps          bool                // whether to emit STEP_STARTED/STEP_FINISHED events
+	stepOpen           bool                // whether a step is currently open
+	stepName           string              // name of the currently open step
+	emitActivityDeltas bool                // whether to emit ACTIVITY_DELTA during streaming tool calls
+	activityMsgIDs     map[string]string   // tool call ID → activity message ID for deltas
+	clientTools        map[string]struct{} // when non-nil, only these tool names are client-delegated
+	usageEntries       []agui.TokenUsage   // collected token usage telemetry for terminal events
+	currentAuthor      string              // ADK event author for the current sub-agent context
+	activeSubagentRun  string              // subagentRunId for the currently active sub-agent
+	subagentEmitted    bool                // whether SUBAGENT_STARTED has been emitted for currentAuthor
+	rootAgentName      string              // name of the root agent, excluded from sub-agent lifecycle
 }
 
 // toolCallDetail records the name and args of a tool call so the tool_use
 // activity snapshot can be emitted at execution time (FunctionResponse),
-// matching the example server's settlePendingToolCalls (loop.go:567-568).
+// matching the example server's settlePendingToolCalls.
 type toolCallDetail struct {
 	name string
 	args map[string]any
 }
 
-func newEventTranslator(emitter *agui.EventEmitter, suppressTools bool, mapper ToolToStateMapper, emitSteps bool, emitActivityDeltas bool) *eventTranslator {
+func newEventTranslator(emitter *agui.EventEmitter, suppressTools bool, mapper ToolToStateMapper, emitSteps bool, emitActivityDeltas bool, rootAgentName string) *eventTranslator {
 	return &eventTranslator{
 		emitter:            emitter,
+		activeEmitter:      emitter,
 		toolCallIDs:        make(map[string]string),
 		toolCallDetails:    make(map[string]toolCallDetail),
 		startedTools:       make(map[string]bool),
 		openTools:          make(map[string]bool),
+		hadPartialArgs:     make(map[string]bool),
 		suppressTools:      suppressTools,
 		toolToStateMapper:  mapper,
 		emitSteps:          emitSteps,
 		emitActivityDeltas: emitActivityDeltas,
 		activityMsgIDs:     make(map[string]string),
+		rootAgentName:      rootAgentName,
 	}
+}
+
+// newEventTranslatorWithClientTools is like newEventTranslator but configures
+// client-tool disambiguation. When clientTools is non-nil, function calls
+// whose name is NOT in the set are treated as server-side tools: they emit an
+// ACTIVITY_SNAPSHOT instead of TOOL_CALL_START/ARGS/END so the client is not
+// asked to execute them. Client-delegated tools emit normal TOOL_CALL_* events.
+func newEventTranslatorWithClientTools(emitter *agui.EventEmitter, suppressTools bool, mapper ToolToStateMapper, emitSteps bool, emitActivityDeltas bool, rootAgentName string, clientTools map[string]struct{}) *eventTranslator {
+	t := newEventTranslator(emitter, suppressTools, mapper, emitSteps, emitActivityDeltas, rootAgentName)
+	t.clientTools = clientTools
+	return t
 }
 
 // translate converts a single ADK event into one or more AG-UI events.
 func (t *eventTranslator) translate(ev *session.Event) {
+	// Collect token usage telemetry from non-partial events. Partial
+	// events carry intermediate counts that the final non-partial event
+	// supersedes, so we only record the latter to avoid double counting.
+	if !ev.Partial && ev.UsageMetadata != nil {
+		t.recordUsage(ev.UsageMetadata, ev.ModelVersion)
+	}
+
 	// Handle state delta.
 	if len(ev.Actions.StateDelta) > 0 {
 		t.emitStateDelta(ev.Actions.StateDelta)
@@ -761,6 +907,12 @@ func (t *eventTranslator) translate(ev *session.Event) {
 		return
 	}
 
+	// Track sub-agent author transitions and emit SUBAGENT_STARTED/FINISHED
+	// lifecycle events so frontends can attribute streamed events to the
+	// emitting sub-agent. The root agent author ("", "user", "model",
+	// or the configured agent name) does not trigger sub-agent events.
+	t.maybeEmitSubagentLifecycle(ev)
+
 	for _, part := range ev.Content.Parts {
 		if part == nil {
 			continue
@@ -768,7 +920,7 @@ func (t *eventTranslator) translate(ev *session.Event) {
 
 		switch {
 		case part.Thought && part.Text != "":
-			t.emitThought(part)
+			t.emitThought(part, ev.Partial)
 
 		case part.FunctionCall != nil:
 			t.closeOpenMessage()
@@ -779,14 +931,84 @@ func (t *eventTranslator) translate(ev *session.Event) {
 			t.emitFunctionResponse(part.FunctionResponse)
 
 		case part.Text != "":
-			t.emitText(part.Text, ev.Partial)
+			t.emitText(part.Text, ev.Partial, ev.Author)
+
+		case part.FileData != nil:
+			// Non-text artifact fallback: surface file URIs as
+			// readable text so generated files reach the user instead of
+			// being silently dropped.
+			t.emitText(fmt.Sprintf("[File: %s](%s)", part.FileData.MIMEType, part.FileData.FileURI), ev.Partial, ev.Author)
+
+		case part.InlineData != nil:
+			// Non-text artifact fallback: surface inline binary
+			// data as a readable text summary.
+			t.emitText(fmt.Sprintf("[Binary data: %s, %d bytes]", part.InlineData.MIMEType, len(part.InlineData.Data)), ev.Partial, ev.Author)
 		}
 	}
 }
 
+// maybeEmitSubagentLifecycle detects sub-agent author transitions from ADK
+// events and emits SUBAGENT_FINISHED for the previous sub-agent (if any)
+// followed by SUBAGENT_STARTED for the new one. The root agent (identified by
+// the configured rootAgentName) and canonical roles ("", "user", "model") do
+// not count as sub-agents. When the author transitions back to the root agent,
+// the active sub-agent is finished.
+func (t *eventTranslator) maybeEmitSubagentLifecycle(ev *session.Event) {
+	author := ev.Author
+	if t.isRootAuthor(author) {
+		if t.activeSubagentRun != "" {
+			_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+			t.activeSubagentRun = ""
+			t.currentAuthor = ""
+			t.subagentEmitted = false
+			// Restore the base emitter so root-agent events are not tagged.
+			t.activeEmitter = t.emitter
+		}
+		return
+	}
+	if author != t.currentAuthor {
+		if t.activeSubagentRun != "" {
+			_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+		}
+		t.currentAuthor = author
+		t.activeSubagentRun = t.emitter.GenerateToolCallID()
+		t.subagentEmitted = false
+		// Immediately switch to a sub-agent-attributing emitter so all
+		// subsequent stream events (including partials) carry subagentRunId.
+		t.activeEmitter = t.emitter.ForSubagent(t.activeSubagentRun)
+	}
+	if !t.subagentEmitted {
+		_ = t.emitter.SubagentStarted(t.activeSubagentRun, author)
+		t.subagentEmitted = true
+	}
+}
+
+// isRootAuthor reports whether the given ADK event author represents the root
+// agent or a canonical role rather than a delegated sub-agent.
+func (t *eventTranslator) isRootAuthor(author string) bool {
+	switch author {
+	case "", "user", "model":
+		return true
+	case t.rootAgentName:
+		return true
+	default:
+		return false
+	}
+}
+
+// subagentNameForEvent returns the author name to attach to a TEXT_MESSAGE_START
+// event for sub-agent attribution. Root authors return "" so the message
+// carries no Name field; sub-agent author names are preserved.
+func subagentNameForEvent(author, rootAgentName string) string {
+	if author == "" || author == "user" || author == "model" || author == rootAgentName {
+		return ""
+	}
+	return author
+}
+
 // startStep emits STEP_STARTED and tracks the open step.
 func (t *eventTranslator) startStep(name string) {
-	_ = t.emitter.StepStarted(name)
+	_ = t.activeEmitter.StepStarted(name)
 	t.stepOpen = true
 	t.stepName = name
 }
@@ -794,20 +1016,25 @@ func (t *eventTranslator) startStep(name string) {
 // closeOpenStep emits STEP_FINISHED for the currently open step, if any.
 func (t *eventTranslator) closeOpenStep() {
 	if t.stepOpen {
-		_ = t.emitter.StepFinished(t.stepName)
+		_ = t.activeEmitter.StepFinished(t.stepName)
 		t.stepOpen = false
 	}
 }
 
-// emitText handles text parts, managing the message lifecycle.
-func (t *eventTranslator) emitText(text string, partial bool) {
+// emitText handles text parts, managing the message lifecycle. The author
+// parameter is the ADK event author; when it identifies a sub-agent it is
+// attached to the TextMessageStart event as the name field so frontends can
+// attribute the message to the emitting sub-agent.
+func (t *eventTranslator) emitText(text string, partial bool, author string) {
 	// Close any open reasoning block before emitting text (protocol:
 	// reasoning and text blocks must not overlap).
 	t.closeOpenReasoning()
 
 	if !t.msgOpen {
-		t.currentMsgID = t.emitter.GenerateMessageID()
-		_ = t.emitter.TextMessageStart(t.currentMsgID, new("assistant"))
+		t.currentMsgID = t.activeEmitter.GenerateMessageID()
+		role := new("assistant")
+		name := subagentNameForEvent(author, t.rootAgentName)
+		_ = t.activeEmitter.TextMessageStartWithID(t.currentMsgID, role, name)
 		t.msgOpen = true
 		t.prevText = ""
 	}
@@ -819,7 +1046,7 @@ func (t *eventTranslator) emitText(text string, partial bool) {
 			delta = text[len(t.prevText):]
 		}
 		if delta != "" {
-			_ = t.emitter.TextMessageContent(t.currentMsgID, delta)
+			_ = t.activeEmitter.TextMessageContent(t.currentMsgID, delta)
 		}
 		t.prevText = text
 	} else {
@@ -829,9 +1056,9 @@ func (t *eventTranslator) emitText(text string, partial bool) {
 			delta = text[len(t.prevText):]
 		}
 		if delta != "" {
-			_ = t.emitter.TextMessageContent(t.currentMsgID, delta)
+			_ = t.activeEmitter.TextMessageContent(t.currentMsgID, delta)
 		}
-		_ = t.emitter.TextMessageEnd(t.currentMsgID)
+		_ = t.activeEmitter.TextMessageEnd(t.currentMsgID)
 		t.msgOpen = false
 		t.prevText = ""
 	}
@@ -842,19 +1069,32 @@ func (t *eventTranslator) emitText(text string, partial bool) {
 // terminal paths).
 func (t *eventTranslator) closeOpenMessage() {
 	if t.msgOpen {
-		_ = t.emitter.TextMessageEnd(t.currentMsgID)
+		_ = t.activeEmitter.TextMessageEnd(t.currentMsgID)
 		t.msgOpen = false
 		t.prevText = ""
 	}
-	t.closeOpenReasoning()
+}
+
+// closeOpenSubagent emits SUBAGENT_FINISHED for any active sub-agent. Called
+// at terminal run boundaries so the sub-agent lifecycle is balanced.
+func (t *eventTranslator) closeOpenSubagent() {
+	if t.activeSubagentRun != "" {
+		_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+		t.activeSubagentRun = ""
+		t.currentAuthor = ""
+		t.subagentEmitted = false
+		t.activeEmitter = t.emitter
+	}
 }
 
 // closeOpenReasoning ends an open reasoning block if one is active.
 func (t *eventTranslator) closeOpenReasoning() {
 	if t.reasoningOpen {
-		_ = t.emitter.ReasoningMessageEnd(t.currentReasoningID)
-		_ = t.emitter.ReasoningEnd(t.currentReasoningID)
+		_ = t.activeEmitter.ReasoningMessageEnd(t.currentReasoningID)
+		_ = t.activeEmitter.ReasoningEnd(t.currentReasoningID)
 		t.reasoningOpen = false
+		t.prevThoughtText = ""
+		t.currentReasoningID = ""
 	}
 }
 
@@ -864,19 +1104,20 @@ func (t *eventTranslator) closeOpenReasoning() {
 // a matching TOOL_CALL_END.
 func (t *eventTranslator) closeStreamedToolCalls() {
 	for id := range t.openTools {
-		_ = t.emitter.ToolCallEnd(id)
+		_ = t.activeEmitter.ToolCallEnd(id)
 		delete(t.openTools, id)
+		delete(t.hadPartialArgs, id)
 	}
 }
 
 // emitFunctionCall translates an ADK FunctionCall to AG-UI tool call events.
 //
 // In streaming mode (partial=true), ADK's streamingResponseAggregator
-// (stream_aggregator.go:92) marks streamed chunks Partial=true and populates
+// marks streamed chunks Partial=true and populates
 // fc.PartialArgs with the delta fragments, leaving fc.Args nil until the final
 // flush. We emit TOOL_CALL_START for new calls and one TOOL_CALL_ARGS per
 // PartialArg.StringValue (the delta string the client appends), matching the
-// example server's loop.go:388-399 which emits tc.Function.Arguments fragments.
+// example server which emits tc.Function.Arguments fragments.
 // TOOL_CALL_END is deferred to the final (non-partial) event.
 //
 // In non-streaming mode, the final event carries the accumulated fc.Args and
@@ -884,7 +1125,7 @@ func (t *eventTranslator) closeStreamedToolCalls() {
 //
 // Malformed calls (empty name or invalid JSON args) on non-partial events emit
 // a TOOL_CALL_RESULT with an error payload instead of TOOL_CALL_START/ARGS/END,
-// matching the example server's validateToolCalls behavior (loop.go:511-549).
+// matching the example server's validateToolCalls behavior.
 func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool) {
 	// Suppressed tool mode: replace tool call events with state deltas.
 	// Partial events are buffered (skipped); only the final event produces
@@ -896,7 +1137,7 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool)
 		}
 		if ops, suppress := t.toolToStateMapper(fc.Name, fc.Args); suppress {
 			if ops != nil {
-				_ = t.emitter.StateDelta(ops)
+				_ = t.activeEmitter.StateDelta(ops)
 			}
 			return
 		}
@@ -908,21 +1149,45 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool)
 	// handler waits on (ctx.FunctionCallID()).
 	toolCallID := fc.ID
 	if toolCallID == "" {
-		toolCallID = t.emitter.GenerateToolCallID()
+		toolCallID = t.activeEmitter.GenerateToolCallID()
+	}
+
+	// Client/server tool disambiguation: when client tools are configured,
+	// tools NOT in the client set are server-side. They execute in the
+	// backend, so we emit an ACTIVITY_SNAPSHOT (informing the UI) instead of
+	// TOOL_CALL_START/ARGS/END (which would ask the client to execute them).
+	// We still record the ID mapping so FunctionResponse correlates correctly
+	// and emits a deterministic TOOL_CALL_RESULT.
+	if t.clientTools != nil {
+		if _, isClient := t.clientTools[fc.Name]; !isClient {
+			if fc.ID != "" {
+				t.toolCallIDs[fc.ID] = toolCallID
+			}
+			if fc.Name != "" {
+				t.toolCallIDs[fc.Name] = toolCallID
+			}
+			if fc.Name != "" || fc.Args != nil {
+				t.toolCallDetails[toolCallID] = toolCallDetail{name: fc.Name, args: fc.Args}
+			}
+			if !partial {
+				t.emitToolUseActivity(toolCallID, fc.Name, fc.Args)
+			}
+			return
+		}
 	}
 
 	// Validate on non-partial events only; partial events may have incomplete data.
 	if !partial {
 		if fc.Name == "" {
-			msgID := t.emitter.GenerateMessageID()
-			_ = t.emitter.ToolCallResult(msgID, toolCallID,
+			msgID := t.activeEmitter.GenerateMessageID()
+			_ = t.activeEmitter.ToolCallResult(msgID, toolCallID,
 				`{"error":"tool call had an empty function name"}`)
 			return
 		}
 		if fc.Args != nil {
 			if _, err := json.Marshal(fc.Args); err != nil {
-				msgID := t.emitter.GenerateMessageID()
-				_ = t.emitter.ToolCallResult(msgID, toolCallID,
+				msgID := t.activeEmitter.GenerateMessageID()
+				_ = t.activeEmitter.ToolCallResult(msgID, toolCallID,
 					fmt.Sprintf(`{"error":"tool arguments for %q were not valid JSON"}`, fc.Name))
 				return
 			}
@@ -946,24 +1211,25 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool)
 		// Streaming: emit START for new tool calls, then ARGS per PartialArg
 		// delta. ADK populates fc.PartialArgs (not fc.Args) on Partials.
 		if !t.startedTools[toolCallID] {
-			_ = t.emitter.ToolCallStart(toolCallID, fc.Name, nil)
+			_ = t.activeEmitter.ToolCallStart(toolCallID, fc.Name, nil)
 			t.startedTools[toolCallID] = true
 			t.openTools[toolCallID] = true
 			// Emit an initial ACTIVITY_SNAPSHOT for progressive tool_use tracking.
 			if t.emitActivityDeltas {
-				actMsgID := t.emitter.GenerateMessageID()
+				actMsgID := t.activeEmitter.GenerateMessageID()
 				t.activityMsgIDs[toolCallID] = actMsgID
-				_ = t.emitter.ActivitySnapshot(actMsgID, "tool_use",
+				_ = t.activeEmitter.ActivitySnapshot(actMsgID, "tool_use",
 					map[string]any{"text": fmt.Sprintf("Running %s...", fc.Name)}, nil)
 			}
 		}
 		for _, pa := range fc.PartialArgs {
 			if pa.StringValue != "" {
-				_ = t.emitter.ToolCallArgs(toolCallID, pa.StringValue)
+				_ = t.activeEmitter.ToolCallArgs(toolCallID, pa.StringValue)
+				t.hadPartialArgs[toolCallID] = true
 				// Emit ACTIVITY_DELTA with the args delta for progressive UI updates.
 				if t.emitActivityDeltas {
 					if actMsgID, ok := t.activityMsgIDs[toolCallID]; ok {
-						_ = t.emitter.ActivityDelta(actMsgID, "tool_use", []events.JSONPatchOperation{
+						_ = t.activeEmitter.ActivityDelta(actMsgID, "tool_use", []events.JSONPatchOperation{
 							{Op: "add", Path: "/args", Value: pa.StringValue},
 						})
 					}
@@ -975,34 +1241,37 @@ func (t *eventTranslator) emitFunctionCall(fc *genai.FunctionCall, partial bool)
 
 	// Non-partial: final event for this model response.
 	if t.startedTools[toolCallID] {
-		// Already started during streaming; emit any final ARGS and END.
-		// fc.Args is the accumulated args; emit as a single ARGS so clients
-		// that didn't see PartialArgs still get the full args.
-		if fc.Args != nil {
+		// Already started during streaming. If partial deltas were emitted,
+		// the client has already accumulated them — do NOT re-emit the full
+		// args (that would duplicate/corrupt the client's concatenated args).
+		// Only emit the full args if no partial deltas were seen (covers
+		// non-streaming mode and the case where PartialArgs was empty).
+		if fc.Args != nil && !t.hadPartialArgs[toolCallID] {
 			argsJSON, err := json.Marshal(fc.Args)
 			if err == nil {
-				_ = t.emitter.ToolCallArgs(toolCallID, string(argsJSON))
+				_ = t.activeEmitter.ToolCallArgs(toolCallID, string(argsJSON))
 			}
 		}
-		_ = t.emitter.ToolCallEnd(toolCallID)
+		_ = t.activeEmitter.ToolCallEnd(toolCallID)
 		delete(t.openTools, toolCallID)
+		delete(t.hadPartialArgs, toolCallID)
 		return
 	}
 
 	// Non-streaming: emit START + ARGS + END in one shot.
-	_ = t.emitter.ToolCallStart(toolCallID, fc.Name, nil)
+	_ = t.activeEmitter.ToolCallStart(toolCallID, fc.Name, nil)
 	if fc.Args != nil {
 		argsJSON, err := json.Marshal(fc.Args)
 		if err == nil {
-			_ = t.emitter.ToolCallArgs(toolCallID, string(argsJSON))
+			_ = t.activeEmitter.ToolCallArgs(toolCallID, string(argsJSON))
 		}
 	}
-	_ = t.emitter.ToolCallEnd(toolCallID)
+	_ = t.activeEmitter.ToolCallEnd(toolCallID)
 }
 
 // emitToolUseActivity emits an ACTIVITY_SNAPSHOT with type "tool_use" and a
 // human-readable content payload, matching the example server's
-// settlePendingToolCalls (loop.go:567-568). It is emitted when the tool
+// settlePendingToolCalls. It is emitted when the tool
 // actually executes (on FunctionResponse for server tools, or on resume for
 // approved HITL calls) — NOT at TOOL_CALL_END time, because a long-running
 // tool may be paused for approval after the proposal and never execute.
@@ -1013,8 +1282,8 @@ func (t *eventTranslator) emitToolUseActivity(toolCallID, toolName string, args 
 			argsJSON = string(b)
 		}
 	}
-	_ = t.emitter.ActivitySnapshot(
-		t.emitter.GenerateMessageID(), "tool_use",
+	_ = t.activeEmitter.ActivitySnapshot(
+		t.activeEmitter.GenerateMessageID(), "tool_use",
 		map[string]any{"text": fmt.Sprintf("Running %s(%s)", toolName, argsJSON)},
 		nil,
 	)
@@ -1023,7 +1292,7 @@ func (t *eventTranslator) emitToolUseActivity(toolCallID, toolName string, args 
 // emitFunctionResponse translates an ADK FunctionResponse to a AG-UI
 // TOOL_CALL_RESULT event, correlating it to the earlier FunctionCall
 // via the toolCallIDs map. It also emits a tool_use ACTIVITY_SNAPSHOT
-// (matching the example server's settlePendingToolCalls, loop.go:567-568)
+// (matching the example server's settlePendingToolCalls)
 // since a FunctionResponse means the tool actually executed.
 func (t *eventTranslator) emitFunctionResponse(fr *genai.FunctionResponse) {
 	toolCallID, ok := t.toolCallIDs[fr.ID]
@@ -1038,30 +1307,63 @@ func (t *eventTranslator) emitFunctionResponse(fr *genai.FunctionResponse) {
 		t.emitToolUseActivity(toolCallID, detail.name, detail.args)
 	}
 	content, _ := json.Marshal(fr.Response)
-	msgID := t.emitter.GenerateMessageID()
-	_ = t.emitter.ToolCallResult(msgID, toolCallID, string(content))
+	msgID := "result-" + toolCallID
+	_ = t.activeEmitter.ToolCallResult(msgID, toolCallID, string(content))
 }
 
 // emitThought translates a thought part to AG-UI reasoning events.
+//
+// Across a streaming turn, ADK emits multiple partial events whose Thought
+// Text accumulates the full reasoning. To avoid spawning one reasoning card
+// per chunk (which flickers frontends), a single reasoning block is opened on
+// the first thought chunk and reused for subsequent chunks. Incremental
+// deltas are computed by comparing the new text against the previously
+// accumulated text. The block is closed when a non-partial thought arrives
+// (the final chunk of the turn) or when text/terminal paths call
+// closeOpenReasoning.
+//
 // If the part carries a ThoughtSignature, a REASONING_ENCRYPTED_VALUE event
 // is also emitted so clients that need encrypted reasoning can access it.
-func (t *eventTranslator) emitThought(part *genai.Part) {
-	t.closeOpenMessage()
+func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
+	// Close any open text message, but do NOT close an open reasoning block
+	// here — the reasoning lifecycle spans multiple partial thought chunks.
+	// Calling closeOpenMessage() would close the reasoning block prematurely
+	// via its closeOpenReasoning() tail.
+	if t.msgOpen {
+		_ = t.activeEmitter.TextMessageEnd(t.currentMsgID)
+		t.msgOpen = false
+		t.prevText = ""
+	}
 
-	msgID := t.emitter.GenerateMessageID()
-	_ = t.emitter.ReasoningStart(msgID)
-	_ = t.emitter.ReasoningMessageStart(msgID, "assistant")
-	_ = t.emitter.ReasoningMessageContent(msgID, part.Text)
-	_ = t.emitter.ReasoningMessageEnd(msgID)
-	_ = t.emitter.ReasoningEnd(msgID)
+	if !t.reasoningOpen {
+		t.currentReasoningID = t.activeEmitter.GenerateMessageID()
+		_ = t.activeEmitter.ReasoningStart(t.currentReasoningID)
+		_ = t.activeEmitter.ReasoningMessageStart(t.currentReasoningID, "reasoning")
+		t.reasoningOpen = true
+		t.prevThoughtText = ""
+	}
+
+	// Compute incremental delta from the accumulated thought text.
+	delta := part.Text
+	if len(part.Text) > len(t.prevThoughtText) && strings.HasPrefix(part.Text, t.prevThoughtText) {
+		delta = part.Text[len(t.prevThoughtText):]
+	}
+	if delta != "" {
+		_ = t.activeEmitter.ReasoningMessageContent(t.currentReasoningID, delta)
+	}
+	t.prevThoughtText = part.Text
 
 	// Emit encrypted reasoning value if the part carries a thought signature.
 	if len(part.ThoughtSignature) > 0 {
-		_ = t.emitter.ReasoningEncryptedValue(
+		_ = t.activeEmitter.ReasoningEncryptedValue(
 			events.ReasoningEncryptedValueSubtypeMessage,
-			msgID,
+			t.currentReasoningID,
 			base64.StdEncoding.EncodeToString(part.ThoughtSignature),
 		)
+	}
+
+	if !partial {
+		t.closeOpenReasoning()
 	}
 }
 
@@ -1076,52 +1378,79 @@ func (t *eventTranslator) emitStateDelta(delta map[string]any) {
 		})
 	}
 	if len(ops) > 0 {
-		_ = t.emitter.StateDelta(ops)
+		_ = t.activeEmitter.StateDelta(ops)
+	}
+}
+
+// recordUsage converts a genai usage metadata block into an agui.TokenUsage
+// entry and appends it to the translator's collection. The model version is
+// used as the Model field; the provider is inferred from the model prefix
+// when possible (e.g. "gemini-*" → "google") and left empty otherwise so the
+// aggregator can still group by model.
+func (t *eventTranslator) recordUsage(meta *genai.GenerateContentResponseUsageMetadata, modelVersion string) {
+	if meta == nil {
+		return
+	}
+	u := agui.TokenUsage{
+		Provider: inferProviderFromModel(modelVersion),
+		Model:    modelVersion,
+	}
+	if meta.PromptTokenCount > 0 {
+		v := int64(meta.PromptTokenCount)
+		u.InputTokens = &v
+	}
+	if meta.CandidatesTokenCount > 0 {
+		v := int64(meta.CandidatesTokenCount)
+		u.OutputTokens = &v
+	}
+	if meta.TotalTokenCount > 0 {
+		v := int64(meta.TotalTokenCount)
+		u.TotalTokens = &v
+	}
+	if meta.ThoughtsTokenCount > 0 {
+		v := int64(meta.ThoughtsTokenCount)
+		u.ReasoningTokens = &v
+	}
+	if meta.CachedContentTokenCount > 0 {
+		v := int64(meta.CachedContentTokenCount)
+		u.CachedInputTokens = &v
+	}
+	t.usageEntries = append(t.usageEntries, u)
+}
+
+// collectedUsage returns the aggregated token usage entries for emission on
+// terminal events. Returns nil when no usage was recorded, so callers can
+// pass the slice directly to RunFinishedWithUsage / RunErrorWithUsage and
+// get the canonical plain event when there is no telemetry.
+func (t *eventTranslator) collectedUsage() []agui.TokenUsage {
+	return agui.AggregateTokenUsage(t.usageEntries)
+}
+
+// inferProviderFromModel returns a best-effort provider string for the given
+// model version. It recognises common Gemini, OpenAI, and Anthropic prefixes;
+// unknown models return an empty string so the aggregator groups by model
+// alone.
+func inferProviderFromModel(model string) string {
+	switch {
+	case strings.HasPrefix(model, "gemini-"):
+		return "google"
+	case strings.HasPrefix(model, "gpt-"):
+		return "openai"
+	case strings.HasPrefix(model, "claude-"):
+		return "anthropic"
+	default:
+		return ""
 	}
 }
 
 // --- Helper functions ---
 
-// lastUserMessage extracts the last user message from AG-UI messages and
-// converts it to a genai.Content suitable for the ADK runner. Supports both
-// plain text (ContentString) and multimodal content (ContentInputContents).
-// The provider string controls multimodal content gating: when set to "openai",
-// only image parts are forwarded; other providers get text-only fallback.
-// An empty provider means no gating (all content types forwarded).
-func lastUserMessage(messages []types.Message, provider string) *genai.Content {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != types.RoleUser {
-			continue
-		}
-
-		// Try plain text first.
-		if text, ok := msg.ContentString(); ok {
-			return &genai.Content{
-				Role:  "user",
-				Parts: []*genai.Part{{Text: text}},
-			}
-		}
-
-		// Try multimodal content.
-		if contents, ok := msg.ContentInputContents(); ok {
-			parts := inputContentsToGenaiParts(contents, provider)
-			if len(parts) > 0 {
-				return &genai.Content{Role: "user", Parts: parts}
-			}
-		}
-	}
-	return &genai.Content{
-		Role:  "user",
-		Parts: []*genai.Part{{Text: ""}},
-	}
-}
-
 // inputContentsToGenaiParts converts AG-UI InputContent entries to genai.Part
 // instances for the ADK runner. The provider string controls multimodal gating:
-// when set to "openai", only image parts are forwarded (OpenAI vision support);
-// other non-empty providers get text-only fallback for non-image content types.
-// An empty provider means no gating (all content types forwarded).
+// when set to "openai", image, audio, video, and document parts are forwarded;
+// other non-empty providers get text-only fallback for audio/video/document
+// content (images are always forwarded). An empty provider means no gating
+// (all content types forwarded).
 func inputContentsToGenaiParts(contents []types.InputContent, provider string) []*genai.Part {
 	var parts []*genai.Part
 	for _, c := range contents {
@@ -1235,7 +1564,10 @@ func extractPendingToolCalls(ev *session.Event) []PendingToolCall {
 }
 
 // sessionEventsToMessages converts ADK session events to AG-UI messages
-// for the MESSAGES_SNAPSHOT event.
+// for the MESSAGES_SNAPSHOT event. It preserves full fidelity: text parts,
+// tool calls (as ToolCalls on assistant messages), tool responses (as separate
+// RoleTool messages), and the event author as the message Name so sub-agent
+// attribution survives reconciliation.
 func sessionEventsToMessages(evts session.Events) []types.Message {
 	if evts == nil {
 		return nil
@@ -1246,26 +1578,89 @@ func sessionEventsToMessages(evts session.Events) []types.Message {
 			continue
 		}
 
-		role := types.RoleAssistant
-		if ev.Author == "user" {
-			role = types.RoleUser
-		}
+		role := roleForAuthor(ev.Author)
+		name := authorNameForSnapshot(ev.Author)
 
-		// Collect text from parts.
+		// Collect text and tool calls into the assistant/user message;
+		// FunctionResponse parts become separate RoleTool messages so the
+		// client can correlate them by ToolCallID.
 		var text string
+		var toolCalls []types.ToolCall
 		for _, part := range ev.Content.Parts {
-			if part != nil && part.Text != "" && !part.Thought {
+			if part == nil {
+				continue
+			}
+			if part.Text != "" && !part.Thought {
 				text += part.Text
+			}
+			if fc := part.FunctionCall; fc != nil {
+				argsJSON := "{}"
+				if fc.Args != nil {
+					if b, err := json.Marshal(fc.Args); err == nil {
+						argsJSON = string(b)
+					}
+				}
+				toolCalls = append(toolCalls, types.ToolCall{
+					ID:   fc.ID,
+					Type: types.ToolCallTypeFunction,
+					Function: types.FunctionCall{
+						Name:      fc.Name,
+						Arguments: argsJSON,
+					},
+				})
+			}
+			if fr := part.FunctionResponse; fr != nil {
+				content := "{}"
+				if b, err := json.Marshal(fr.Response); err == nil {
+					content = string(b)
+				}
+				msgs = append(msgs, types.Message{
+					ID:         "result-" + fr.ID,
+					Role:       types.RoleTool,
+					Content:    content,
+					ToolCallID: fr.ID,
+					Name:       fr.Name,
+				})
 			}
 		}
 
-		if text != "" {
-			msgs = append(msgs, types.Message{
-				ID:      ev.ID,
-				Role:    role,
-				Content: text,
-			})
+		if text == "" && len(toolCalls) == 0 {
+			continue
 		}
+		msg := types.Message{
+			ID:        ev.ID,
+			Role:      role,
+			Name:      name,
+			ToolCalls: toolCalls,
+		}
+		if text != "" {
+			msg.Content = text
+		}
+		msgs = append(msgs, msg)
 	}
 	return msgs
+}
+
+// roleForAuthor maps an ADK event author to an AG-UI message role. The author
+// "user" maps to RoleUser; any other author (model, sub-agent name) maps to
+// RoleAssistant since ADK persists all agent-generated content under the
+// agent's name rather than the canonical "model" role.
+func roleForAuthor(author string) types.Role {
+	if author == "user" {
+		return types.RoleUser
+	}
+	return types.RoleAssistant
+}
+
+// authorNameForSnapshot returns the Name to attach to a snapshot message. The
+// "user" and "model" authors are canonical roles and don't need a Name, so
+// they're dropped to keep snapshots clean. Sub-agent author names are
+// preserved so frontends can attribute messages to the emitting sub-agent.
+func authorNameForSnapshot(author string) string {
+	switch author {
+	case "", "user", "model":
+		return ""
+	default:
+		return author
+	}
 }

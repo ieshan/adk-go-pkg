@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -27,6 +28,21 @@ func Handler(cfg Config) (http.Handler, error) {
 	sseWriter := agsse.NewSSEWriter()
 
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Capabilities discovery: GET / or GET /capabilities returns the
+		// configured AgentCapabilities as JSON. Matching by suffix allows
+		// the handler to be mounted at any sub-path (e.g. /api/agent/).
+		if r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/capabilities")) {
+			if cfg.Capabilities == nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(cfg.Capabilities); err != nil {
+				http.Error(w, "failed to encode capabilities: "+err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

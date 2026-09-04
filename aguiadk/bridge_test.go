@@ -2,6 +2,7 @@ package aguiadk_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
@@ -327,7 +329,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 
 	// Verify TOOL_CALL_RESULT correlates to TOOL_CALL_START, and the
 	// tool_use ACTIVITY_SNAPSHOT has the expected type and content shape
-	// (matching the example server's settlePendingToolCalls, loop.go:567-568).
+	// (matching the example server's settlePendingToolCalls).
 	var toolCallStartID string
 	sawToolUseSnapshot := false
 	for _, ev := range collected {
@@ -923,9 +925,9 @@ func TestBridge_LongRunningToolInterrupt(t *testing.T) {
 func TestBridge_ClientToolNextRunInterrupt(t *testing.T) {
 	// Verifies the NextRun client-tool hand-back: when Config.ClientTools is set
 	// to NextRun mode and ADK emits a FunctionCall + LongRunningToolIDs (which
-	// is what ADK does after the clientProxyHandler returns nil — see
-	// base_flow.go:1169-1171), the bridge emits TOOL_CALL_* events and finishes
-	// with an interrupt. The client fulfills the tool call in a follow-up run.
+	// is what ADK does after the clientProxyHandler returns nil), the bridge
+	// emits TOOL_CALL_* events and finishes with an interrupt. The client
+	// fulfills the tool call in a follow-up run.
 	//
 	// This simulates the ADK event sequence that the FakeAgent cannot produce
 	// on its own (the FakeAgent bypasses the LLM/tool flow), so we emit the
@@ -1393,8 +1395,7 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 	// Simulates real ADK streaming: Partial events carry PartialArgs (deltas),
 	// not accumulated Args. The final non-Partial event carries the accumulated
 	// Args. Verifies TOOL_CALL_ARGS is emitted per PartialArg.StringValue delta
-	// (matching the example server's loop.go:388-399), not the accumulated args.
-	strPtr := func(b bool) *bool { return &b }
+	// (matching the example server), not the accumulated args.
 	ev1 := session.NewEvent(context.Background(), "inv-1")
 	ev1.Author = "test-agent"
 	ev1.LLMResponse = model.LLMResponse{
@@ -1408,7 +1409,7 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 					PartialArgs: []*genai.PartialArg{
 						{JsonPath: "$.city", StringValue: `"San"`},
 					},
-					WillContinue: strPtr(true),
+					WillContinue: new(true),
 				},
 			}},
 		},
@@ -1426,7 +1427,7 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 					PartialArgs: []*genai.PartialArg{
 						{JsonPath: "$.city", StringValue: ` Francisco"`},
 					},
-					WillContinue: strPtr(false),
+					WillContinue: new(false),
 				},
 			}},
 		},
@@ -1471,15 +1472,16 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 	collected := collectEvents(t, bridgeAgent, defaultInput())
 	typeSeq := eventTypes(collected)
 
-	// START on first partial, ARGS per PartialArg delta, ARGS for final
-	// accumulated args, END on final. No tool_use snapshot (no FunctionResponse).
+	// START on first partial, ARGS per PartialArg delta, END on final. The
+	// final accumulated args are NOT re-emitted because partial deltas were
+	// already sent (the client reducer appends deltas). No tool_use snapshot
+	// (no FunctionResponse).
 	expected := []events.EventType{
 		events.EventTypeRunStarted,
 		events.EventTypeStateSnapshot,
 		events.EventTypeToolCallStart,
 		events.EventTypeToolCallArgs, // delta: `"San"`
 		events.EventTypeToolCallArgs, // delta: ` Francisco"`
-		events.EventTypeToolCallArgs, // final accumulated args
 		events.EventTypeToolCallEnd,
 		events.EventTypeRunFinished,
 	}
@@ -1496,8 +1498,8 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 			}
 		}
 	}
-	if len(argsDeltas) != 3 {
-		t.Fatalf("expected 3 TOOL_CALL_ARGS events, got %d: %v", len(argsDeltas), argsDeltas)
+	if len(argsDeltas) != 2 {
+		t.Fatalf("expected 2 TOOL_CALL_ARGS events (partials only, no full re-send), got %d: %v", len(argsDeltas), argsDeltas)
 	}
 	if argsDeltas[0] != `"San"` {
 		t.Errorf("first ARGS delta = %q, want %q", argsDeltas[0], `"San"`)
@@ -1505,9 +1507,118 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 	if argsDeltas[1] != ` Francisco"` {
 		t.Errorf("second ARGS delta = %q, want %q", argsDeltas[1], ` Francisco"`)
 	}
-	// The third ARGS is the accumulated args from the final event.
-	if !strings.Contains(argsDeltas[2], "San Francisco") {
-		t.Errorf("third ARGS (accumulated) = %q, want it to contain %q", argsDeltas[2], "San Francisco")
+}
+
+// TestBridge_StreamingToolCallArgsNoDuplication verifies that concatenating
+// all TOOL_CALL_ARGS deltas for a tool call produces valid JSON equal to the
+// final accumulated args. The AG-UI client reducer APPENDS each delta to
+// function.arguments (default.ts:513), so the bridge must not emit the full
+// args JSON after partial deltas — that would duplicate/corrupt the client's
+// concatenated args. Bug B2.
+func TestBridge_StreamingToolCallArgsNoDuplication(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.city", StringValue: `{"city":"`},
+					},
+					WillContinue: new(true),
+				},
+			}},
+		},
+		Partial: true,
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					PartialArgs: []*genai.PartialArg{
+						{JsonPath: "$.city", StringValue: `San Francisco"}`},
+					},
+					WillContinue: new(false),
+				},
+			}},
+		},
+		Partial: true,
+	}
+
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					Args: map[string]any{"city": "San Francisco"},
+				},
+			}},
+		},
+		Partial: false,
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	// Collect all TOOL_CALL_ARGS deltas for toolCallId "fc-1".
+	// The bridge uses the ADK function call ID as the AG-UI tool call ID
+	// when fc.ID is non-empty, so we can match directly.
+	var argsDeltas []string
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallArgs {
+			if tcae, ok := ev.(*events.ToolCallArgsEvent); ok {
+				if tcae.ToolCallID == "fc-1" {
+					argsDeltas = append(argsDeltas, tcae.Delta)
+				}
+			}
+		}
+	}
+
+	if len(argsDeltas) == 0 {
+		t.Fatal("expected at least one TOOL_CALL_ARGS event")
+	}
+
+	// Simulate the AG-UI client reducer: concatenate all deltas.
+	concatenated := strings.Join(argsDeltas, "")
+
+	// The concatenated result must be valid JSON matching the final args.
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(concatenated), &parsed); err != nil {
+		t.Fatalf("concatenated TOOL_CALL_ARGS deltas are not valid JSON: %s\nerror: %v\ndeltas: %v", concatenated, err, argsDeltas)
+	}
+	if city, ok := parsed["city"].(string); !ok || city != "San Francisco" {
+		t.Errorf("concatenated args city = %v, want %q (full: %s)", parsed["city"], "San Francisco", concatenated)
 	}
 }
 
@@ -2469,7 +2580,8 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 			Role:  "model",
 			Parts: []*genai.Part{{Text: "first response"}},
 		},
-		Partial: false,
+		Partial:      false,
+		TurnComplete: true,
 	}
 
 	ev2 := session.NewEvent(context.Background(), "inv-1")
@@ -2479,7 +2591,8 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 			Role:  "model",
 			Parts: []*genai.Part{{Text: "second response"}},
 		},
-		Partial: false,
+		Partial:      false,
+		TurnComplete: true,
 	}
 
 	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
@@ -2507,8 +2620,9 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 	var collected []events.Event
 	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
 		if err != nil {
-			_ = err
-			continue
+			// The MaxIterations RUN_ERROR is delivered as an event, not an
+			// iterator error; any iterator error here is unexpected.
+			t.Fatalf("unexpected iterator error: %v", err)
 		}
 		if ev != nil {
 			collected = append(collected, ev)
@@ -2538,6 +2652,109 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 				t.Errorf("error message = %q, want it to contain %q", errEvt.Message, "did not converge")
 			}
 		}
+	}
+}
+
+// TestBridge_MaxIterationsCountsModelTurns proves the MaxIterations counter
+// counts completed model turns (TurnComplete events), not all non-partial
+// events. Bug B1: the counter incremented on every non-partial event, so a
+// single model turn that calls a tool (function-call event + function-response
+// event + final-text event) counted as 3 turns.
+//
+// The fake agent yields 3 non-partial events but only 1 has TurnComplete=true.
+// With MaxIterations=1:
+//   - Buggy code (counting all non-partial): 3 > 1 → RUN_ERROR (wrong)
+//   - Fixed code (counting TurnComplete): 1 > 1 is false → no RUN_ERROR (correct)
+//
+// In real ADK streaming, the model response with a function call would also
+// have TurnComplete=true (stream_aggregator.go sets it when FinishReason != "").
+// This test uses synthetic events with TurnComplete=false on the function
+// call/response to isolate the counting logic from real ADK behavior.
+func TestBridge_MaxIterationsCountsModelTurns(t *testing.T) {
+	ev1 := session.NewEvent(context.Background(), "inv-1")
+	ev1.Author = "test-agent"
+	ev1.LLMResponse = model.LLMResponse{
+		Partial: false,
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "fc-1",
+					Name: "get_weather",
+					Args: map[string]any{"city": "SF"},
+				},
+			}},
+		},
+	}
+
+	ev2 := session.NewEvent(context.Background(), "inv-1")
+	ev2.Author = "test-agent"
+	ev2.LLMResponse = model.LLMResponse{
+		Partial: false,
+		Content: &genai.Content{
+			Role: "user",
+			Parts: []*genai.Part{{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:       "fc-1",
+					Name:     "get_weather",
+					Response: map[string]any{"temp": 72},
+				},
+			}},
+		},
+	}
+
+	ev3 := session.NewEvent(context.Background(), "inv-1")
+	ev3.Author = "test-agent"
+	ev3.LLMResponse = model.LLMResponse{
+		Partial:      false,
+		TurnComplete: true,
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "The weather is 72 degrees"}},
+		},
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if !yield(ev1, nil) {
+				return
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			if !yield(ev3, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:         a,
+		AppName:       "testapp",
+		UserID:        "user1",
+		MaxIterations: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+	typeSeq := eventTypes(collected)
+
+	for _, et := range typeSeq {
+		if et == events.EventTypeRunError {
+			t.Fatalf("expected no RUN_ERROR (1 model turn within MaxIterations=1), got: %v", typeSeq)
+		}
+	}
+
+	hasRunFinished := false
+	for _, et := range typeSeq {
+		if et == events.EventTypeRunFinished {
+			hasRunFinished = true
+		}
+	}
+	if !hasRunFinished {
+		t.Fatalf("expected RUN_FINISHED, got: %v", typeSeq)
 	}
 }
 
@@ -3217,8 +3434,6 @@ func TestBridge_StateStatusOnError(t *testing.T) {
 func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
 	// Verifies that ACTIVITY_SNAPSHOT and ACTIVITY_DELTA events are emitted
 	// during streaming tool calls when EmitActivityDeltas is enabled.
-	strPtr := func(b bool) *bool { return &b }
-
 	ev1 := session.NewEvent(context.Background(), "inv-1")
 	ev1.Author = "test-agent"
 	ev1.LLMResponse = model.LLMResponse{
@@ -3231,7 +3446,7 @@ func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
 					PartialArgs: []*genai.PartialArg{
 						{JsonPath: "$.q", StringValue: `"hel`},
 					},
-					WillContinue: strPtr(true),
+					WillContinue: new(true),
 				},
 			}},
 		},
@@ -3250,7 +3465,7 @@ func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
 					PartialArgs: []*genai.PartialArg{
 						{JsonPath: "$.q", StringValue: `lo"`},
 					},
-					WillContinue: strPtr(false),
+					WillContinue: new(false),
 				},
 			}},
 		},
@@ -3320,8 +3535,6 @@ func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
 func TestBridge_NoActivityDeltaWhenDisabled(t *testing.T) {
 	// Verifies that ACTIVITY_DELTA events are NOT emitted when EmitActivityDeltas
 	// is disabled (the default).
-	strPtr := func(b bool) *bool { return &b }
-
 	ev1 := session.NewEvent(context.Background(), "inv-1")
 	ev1.Author = "test-agent"
 	ev1.LLMResponse = model.LLMResponse{
@@ -3334,7 +3547,7 @@ func TestBridge_NoActivityDeltaWhenDisabled(t *testing.T) {
 					PartialArgs: []*genai.PartialArg{
 						{JsonPath: "$.q", StringValue: `"hel`},
 					},
-					WillContinue: strPtr(true),
+					WillContinue: new(true),
 				},
 			}},
 		},
@@ -3860,5 +4073,361 @@ func assertEventSequence(t *testing.T, got, want []events.EventType) {
 		if got[i] != want[i] {
 			t.Fatalf("event[%d] mismatch: got %s, want %s\nfull got:  %v\nfull want: %v", i, got[i], want[i], got, want)
 		}
+	}
+}
+
+// TestBridge_EarlyStreamTerminationReleasesGoroutine verifies that breaking
+// out of the bridge.Run iterator promptly cancels the background runInternal
+// goroutine instead of leaking it. The fake agent blocks until the
+// run context is cancelled; if cancellation did not propagate, the goroutine
+// would leak and the runExited channel would never close, hanging the test.
+func TestBridge_EarlyStreamTerminationReleasesGoroutine(t *testing.T) {
+	runExited := make(chan struct{})
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			defer close(runExited)
+			// Block until the run context is cancelled. The bridge must
+			// propagate consumer-side cancellation to this context.
+			<-ctx.Done()
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Start iterating and break out after the first event (RUN_STARTED).
+	seen := 0
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		seen++
+		_ = ev
+		if seen >= 1 {
+			break // stop consuming — simulates client disconnect
+		}
+	}
+	cancel()
+
+	// The runInternal goroutine should observe the cancellation and exit.
+	// If it leaked (blocked forever), this select would time out.
+	select {
+	case <-runExited:
+		// success: goroutine exited promptly
+	case <-time.After(3 * time.Second):
+		t.Fatal("runInternal goroutine leaked: did not exit within 3s of consumer disconnect")
+	}
+}
+
+// TestBridge_SubagentLifecycle verifies that events authored by a non-root
+// sub-agent trigger SUBAGENT_STARTED and SUBAGENT_FINISHED lifecycle events,
+// and that stream events emitted while the sub-agent is active carry
+// subagentRunId in their JSON payload.
+func TestBridge_SubagentLifecycle(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Sub-agent "researcher" emits a text message.
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "researcher"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Research"}},
+				},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+
+			ev2 := session.NewEvent(context.Background(), "inv-1")
+			ev2.Author = "researcher"
+			ev2.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Research complete"}},
+				},
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var subagentStarts, subagentFinishes int
+	var textContentJSON []string
+	for _, ev := range collected {
+		switch ev.Type() {
+		case "SUBAGENT_STARTED":
+			subagentStarts++
+		case "SUBAGENT_FINISHED":
+			subagentFinishes++
+		case events.EventTypeTextMessageContent:
+			data, _ := ev.ToJSON()
+			textContentJSON = append(textContentJSON, string(data))
+		}
+	}
+
+	if subagentStarts != 1 {
+		t.Errorf("SUBAGENT_STARTED count = %d, want 1", subagentStarts)
+	}
+	if subagentFinishes != 1 {
+		t.Errorf("SUBAGENT_FINISHED count = %d, want 1", subagentFinishes)
+	}
+
+	// Verify that TEXT_MESSAGE_CONTENT events carry subagentRunId.
+	if len(textContentJSON) == 0 {
+		t.Fatal("expected at least one TEXT_MESSAGE_CONTENT event")
+	}
+	for _, j := range textContentJSON {
+		if !strings.Contains(j, `"subagentRunId"`) {
+			t.Errorf("TEXT_MESSAGE_CONTENT JSON missing subagentRunId: %s", j)
+		}
+	}
+}
+
+// TestBridge_SubagentClosedOnRunnerError verifies that a SUBAGENT_STARTED
+// emitted by a sub-agent is balanced by a SUBAGENT_FINISHED before RUN_ERROR
+// when the runner yields an error mid-turn. Without closeOpenSubagent() on the
+// error path, the lifecycle is left unbalanced.
+func TestBridge_SubagentClosedOnRunnerError(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Sub-agent "researcher" starts streaming.
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "researcher"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Researching"}},
+				},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+			// Runner error while sub-agent is active.
+			if !yield(nil, fmt.Errorf("runner crashed")) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			// The runner error ("runner crashed") is expected; the
+			// SUBAGENT_FINISHED and RUN_ERROR events are emitted before it
+			// as proper events, so continue collecting those.
+			continue
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	typeSeq := eventTypes(collected)
+	var subagentStarts, subagentFinishes int
+	for _, et := range typeSeq {
+		switch et {
+		case "SUBAGENT_STARTED":
+			subagentStarts++
+		case "SUBAGENT_FINISHED":
+			subagentFinishes++
+		}
+	}
+	if subagentStarts != 1 {
+		t.Fatalf("SUBAGENT_STARTED count = %d, want 1", subagentStarts)
+	}
+	if subagentFinishes != 1 {
+		t.Fatalf("SUBAGENT_FINISHED count = %d, want 1 (lifecycle must be balanced before RUN_ERROR)", subagentFinishes)
+	}
+}
+
+// TestBridge_TokenUsageOnRunnerError verifies that token usage collected from
+// prior non-partial events is emitted on RUN_ERROR when the runner yields an
+// error. Bug B4: the runner error path used RunErrorWithOptions, dropping
+// collected usage. RunErrorWithUsage preserves it (and falls back to
+// RunErrorWithOptions when no usage was collected).
+func TestBridge_TokenUsageOnRunnerError(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// First event: a non-partial model response with usage metadata.
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "partial answer"}},
+				},
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     10,
+					CandidatesTokenCount: 5,
+					TotalTokenCount:      15,
+				},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+			// Then a runner error.
+			if !yield(nil, fmt.Errorf("model overloaded")) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			// The runner error is expected; continue collecting events
+			// emitted before it (the usage-bearing RUN_ERROR).
+			continue
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	// Find the RUN_ERROR event and verify it carries usage via a typed
+	// assertion (matching TestBridge_TokenUsageReporting's style).
+	var errorEv events.Event
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			errorEv = ev
+			break
+		}
+	}
+	if errorEv == nil {
+		t.Fatal("expected a RUN_ERROR event but found none")
+	}
+
+	usageEv, ok := errorEv.(*agui.RunErrorWithUsageEvent)
+	if !ok {
+		t.Fatalf("expected *agui.RunErrorWithUsageEvent, got %T", errorEv)
+	}
+	if len(usageEv.Usage) == 0 {
+		t.Fatal("expected non-empty usage on RUN_ERROR")
+	}
+	u := usageEv.Usage[0]
+	if u.InputTokens == nil || *u.InputTokens != 10 {
+		t.Errorf("usage inputTokens = %v, want 10", u.InputTokens)
+	}
+	if u.OutputTokens == nil || *u.OutputTokens != 5 {
+		t.Errorf("usage outputTokens = %v, want 5", u.OutputTokens)
+	}
+	if u.TotalTokens == nil || *u.TotalTokens != 15 {
+		t.Errorf("usage totalTokens = %v, want 15", u.TotalTokens)
+	}
+}
+
+// TestBridge_TokenUsageReporting verifies that UsageMetadata from ADK events
+// is collected and emitted on RUN_FINISHED via the usage field.
+func TestBridge_TokenUsageReporting(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial: false,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Hello"}},
+				},
+				TurnComplete: true,
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     10,
+					CandidatesTokenCount: 20,
+					TotalTokenCount:      30,
+				},
+				ModelVersion: "gemini-2.5-flash",
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	// Find the RUN_FINISHED event and verify it carries usage.
+	var finishedEv events.Event
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunFinished {
+			finishedEv = ev
+			break
+		}
+	}
+	if finishedEv == nil {
+		t.Fatal("expected RUN_FINISHED event")
+	}
+
+	usageEv, ok := finishedEv.(*agui.RunFinishedWithUsageEvent)
+	if !ok {
+		t.Fatalf("expected *agui.RunFinishedWithUsageEvent, got %T", finishedEv)
+	}
+	if len(usageEv.Usage) == 0 {
+		t.Fatal("expected non-empty usage on RUN_FINISHED")
+	}
+	u := usageEv.Usage[0]
+	if u.Provider != "google" {
+		t.Errorf("usage provider = %q, want google", u.Provider)
+	}
+	if u.Model != "gemini-2.5-flash" {
+		t.Errorf("usage model = %q, want gemini-2.5-flash", u.Model)
+	}
+	if u.InputTokens == nil || *u.InputTokens != 10 {
+		t.Errorf("usage inputTokens = %v, want 10", u.InputTokens)
+	}
+	if u.OutputTokens == nil || *u.OutputTokens != 20 {
+		t.Errorf("usage outputTokens = %v, want 20", u.OutputTokens)
+	}
+	if u.TotalTokens == nil || *u.TotalTokens != 30 {
+		t.Errorf("usage totalTokens = %v, want 30", u.TotalTokens)
 	}
 }

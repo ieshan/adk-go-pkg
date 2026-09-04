@@ -59,14 +59,33 @@ func CORSMiddleware(cfg *CORSConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
-			h.Set("Access-Control-Allow-Origin", allowOrigin)
 			h.Set("Access-Control-Allow-Methods", allowMethods)
 			h.Set("Access-Control-Allow-Headers", allowHeaders)
 			if exposeHeaders != "" {
 				h.Set("Access-Control-Expose-Headers", exposeHeaders)
 			}
+			// W3C CORS: Access-Control-Allow-Origin cannot be "*" when
+			// Allow-Credentials is true — browsers reject that combination.
+			// When credentials are enabled and the configured origin is a
+			// wildcard, reflect the request's Origin header instead and add
+			// Vary: Origin so caches distinguish responses per origin.
 			if cfg.AllowCredentials {
 				h.Set("Access-Control-Allow-Credentials", "true")
+				if allowOrigin == "*" {
+					reqOrigin := r.Header.Get("Origin")
+					if reqOrigin != "" {
+						h.Set("Access-Control-Allow-Origin", reqOrigin)
+						h.Set("Vary", "Origin")
+					} else {
+						// No Origin header: still set the wildcard so
+						// non-browser clients get a permissive response.
+						h.Set("Access-Control-Allow-Origin", allowOrigin)
+					}
+				} else {
+					h.Set("Access-Control-Allow-Origin", allowOrigin)
+				}
+			} else {
+				h.Set("Access-Control-Allow-Origin", allowOrigin)
 			}
 			h.Set("Access-Control-Max-Age", strconv.Itoa(int(maxAge.Seconds())))
 

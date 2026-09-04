@@ -23,6 +23,19 @@ Additionally, **MCPAppsMiddleware** provides UI-enabled tool injection and
 proxied MCP request handling for frontend-driven MCP interactions. See
 [UI-Enabled Tools with MCPAppsMiddleware](#ui-enabled-tools-with-mcpappsmiddleware).
 
+## Table of Contents
+
+- [Which Path Should I Use?](#which-path-should-i-use)
+- [Path A: Generic AG-UI Agent with MCPMiddleware](#path-a-generic-ag-ui-agent-with-mcpmiddleware)
+- [Path B: ADK-Go Agent with Bridge and mcptoolset](#path-b-adk-go-agent-with-bridge-and-mcptoolset)
+- [The ADK-Go Bridge — What It Is and Why](#the-adk-go-bridge-what-it-is-and-why)
+- [UI-Enabled Tools with MCPAppsMiddleware](#ui-enabled-tools-with-mcpappsmiddleware)
+- [Configuration](#configuration)
+- [MCP Client Helpers](#mcp-client-helpers)
+- [Naming and Hash Helpers](#naming-and-hash-helpers)
+- [Exported Types](#exported-types)
+- [Architecture](#architecture)
+
 ## Path A: Generic AG-UI Agent with MCPMiddleware
 
 Use this path when you implement `agui.AgentFunc` directly without ADK-Go.
@@ -48,7 +61,7 @@ func main() {
 	// 1. Define your agent logic.
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		ch := make(chan events.Event, 64)
-		emitter := agui.NewEventEmitter(ch)
+		emitter := agui.NewEventEmitterWithContext(ctx, ch)
 		go func() {
 			defer close(ch)
 			emitter.RunStarted(input.ThreadID, input.RunID)
@@ -87,6 +100,11 @@ func main() {
 3. Injects namespaced MCP tools into `input.Tools` before calling your agent
 4. After your agent emits tool call events, executes the MCP calls server-side
 5. Feeds results back to the agent as new messages and repeats (up to `MaxIterations`)
+
+> **Hand-off to frontend on open non-MCP tool calls:** When there are still-open
+> non-MCP tool calls after the loop, `MCPMiddleware` flushes the buffered
+> `RUN_FINISHED` instead of continuing, handing control back to the frontend
+> to resolve those tool calls.
 
 ## Path B: ADK-Go Agent with Bridge and mcptoolset
 
@@ -257,7 +275,7 @@ import (
 func main() {
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		ch := make(chan events.Event, 64)
-		emitter := agui.NewEventEmitter(ch)
+		emitter := agui.NewEventEmitterWithContext(ctx, ch)
 		go func() {
 			defer close(ch)
 			emitter.RunStarted(input.ThreadID, input.RunID)
@@ -292,6 +310,13 @@ func main() {
 - Injects only tools with `_meta["ui/resourceUri"]` (UI-enabled tools)
 - Handles proxied MCP requests from frontends (see [Proxied MCP Requests](#proxied-mcp-requests))
 - Does not run an agentic tool execution loop
+- After the agent run, executes pending UI tool calls found in `input.Messages`, producing `TOOL_CALL_RESULT` + `ACTIVITY_SNAPSHOT` events
+- After each pending UI tool execution, emits an `ACTIVITY_SNAPSHOT` event of type `mcp-apps` with content fields `result`, `resourceUri`, `serverHash`, `serverId`, `toolInput`, and `replace=true`
+
+> **Pass-through on empty `servers`:** Both `MCPMiddleware` and
+> `MCPAppsMiddleware` are no-ops (pass-through) when the `servers` slice is
+> empty — the wrapped agent runs unchanged with no tool injection or
+> proxied request handling.
 
 ## Configuration
 
@@ -299,10 +324,18 @@ func main() {
 
 | Field     | Type                | Description                                      |
 |-----------|---------------------|--------------------------------------------------|
-| `Type`    | `string`            | Transport type: `"http"` (streamable) or `"sse"` |
+| `Type`    | `string`            | Transport type: `"http"`, `"streamable"`, or `""` (empty string) are all aliases for streamable HTTP; only `"sse"` selects SSE. An empty `Type` defaults to streamable HTTP. |
 | `URL`     | `string`            | MCP server endpoint URL                          |
 | `Headers` | `map[string]string` | Optional HTTP headers for authentication         |
-| `ServerID`| `string`            | Server identifier for tool namespacing           |
+| `ServerID`| `string`            | Optional. Server identifier for tool namespacing and proxied request routing (see [Proxied MCP Requests](#proxied-mcp-requests)). An empty `ServerID` produces a tool name like `mcp______tool` (with an empty sanitized segment). |
+
+### MCPMiddlewareOptions
+
+`MCPMiddlewareOptions` configures `NewMCPMiddleware` behavior.
+
+| Field           | Type   | Description                                                          |
+|-----------------|--------|----------------------------------------------------------------------|
+| `MaxIterations` | `int`  | Caps the number of server-side tool-execution rounds per run. Default: `32`. A value `<= 0` selects the default. When the limit is reached, the middleware logs a `slog.Warn` and flushes the buffered `RUN_FINISHED` — it does NOT emit a client-visible warning event. |
 
 ### Tool Naming
 
@@ -327,10 +360,83 @@ Frontends can send proxied MCP requests by including `__proxiedMCPRequest` in `F
 ```
 
 The `serverId` field is used for lookup first; if not found, `serverHash`
-(from `GetServerHash`) is used as a fallback. Both fields are optional but
-at least one must be present.
+(from `GetServerHash`) is used as a fallback. Both fields are optional. The
+middleware resolves the server by `ServerID` first, then `ServerHash` as
+fallback. If neither matches a configured server, the request fails with an
+"unknown MCP server" error (emitted as a `RUN_FINISHED` event).
 
 Supported methods: `tools/call`, `resources/read`, `ping`.
+
+## MCP Client Helpers
+
+The `agui/mcp_client.go` file exports these helpers for direct MCP server
+interaction:
+
+```go
+// BuildMCPTransport constructs an mcp.Transport from the given config.
+func BuildMCPTransport(config MCPClientConfig) (mcp.Transport, error)
+
+// ListMCPTools connects to the server and returns its advertised tools.
+func ListMCPTools(ctx context.Context, config MCPClientConfig) ([]*mcp.Tool, error)
+
+// CallMCPTool invokes a single tool by name with the given arguments.
+func CallMCPTool(ctx context.Context, config MCPClientConfig, name string, args map[string]any) (*mcp.CallToolResult, error)
+
+// ReadMCPResource reads a resource by URI from the server.
+func ReadMCPResource(ctx context.Context, config MCPClientConfig, uri string) (any, error)
+
+// ExecuteMCPRequest sends an arbitrary MCP method/params pair to the server.
+func ExecuteMCPRequest(ctx context.Context, config MCPClientConfig, method string, params any) (any, error)
+
+// ExtractTextContent pulls the concatenated text content out of a CallToolResult.
+func ExtractTextContent(result *mcp.CallToolResult) string
+```
+
+## Naming and Hash Helpers
+
+The `agui/mcp_naming.go` file exports these helpers:
+
+```go
+// SanitizeSegment replaces special characters with underscores and truncates
+// a single name segment for use in tool namespacing.
+func SanitizeSegment(s string) string
+
+// MakeUniqueToolName builds a namespaced tool name (mcp__{server}__{tool}),
+// appending _2, _3, etc. suffixes to resolve collisions against the used set.
+func MakeUniqueToolName(serverID, toolName string, used map[string]struct{}) string
+
+// GetServerHash returns a stable hash for the server config: SHA-256 of the
+// JSON-encoded {Type, URL, Headers} tuple, first 16 hex chars. It does NOT
+// include ServerID. This matters for frontend fallback routing — two configs
+// differing only in ServerID share the same hash.
+func GetServerHash(config MCPClientConfig) string
+```
+
+## Exported Types
+
+The `agui/mcp_types.go` file exports these types:
+
+### ResolvedMCPTool
+
+`ResolvedMCPTool` represents an MCP tool that has been discovered from a
+configured server and namespaced for injection into `input.Tools`. It pairs
+the original MCP tool metadata with the server identity used for execution
+routing.
+
+### ProxiedMCPRequest
+
+`ProxiedMCPRequest` is the structure decoded from the `__proxiedMCPRequest`
+field in `ForwardedProps`. It carries a frontend-driven MCP method call to
+be executed by the middleware against a configured server.
+
+```go
+type ProxiedMCPRequest struct {
+	ServerHash string
+	ServerID   string
+	Method     string
+	Params     any
+}
+```
 
 ## Architecture
 

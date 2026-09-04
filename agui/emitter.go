@@ -1,6 +1,8 @@
 package agui
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -17,13 +19,40 @@ import (
 var ErrTransport = errors.New("agui: transport error")
 
 // EventEmitter provides typed methods for emitting AG-UI events.
+//
+// When constructed with NewEventEmitterWithContext, emit blocks are bounded by
+// the context lifecycle: if the context is cancelled (e.g. the consumer stops
+// iterating or the client disconnects), pending and future emit calls return
+// promptly with an error wrapping ErrTransport instead of blocking forever.
+// This prevents goroutine leaks when the downstream consumer breaks out of a
+// stream early.
 type EventEmitter struct {
 	out chan<- events.Event
+	ctx context.Context // nil for the legacy context-unaware emitter
+
+	// eventWrapper, when non-nil, transforms each event before it is sent
+	// to the channel. ForSubagent uses this to inject subagentRunId into
+	// stream events for sub-agent attribution.
+	eventWrapper func(events.Event) events.Event
 }
 
 // NewEventEmitter creates an emitter that writes to the given channel.
+//
+// The returned emitter is not bound to any context: emit calls block until the
+// channel accepts the event. If the channel is closed, emit recovers the panic
+// and returns an error wrapping ErrTransport. Prefer
+// NewEventEmitterWithContext for streaming runs where the consumer may stop
+// iterating before the producer finishes.
 func NewEventEmitter(out chan<- events.Event) *EventEmitter {
 	return &EventEmitter{out: out}
+}
+
+// NewEventEmitterWithContext creates an emitter bounded by the context
+// lifecycle. When ctx is cancelled, emit calls unblock and return an error
+// wrapping ErrTransport and the context's error (ctx.Err()), preventing
+// goroutine leaks on early stream termination or client disconnect.
+func NewEventEmitterWithContext(ctx context.Context, out chan<- events.Event) *EventEmitter {
+	return &EventEmitter{out: out, ctx: ctx}
 }
 
 // GenerateMessageID returns a new unique message ID.
@@ -42,6 +71,17 @@ func (e *EventEmitter) emit(ev events.Event) (err error) {
 			err = fmt.Errorf("%w: %v", ErrTransport, r)
 		}
 	}()
+	if e.eventWrapper != nil {
+		ev = e.eventWrapper(ev)
+	}
+	if e.ctx != nil {
+		select {
+		case <-e.ctx.Done():
+			return fmt.Errorf("%w: %w", ErrTransport, e.ctx.Err())
+		case e.out <- ev:
+			return nil
+		}
+	}
 	e.out <- ev
 	return nil
 }
@@ -68,6 +108,20 @@ func (e *EventEmitter) TextMessageStart(messageID string, role *string) error {
 	opts := []events.TextMessageStartOption{}
 	if role != nil {
 		opts = append(opts, events.WithRole(*role))
+	}
+	return e.emit(events.NewTextMessageStartEvent(messageID, opts...))
+}
+
+// TextMessageStartWithID emits a TEXT_MESSAGE_START event with an optional
+// role and sub-agent name. The name is attached via WithName so frontends can
+// attribute the message to the emitting sub-agent.
+func (e *EventEmitter) TextMessageStartWithID(messageID string, role *string, name string) error {
+	opts := []events.TextMessageStartOption{}
+	if role != nil {
+		opts = append(opts, events.WithRole(*role))
+	}
+	if name != "" {
+		opts = append(opts, events.WithName(name))
 	}
 	return e.emit(events.NewTextMessageStartEvent(messageID, opts...))
 }
@@ -241,3 +295,70 @@ func (e *EventEmitter) Raw(event any, source *string) error {
 	}
 	return e.emit(events.NewRawEvent(event, opts...))
 }
+
+// SubagentStarted emits a SUBAGENT_STARTED event marking the beginning of a
+// sub-agent run.
+func (e *EventEmitter) SubagentStarted(subagentRunID, name string, opts ...SubagentStartedOption) error {
+	return e.emit(NewSubagentStartedEvent(subagentRunID, name, opts...))
+}
+
+// SubagentFinished emits a SUBAGENT_FINISHED event marking the completion of a
+// sub-agent run.
+func (e *EventEmitter) SubagentFinished(subagentRunID string, opts ...SubagentFinishedOption) error {
+	return e.emit(NewSubagentFinishedEvent(subagentRunID, opts...))
+}
+
+// SubagentError emits a SUBAGENT_ERROR event marking the failure of a
+// sub-agent run.
+func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...SubagentErrorOption) error {
+	return e.emit(NewSubagentErrorEvent(subagentRunID, message, opts...))
+}
+
+// ForSubagent returns a new EventEmitter sharing the same output channel and
+// context as e, but wrapping every emitted event with a subagentRunId field
+// for stream attribution. Events emitted through the returned emitter
+// carry "subagentRunId" in their JSON payload so frontends can attribute
+// streamed text, tool calls, state deltas, etc. to the emitting sub-agent.
+//
+// The returned emitter is lightweight — it does not allocate a new channel or
+// goroutine. Lifecycle events (SubagentStarted/Finished/Error) should be
+// emitted through the original emitter, not the sub-agent wrapper, since they
+// carry subagentRunId as their own dedicated field.
+func (e *EventEmitter) ForSubagent(subagentRunID string) *EventEmitter {
+	return &EventEmitter{
+		out: e.out,
+		ctx: e.ctx,
+		eventWrapper: func(ev events.Event) events.Event {
+			return &subagentAttributedEvent{Event: ev, subagentRunID: subagentRunID}
+		},
+	}
+}
+
+// subagentAttributedEvent wraps an events.Event and injects "subagentRunId"
+// into its JSON serialization. All interface methods delegate to the wrapped
+// event; only ToJSON is overridden to merge the attribution field.
+type subagentAttributedEvent struct {
+	events.Event
+	subagentRunID string
+}
+
+// ToJSON serializes the wrapped event and injects the subagentRunId field.
+func (e *subagentAttributedEvent) ToJSON() ([]byte, error) {
+	data, err := e.Event.ToJSON()
+	if err != nil {
+		return nil, err
+	}
+	// Unmarshal into a map, add the field, re-marshal. This preserves all
+	// original fields and works for any event type without knowing its
+	// concrete struct.
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		// Can't augment — return the original JSON as-is.
+		return data, nil
+	}
+	m["subagentRunId"] = e.subagentRunID
+	return json.Marshal(m)
+}
+
+// Compile-time check that subagentAttributedEvent satisfies events.Event.
+var _ events.Event = (*subagentAttributedEvent)(nil)

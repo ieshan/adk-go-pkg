@@ -53,21 +53,31 @@ go test -coverprofile=cover.out ./... && go tool cover -html=cover.out
 # Format
 go fmt ./...
 
-# Vulnerability scan
-govulncheck ./...
+# Vulnerability scan (via gocheck — see "Code quality checks" below)
+gocheck govulncheck ./...
 
 # Modernize code to latest idioms (Go 1.26)
 go fix ./...
 ```
 
+## CI
+
+GitHub Actions runs `.github/workflows/ci.yml` on every push to `main` and on all pull requests. Six jobs block merges: `lint` (golangci-lint v2), `test` (build + vet + shadow + nilness + test), `test-race`, `govulncheck`, `gosec`, and `nilaway`. The Go version is sourced from `go.mod` via `go-version-file`, so bumping the `go` directive is the only place to update it.
+
 ## Code quality checks
 
 Run all of these before committing. Fix all reported issues unless explicitly documented as a known false positive.
 
+### gocheck (preferred runner)
+
+All quality tools below run via the `gocheck` Docker wrapper, so nothing needs to be installed on the host or added to `go.mod`. Prerequisites and setup live in the gocheck README (`/Users/u2/work/docker/tooling/gocheck/README.md`): build the image once with `docker build -t gocheck-image:latest /Users/u2/work/docker/tooling/gocheck`, then ensure the `gocheck` wrapper is on `PATH` (installed to `~/.local/bin`).
+
+The image pins: golangci-lint v2.13.2, gosec v2.29.0, govulncheck v1.7.0, nilaway, and the `shadow`/`nilness` `go vet` vettools from `golang.org/x/tools` v0.49.0. CI installs the same tools directly in GitHub Actions, so local `gocheck` results match CI.
+
 ### go vet (standard)
 
 ```bash
-go vet ./...
+gocheck go vet ./...
 ```
 
 ### shadow (variable shadowing detector)
@@ -75,11 +85,7 @@ go vet ./...
 Detects variable declarations that shadow outer-scope declarations. Shadowed variables are a common source of subtle bugs.
 
 ```bash
-# Install
-go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest
-
-# Run
-go vet -vettool=$(go env GOPATH)/bin/shadow ./...
+gocheck shadow ./...
 ```
 
 **Known acceptable shadows**: Loop-scoped `t, err :=` inside `for` loops and `if err :=` scoped error checks in `config/builder.go` are standard Go patterns and do not need fixing.
@@ -89,11 +95,7 @@ go vet -vettool=$(go env GOPATH)/bin/shadow ./...
 Detects impossible nil comparisons and redundant nil checks — conditions the type system proves can never be true.
 
 ```bash
-# Install
-go install golang.org/x/tools/go/analysis/passes/nilness/cmd/nilness@latest
-
-# Run
-go vet -vettool=$(go env GOPATH)/bin/nilness ./...
+gocheck nilness ./...
 ```
 
 ### golangci-lint (meta-linter)
@@ -101,14 +103,28 @@ go vet -vettool=$(go env GOPATH)/bin/nilness ./...
 Runs 30+ analyzers in parallel including `staticcheck`, `ineffassign`, `errcheck`, `gosimple`, `unused`, `goconst`, and more.
 
 ```bash
-# Install
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-
-# Run
-golangci-lint run ./...
+gocheck golangci-lint run ./...
 ```
 
 If a `golangci-lint` config is needed, create `.golangci.yml` at the repo root. Default enabled linters are sufficient for most workflows.
+
+### gosec (security scanner)
+
+```bash
+gocheck gosec ./...
+```
+
+### nilaway (nilability analyzer)
+
+```bash
+gocheck nilaway ./...
+```
+
+### govulncheck (vulnerability scan)
+
+```bash
+gocheck govulncheck ./...
+```
 
 ## Code style guidelines
 
@@ -160,7 +176,7 @@ This project uses Go 1.26 features. Use them where appropriate:
 ## Security and supply chain
 
 - Keep Go toolchain and dependencies up to date.
-- Run `govulncheck ./...` routinely for vulnerability scanning.
+- Run `gocheck govulncheck ./...` routinely for vulnerability scanning.
 - Treat external input as untrusted; validate at boundaries.
 - Never commit secrets, API keys, or credentials.
 - Use `os.OpenRoot`/`os.Root` (Go 1.24+) for filesystem boundary constraints where applicable.
@@ -179,8 +195,11 @@ This project uses Go 1.26 features. Use them where appropriate:
 
 ### Before finishing
 - `go fmt ./...`
-- `go vet ./...` (including `shadow` and `nilness`)
-- `golangci-lint run ./...`
+- `gocheck go vet ./...` (including `gocheck shadow` and `gocheck nilness`)
+- `gocheck golangci-lint run ./...`
+- `gocheck gosec ./...`
+- `gocheck nilaway ./...`
+- `gocheck govulncheck ./...`
 - `go test -race -count=1 ./...`
 - Run targeted benchmarks only when performance claims are made.
 
@@ -188,7 +207,7 @@ This project uses Go 1.26 features. Use them where appropriate:
 
 - Keep PRs small (target ≤300 net LOC).
 - Commit messages: `type(scope): subject` (Conventional Commits).
-- Always run `go fmt`, `go vet`, `golangci-lint`, and `go test -race` before committing.
+- Always run `go fmt`, `gocheck go vet` (with `shadow`/`nilness`), `gocheck golangci-lint`, `gocheck gosec`, `gocheck nilaway`, `gocheck govulncheck`, and `go test -race` before committing.
 
 ## Boundaries
 

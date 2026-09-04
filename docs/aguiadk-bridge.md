@@ -14,9 +14,11 @@ library and the ADK-Go runner, handling:
 - **Session management** -- AG-UI thread IDs are mapped to ADK sessions with
   automatic creation and expiry
 - **Client tool proxy** -- AG-UI client tools can be exposed as ADK
-  FunctionTools in two modes: NextRun (hand-back via interrupt) and Inline
-  (wait for result on the same connection). See [ClientToolset](#clienttoolset)
-  and [ProxyToolset](#proxytoolset).
+  FunctionTools in three modes: NextRun (hand-back via interrupt), Inline
+  (wait for result on the same connection), and HandBack (clean finish with
+  no interrupt — the client receives the tool call and starts a new run with
+  the result). See [ClientToolset](#clienttoolset) and
+  [ProxyToolset](#proxytoolset).
 - **Streaming tool calls** -- Progressive `TOOL_CALL_START`/`ARGS`/`END` from
   partial `FunctionCall` parts, with delta fragments from `PartialArgs`
 - **HITL runstore & resume** -- Paused runs are persisted in a `RunStore` for
@@ -32,6 +34,37 @@ library and the ADK-Go runner, handling:
 - **Preset configurations** -- Builders for common AG-UI patterns (agentic
   chat, HITL, generative UI, shared state, inline tools). See
   [Presets](#presets).
+
+> **Companion docs:** This package builds on the generic [`agui`](agui-server.md)
+> server library. Refer to it for [`agui.Handler`](agui-server.md#http-handler),
+> [`agui.EventEmitter`](agui-server.md#eventemitter),
+> [`agui.ToolResultHandler`](agui-server.md#toolresulthandler-api),
+> [`agui.Config`](agui-server.md#config), [CORS](agui-server.md#cors),
+> [error handling](agui-server.md#error-handling), and
+> [production notes](agui-server.md#production-notes). For MCP integration, see
+> [AG-UI MCP Support](agui-mcp.md).
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Config](#config)
+- [Event Translation Table](#event-translation-table)
+- [Session Management](#session-management)
+- [Client Tool Proxy](#client-tool-proxy)
+- [ClientToolset](#clienttoolset)
+- [RunStore](#runstore)
+- [Suppressed Tool Mode](#suppressed-tool-mode)
+- [Presets](#presets)
+- [Convenience Handler](#convenience-handler)
+- [MCP Server Toolsets](#mcp-server-toolsets)
+- [Capabilities Inference](#capabilities-inference)
+- [Run Envelope](#run-envelope)
+- [Remote Agent](#remote-agent)
+- [Stop](#stop)
+- [Resource Lifecycle](#resource-lifecycle)
+- [Full Example](#full-example)
 
 ## Installation
 
@@ -152,8 +185,68 @@ type Config struct {
     // events for this tool. Return (nil, true) to suppress the tool call
     // without emitting any state delta.
     ToolToStateMapper ToolToStateMapper
+
+    // EmitStepEvents controls whether STEP_STARTED/STEP_FINISHED events are
+    // emitted around LLM and tool-execution phases. Default: false (off).
+    EmitStepEvents *bool
+
+    // MaxIterations caps the number of completed model turns per run. A model
+    // turn is counted when an ADK event has Partial=false and
+    // TurnComplete=true (the final event of a model response, including
+    // function-call responses). If the agent exceeds this without producing a
+    // final response, the bridge emits a RUN_ERROR with a descriptive message.
+    // Default: 0 (unlimited).
+    MaxIterations int
+
+    // CustomEventEmitter is an optional callback invoked after the runner
+    // loop completes successfully but before MESSAGES_SNAPSHOT and
+    // RUN_FINISHED. It receives the emitter and the count of tool calls
+    // made during the run.
+    CustomEventEmitter func(emitter *agui.EventEmitter, toolCallCount int) error
+
+    // ApprovalModeFunc derives the approval mode from the HTTP request.
+    // When set, the bridge calls it per-request. If it returns true,
+    // long-running tools auto-execute (no interrupt); if false, they
+    // interrupt for human approval. Requires the HTTP request to be stored
+    // in context via WithHTTPRequest (done automatically by Handler).
+    ApprovalModeFunc func(r *http.Request) bool
+
+    // EmitStateStatus controls whether the bridge emits STATE_DELTA events
+    // with a "status" field at key lifecycle transitions: "running" at
+    // start, "awaiting_approval" on interrupt, "done" on success, "error"
+    // on failure. Default: false.
+    EmitStateStatus bool
+
+    // EmitActivityDeltas controls whether ACTIVITY_DELTA events are emitted
+    // during streaming tool calls to progressively update tool_use
+    // activities with argument deltas. When enabled, an ACTIVITY_SNAPSHOT
+    // is emitted at TOOL_CALL_START time and ACTIVITY_DELTA patches follow
+    // each args delta. When disabled (default), ACTIVITY_SNAPSHOT is emitted
+    // at tool execution time (FunctionResponse) only.
+    EmitActivityDeltas bool
+
+    // Provider names the LLM provider for multimodal content gating. When
+    // set, inputContentsToGenaiParts filters content types by provider
+    // capability: "openai" receives image, audio, video, and document parts;
+    // other non-empty providers get text-only fallback for audio/video/document
+    // content (images are always forwarded regardless of provider). Empty
+    // means no gating (all content types forwarded). Default: "".
+    Provider string
 }
 ```
+
+### Validate
+
+```go
+func (c Config) Validate() error
+```
+
+`Validate` performs pre-flight validation of the `Config` before the bridge is
+constructed. It checks that required fields are set (e.g., `Agent`) and that
+mutually exclusive fields are not both populated (e.g., `AppName` vs
+`AppNameFunc`, `UserID` vs `UserIDFunc`). `Handler` and `New` call it
+internally, but it is exported so callers can validate a config early — for
+example, at startup or in tests — before constructing the bridge.
 
 ### Field Details
 
@@ -174,6 +267,13 @@ type Config struct {
 | `RunStore` | nil (lazy) | Paused-run store for HITL. If nil, an in-memory store with 30m TTL is created lazily. See [RunStore](#runstore). |
 | `SuppressToolEvents` | `false` | Replace `TOOL_CALL_*` with `STATE_DELTA` via `ToolToStateMapper`. Mapper returns `(ops, suppress)`; suppress=true emits STATE_DELTA, suppress=false emits normal tool events. See [Suppressed Tool Mode](#suppressed-tool-mode). |
 | `ToolToStateMapper` | nil | Maps a tool call to `(JSONPatchOps, suppress bool)`; only used when `SuppressToolEvents` is true |
+| `EmitStepEvents` | `false` | Emit `STEP_STARTED`/`STEP_FINISHED` around LLM and tool-execution phases |
+| `MaxIterations` | `0` (unlimited) | Cap on completed model turns per run (a turn is counted when an ADK event has `Partial=false` and `TurnComplete=true`); bridge emits `RUN_ERROR` if exceeded |
+| `CustomEventEmitter` | nil | Optional callback after the runner loop, before `MESSAGES_SNAPSHOT`/`RUN_FINISHED`. The `toolCallCount` argument excludes suppressed tool calls |
+| `ApprovalModeFunc` | nil | Per-request approval mode from the HTTP request; `true` = auto-approve, `false` = interrupt for HITL |
+| `EmitStateStatus` | `false` | Emit `STATE_DELTA` with a `status` field at lifecycle transitions (`running`, `awaiting_approval`, `done`, `error`) |
+| `EmitActivityDeltas` | `false` | Emit `ACTIVITY_DELTA` during streaming tool calls for progressive `tool_use` updates |
+| `Provider` | `""` | LLM provider name for multimodal content gating (`"openai"` gets image/audio/video/document parts; other non-empty providers get text-only fallback for audio/video/document while images are always forwarded; empty = no gating, all content types forwarded) |
 
 ### Dynamic App Name and User ID
 
@@ -238,20 +338,23 @@ The bridge translates ADK session events into AG-UI events as follows:
 |-----------|---------------|-------|
 | Text part (partial) | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` | Delta computed from accumulated text |
 | Text part (final) | `TEXT_MESSAGE_CONTENT` + `TEXT_MESSAGE_END` | Closes the message |
-| Thought part | `REASONING_START` + `REASONING_MESSAGE_START` + `REASONING_MESSAGE_CONTENT` + `REASONING_MESSAGE_END` + `REASONING_END` | Full reasoning sequence per thought |
+| Thought part | `REASONING_START` + `REASONING_MESSAGE_START` + `REASONING_MESSAGE_CONTENT` + `REASONING_MESSAGE_END` + `REASONING_END` | Full reasoning sequence per thought. When a thought part carries a `ThoughtSignature`, a `REASONING_ENCRYPTED_VALUE` event is also emitted. |
 | FunctionCall part (partial) | `TOOL_CALL_START` + one `TOOL_CALL_ARGS` per `PartialArgs[].StringValue` | Streaming deltas; AG-UI clients concatenate deltas |
 | FunctionCall part (final, streaming) | `TOOL_CALL_ARGS` (remaining accumulated `fc.Args`) + `TOOL_CALL_END` | Closes the streaming tool call |
 | FunctionCall part (non-streaming) | `TOOL_CALL_START` + `TOOL_CALL_ARGS` + `TOOL_CALL_END` | All-at-once with accumulated `fc.Args` |
 | FunctionCall part (malformed) | `TOOL_CALL_RESULT` with `{"error": "..."}` | Empty name or bad JSON args emit an error result instead of `TOOL_CALL_*`. Empty ID gets a synthetic ID via `GenerateToolCallID()` and proceeds normally. |
-| FunctionResponse part | `TOOL_CALL_RESULT` + `ACTIVITY_SNAPSHOT` (`tool_use`) | Activity snapshot content: `{"text": "Running <name>(<args>)"}` |
+| FunctionResponse part | `ACTIVITY_SNAPSHOT` (`tool_use`) + `TOOL_CALL_RESULT` | Activity snapshot content: `{"text": "Running <name>(<args>)"}`; snapshot emitted first, then the result |
 | State delta | `STATE_DELTA` | Each key becomes a `replace` operation at `/<key>` |
 | (run start) | `RUN_STARTED` | Emitted before the ADK runner starts |
 | (run end) | `RUN_FINISHED` | Emitted after the ADK runner completes; `closeStreamedToolCalls()` synthesizes `TOOL_CALL_END` for any streamed calls that never got a final event |
-| Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) + `ACTIVITY_SNAPSHOT` (`approval_request`) per pending call | Run ends with interrupts (each carrying `ResponseSchema` and `Message`); paused run saved to `RunStore`. Client resumes with `Resume` entries. |
+| Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) + `ACTIVITY_SNAPSHOT` (`approval_request`) per pending call | Run ends with interrupts (each carrying `ResponseSchema` and `Message`); paused run saved to `RunStore`. Client resumes with `Resume` entries. Skipped when `ApprovalModeFunc` returns `true` (auto-approve). |
+| Long-running tool IDs (hand-back mode) | `RUN_FINISHED` (plain, no interrupt) + optional `MESSAGES_SNAPSHOT` | When `ClientTools.Mode` is `ClientToolModeHandBack`, the run ends with a clean finish — no interrupt outcome, no `RunStore` entry. The client receives the tool call and starts a new run with the result. |
+| Sub-agent author transition | `SUBAGENT_STARTED` / `SUBAGENT_FINISHED` | Emitted when the ADK event author changes from the root agent to a sub-agent (or back). Streamed events between lifecycle boundaries carry `subagentRunId` for attribution. |
 | (suppressed tool mode) | `STATE_DELTA` | When `SuppressToolEvents` is true and `ToolToStateMapper` returns `suppress=true`, `TOOL_CALL_*` events are replaced with `STATE_DELTA` carrying the mapper's patch ops (if non-nil). Partial events are skipped. Suppressed calls never enter `toolCallIDs`, so their `FunctionResponse` is naturally skipped. Non-suppressed calls (`suppress=false`) get normal `TOOL_CALL_*` + `TOOL_CALL_RESULT`. |
 | (session state) | `STATE_SNAPSHOT` | Emitted at run start if `EmitStateSnapshot` is true |
 | (session events) | `MESSAGES_SNAPSHOT` | Emitted at run end if `EmitMessagesSnapshot` is true; `EncryptedValue`/`EncryptedContent` scrubbed |
-| Runner error | `RUN_ERROR` | Error message included |
+| Runner error | `RUN_ERROR` | Error message included; aggregated token usage attached when available |
+| (run end with telemetry) | `RUN_FINISHED` (with `usage` field) | When token usage telemetry was collected, `RUN_FINISHED` carries an aggregated `usage` array. Falls back to plain `RUN_FINISHED` when no telemetry is available. |
 
 ### Text Delta Computation
 
@@ -286,6 +389,19 @@ matching the AG-UI example server's `validateToolCalls`:
 - **Streaming partials**: Validation is deferred until the final (non-partial)
   event.
 
+### Server-Side Tool Disambiguation
+
+When `Config.ClientTools` is set and `input.Tools` contains a per-request
+client tool list, the bridge distinguishes client tools from server-side
+tools by name. Function-call names that appear in `input.Tools` are treated
+as client tools and emit the normal `TOOL_CALL_*` event sequence. Function-call
+names **not** in that list are treated as server-side tools: instead of
+`TOOL_CALL_*` events, they emit an `ACTIVITY_SNAPSHOT` (type `tool_use`) so
+the frontend can still observe the invocation. This is significant runtime
+behavior — it lets a single agent mix client-provided and server-resident
+tools in the same run without the frontend expecting to fulfill server-side
+calls.
+
 ### Resume and Interrupt Handling
 
 The bridge supports AG-UI's interrupt/resume flow for long-running tools and
@@ -314,10 +430,12 @@ human-in-the-loop approval:
      resume
    - Re-emits `TOOL_CALL_START`/`ARGS`/`END` for each pending tool call
    - Parses the resume payload: `approved: false` → emits `TOOL_CALL_RESULT`
-     with `{"denied":true,...}`; else emits `TOOL_CALL_RESULT` with the
-     approval and an `ACTIVITY_SNAPSHOT` (`tool_use`)
-   - Appends `FunctionResponse` events to the ADK session so the agent can
-     continue from where it left off
+     with `{"denied":true,...}`; else emits an `ACTIVITY_SNAPSHOT` (`tool_use`)
+     and then a `TOOL_CALL_RESULT` with the approval
+   - Appends `FunctionResponse` parts to the current turn's user message so the
+     ADK runner can resume the paused workflow
+   - Restores `PausedRun.State` on resume by merging it into the runner's state
+     delta, with `input.State` taking precedence
 
 This allows human-in-the-loop workflows where a tool requires user confirmation
 or input before proceeding.
@@ -362,7 +480,7 @@ type SessionManagerConfig struct {
 | Method | Description |
 |--------|-------------|
 | `Resolve(ctx, threadID, appName, userID) (session.Session, error)` | Get or create an ADK session for a thread |
-| `Stop()` | Stop the background cleanup goroutine |
+| `Stop()` | Stop the background cleanup goroutine. Safe to call multiple times (uses `sync.Once`) |
 
 The bridge creates and manages the `SessionManager` internally -- you do not
 need to interact with it directly unless building custom integrations.
@@ -459,8 +577,9 @@ func NewClientToolset() *ClientToolset
 type ClientToolMode int
 
 const (
-    ClientToolModeNextRun ClientToolMode = iota
+    ClientToolModeNextRun  ClientToolMode = iota
     ClientToolModeInline
+    ClientToolModeHandBack
 )
 ```
 
@@ -468,6 +587,7 @@ const (
 |------|----------|
 | `ClientToolModeNextRun` | `IsLongRunning=true`; handler returns `(nil, nil)` so ADK pauses the run and emits `LongRunningToolIDs`. The bridge's interrupt path emits `RUN_FINISHED` with interrupts. The client fulfills the tool calls and starts a new run with the results. |
 | `ClientToolModeInline` | `IsLongRunning=false`; handler blocks on `ToolResultHandler.Wait` until the client POSTs a result to `/tool-result`. The SSE connection stays open. Default timeout: 5 minutes. |
+| `ClientToolModeHandBack` | `IsLongRunning=true`; handler returns `(nil, nil)` so ADK pauses the run. The bridge emits a plain `RUN_FINISHED` (no interrupt outcome) with optional `MESSAGES_SNAPSHOT`. No `RunStore` entry is saved and no interrupt schema is emitted — a clean finish that the client interprets as "your turn." |
 
 ### ClientToolConfig
 
@@ -481,11 +601,12 @@ type ClientToolConfig struct {
 
 ### Usage
 
-Because `llminternal` is internal to ADK-Go, the `ClientToolset` must be added
-to `llmagent.Config.Toolsets` at agent construction time — the bridge cannot
-inject it into an already-constructed agent. The bridge sets the context key
-before `runner.Run` so `ClientToolset.Tools` can read the per-request tool
-definitions.
+ADK agents receive their toolsets at construction time (`llmagent.Config.Toolsets`),
+so `ClientToolset` must be added there — the bridge cannot inject it into an
+already-constructed agent. Instead, the bridge injects the per-request tool
+definitions via context before `runner.Run`, and `ClientToolset.Tools` reads
+them at runtime. The same agent instance can therefore serve different clients
+with different tool sets on each request.
 
 ```go
 package main
@@ -533,6 +654,10 @@ func main() {
 When `ClientToolModeInline` is set, `aguiadk.Handler` automatically mounts the
 `/tool-result` endpoint and shares the `ToolResultHandler` between the bridge
 and the agui handler so client submissions reach the waiting tool handlers.
+`aguiadk.Handler` routes `/tool-result` by path suffix (matching any path
+ending in `/tool-result`), so it works correctly when mounted at sub-paths
+like `/api/agent/`. The examples that mount at `/api/agent` therefore work
+for inline mode as well.
 
 ### WithClientToolsContext
 
@@ -542,8 +667,10 @@ func WithClientToolsContext(ctx context.Context, tools []types.Tool, emitter *ag
 
 A public helper for tests and integrations that invoke `ClientToolset.Tools`
 directly without going through the bridge's `runInternal` (which sets the
-context itself via the unexported `WithClientTools`). Production code should
-not need this — the bridge handles context injection automatically when
+context itself via the unexported `WithClientTools`). It now propagates
+`cfg.ResultHandler` into the context, so it can be used for inline-mode tests
+that need the tool result handler wired up. Production code should not need
+this — the bridge handles context injection automatically when
 `Config.ClientTools` is set.
 
 ## RunStore
@@ -559,6 +686,7 @@ type RunStore struct { /* unexported */ }
 
 func NewRunStore() *RunStore               // 30-minute TTL, 1024-entry bound
 func NewRunStoreWithTTL(ttl time.Duration) *RunStore
+func NewRunStoreWithMaxEntries(ttl time.Duration, maxEntries int) *RunStore
 func RunKey(threadID, runID string) string  // returns threadID + "|" + runID
 ```
 
@@ -667,7 +795,7 @@ func AgenticGenerativeUIPreset(base Config, mapper ToolToStateMapper) Config
 | Preset | ClientTools | RunStore | SuppressToolEvents | Notes |
 |--------|-------------|----------|--------------------|-------|
 | `AgenticChatPreset` | NextRun | — | — | State snapshots on; 20m session timeout |
-| `GenerativeUIPreset` | NextRun | — | — | State snapshots on; structured tool calls over prose |
+| `GenerativeUIPreset` | NextRun | — | — | Currently an alias for `AgenticChatPreset` — serves as a semantic marker for generative-UI agents (no extra configuration). `AgenticGenerativeUIPreset` is the one that maps tool calls to `STATE_DELTA` events. |
 | `HumanInTheLoopPreset` | NextRun | auto (if `!autoApprove`) | — | 30m session timeout; approval interrupts for consequential actions |
 | `SharedStatePreset` | — | — | yes (with `mapper`) | Tool calls become `STATE_DELTA` via mapper; collaborative document editing |
 | `InlineToolsPreset` | Inline (5m timeout) | — | — | Keeps SSE connection open for inline tool results; `Handler` mounts `/tool-result` automatically |
@@ -807,6 +935,235 @@ agent, err := llmagent.New(llmagent.Config{
 
 See [AG-UI MCP Support](agui-mcp.md) for the full MCP integration guide,
 including `MCPMiddleware` and `MCPAppsMiddleware` for the generic AG-UI server.
+
+## Capabilities Inference
+
+```go
+func InferCapabilities(a agent.Agent, cfg Config) *agui.AgentCapabilities
+```
+
+`InferCapabilities` inspects an ADK agent and bridge configuration to produce
+an `AgentCapabilities` descriptor for AG-UI discovery. It checks the agent's
+sub-agent tree, the bridge's client-tool configuration, and the HITL/interrupt
+configuration to produce an accurate capabilities snapshot. Pass the result to
+`agui.Config.Capabilities` so `GET /capabilities` serves it.
+
+### What It Sets
+
+| Capability | Always Set | Condition |
+|------------|------------|-----------|
+| `Identity` | yes — `Name`, `Type: "adk-go"`, `Description` from the agent | — |
+| `Transport` | yes — `Streaming: true` | — |
+| `State` | yes — `Snapshots: true`, `Deltas: true` | — |
+| `Messages` | yes — `Snapshots` mirrors `EmitMessagesSnapshot`, `StreamingText: true` | — |
+| `Tools` | yes — `Supported: true`, `ServerTools: true` | `ClientTools: true` when `Config.ClientTools` is set |
+| `Reasoning` | yes — `Supported: true`, `Streaming: true` | — |
+| `HumanInTheLoop` | no | `Interrupts: true` when `ClientTools.Mode == ClientToolModeHandBack` **or** `ApprovalModeFunc` is set |
+| `Activities` | no | `Snapshots: true`, `Deltas: EmitActivityDeltas` when the agent has sub-agents (`len(a.SubAgents()) > 0`) |
+
+Override the returned descriptor if you need finer control (e.g., to advertise
+`Encrypted: true` for reasoning or to suppress a capability you don't want
+exposed).
+
+> **Note (`HandBack` + `Interrupts`):** `HandBack` mode produces a plain
+> `RUN_FINISHED` with no interrupt outcome, so advertising
+> `HumanInTheLoop.Interrupts: true` for `HandBack` is semantically misleading.
+> The capability is set because `HandBack` hands control back to the client,
+> but no AG-UI interrupt schema is emitted. Override the descriptor if you
+> want to suppress `Interrupts` for `HandBack`-only configurations.
+
+```go
+caps := aguiadk.InferCapabilities(myAgent, bridgeCfg)
+handler, err := aguiadk.Handler(bridgeCfg, agui.Config{Capabilities: caps})
+```
+
+## Run Envelope
+
+```go
+type RunEnvelope struct {
+    ParentRunID    *string          `json:"parentRunId,omitempty"`
+    Context        []types.Context  `json:"context,omitempty"`
+    ForwardedProps any              `json:"forwardedProps,omitempty"`
+}
+
+func WithRunEnvelope(ctx context.Context, env RunEnvelope) context.Context
+func RunEnvelopeFrom(ctx context.Context) (env RunEnvelope, ok bool)
+func ContextFrom(ctx agent.ReadonlyContext) []types.Context
+func ForwardedPropsFrom[T any](ctx agent.ReadonlyContext) (T, bool)
+```
+
+`RunEnvelope` carries AG-UI protocol envelope fields (`ParentRunID`, `Context`,
+`ForwardedProps`) through Go contexts and ADK agent contexts so they survive
+the boundary between the AG-UI HTTP request and the ADK runner. The bridge
+attaches the envelope to the context passed to `runner.Run` and also persists
+it into the ADK session state under well-known keys so downstream agents,
+tools, and callbacks can read it via `RunEnvelopeFrom` or the typed helpers
+`ContextFrom` and `ForwardedPropsFrom`.
+
+### Well-Known State Keys
+
+The envelope is persisted into session state under these keys (defined in
+`aguiadk/context.go`):
+
+| Key | Type | Contents |
+|-----|------|----------|
+| `_ag_ui_parent_run_id` | `string` | The `ParentRunID` from the envelope, if set |
+| `_ag_ui_context` | `[]types.Context` | The `Context` slice from the envelope |
+| `_ag_ui_forwarded_props` | `any` | The `ForwardedProps` from the envelope |
+
+## Remote Agent
+
+```go
+type RemoteAgentConfig struct {
+    Name                 string
+    Description          string
+    Endpoint             string
+    Client               agui.Agent
+    BeforeAgentCallbacks []agent.BeforeAgentCallback
+    AfterAgentCallbacks  []agent.AfterAgentCallback
+    SubAgents            []agent.Agent
+}
+
+func NewRemoteAgent(cfg RemoteAgentConfig) (agent.Agent, error)
+```
+
+`NewRemoteAgent` creates an ADK agent that delegates to a remote AG-UI endpoint.
+It maps ADK invocation context (user content + session history) into AG-UI
+`RunAgentInput.Messages`, streams AG-UI events from the remote endpoint, and
+maps a fixed set of AG-UI event types back into ADK `*session.Event` instances.
+The handled event types are:
+
+- `TextMessageContent` and `TextMessageEnd` → ADK text parts
+- `ToolCallStart` and `ToolCallArgs` → ADK `FunctionCall` parts. Note these
+  are split across two ADK events: `ToolCallStart` produces a `FunctionCall`
+  with the name but no args, and `ToolCallArgs` produces one with the args but
+  no name — downstream consumers must correlate them by tool call ID.
+- `StateSnapshot` → ADK state delta
+- `RunError` → ADK error
+
+It does **not** handle `TEXT_MESSAGE_START`, `TOOL_CALL_END`, `STATE_DELTA`,
+`MESSAGES_SNAPSHOT`, `RUN_FINISHED`, or other event types — those are ignored.
+This enables composing remote AG-UI agents as sub-agents within an ADK agent
+tree, but the mapping is intentionally limited to the core streaming event
+types.
+
+### Field Details
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `Name` | yes | ADK agent name |
+| `Description` | no | ADK agent description |
+| `Endpoint` | yes* | Remote AG-UI SSE URL. Ignored when `Client` is set. |
+| `Client` | no | Optional pre-configured `agui.Agent` (e.g., a `*agui.ClientAgent` with custom auth headers, or a fake in tests). When set, `Endpoint` is ignored and this client is used directly. When nil, a `ClientAgent` is created from `Endpoint`. |
+| `BeforeAgentCallbacks` | no | Run before the remote call |
+| `AfterAgentCallbacks` | no | Run after the remote call completes |
+| `SubAgents` | no | Child ADK agents |
+
+\* At least one of `Endpoint` or `Client` must be set.
+
+## Stop
+
+```go
+func Stop(a agui.Agent)
+```
+
+`Stop` releases resources associated with an agent created by `New` —
+specifically, any lazily created `RunStore`. It is safe to call multiple times.
+If the agent was not created by `New` (e.g., it's a middleware wrapper), `Stop`
+is a no-op. If `Config.RunStore` was provided by the caller, the caller manages
+its lifecycle and `Stop` does not stop it. The internal `SessionManager`'s
+cleanup goroutine is not stopped by `Stop` — see [Resource Lifecycle](#resource-lifecycle)
+for details.
+
+## Resource Lifecycle
+
+The bridge and its collaborators start background goroutines and own resources
+that must be released to avoid leaks. This section consolidates the lifecycle
+rules.
+
+### What Owns What
+
+| Component | Created By | Background Goroutine | Who Stops It |
+|-----------|------------|----------------------|--------------|
+| `bridge` | `New(cfg)` | No (per-request goroutines only) | `Stop(bridge)` — stops the lazy RunStore only |
+| `SessionManager` | `New(cfg)` (internally) | Yes — cleanup loop every `CleanupInterval` | **Not stopped by `bridge.Stop()`** — see note below |
+| `RunStore` (caller-provided) | Caller | Yes — cleanup loop every `ttl/4` | **Caller** — `Stop` does not stop it |
+| `RunStore` (lazy) | `bridge.runStoreFor()` on first interrupt | Yes — cleanup loop every `ttl/4` | `Stop(bridge)` stops it |
+| `aguiadk.Handler` | `Handler(cfg, agCfg)` | No | Does **not** call `Stop` — caller must arrange this |
+
+> **Note (SessionManager goroutine):** `bridge.Stop()` currently stops only the
+> lazily created `RunStore`. The internal `SessionManager`'s cleanup goroutine
+> is **not** stopped by `Stop`. For long-running processes this is harmless
+> (the goroutine sleeps on a ticker and a `done` channel that is never closed),
+> but for tests or short-lived servers that create many bridges, the leaked
+> goroutines accumulate. If this matters for your use case, prefer a single
+> long-lived bridge instance, or share a `session.Service` across bridge
+> instances so the cleanup goroutine is amortized.
+
+### Important: `Handler` Does Not Call `Stop`
+
+`aguiadk.Handler` returns an `http.Handler` but does not wire up bridge
+shutdown. For long-running processes this is usually fine (the process exit
+reclaims everything), but for tests, short-lived servers, or graceful shutdown
+you must call `Stop` yourself:
+
+```go
+bridge, err := aguiadk.New(cfg)
+if err != nil { /* handle */ }
+defer aguiadk.Stop(bridge) // releases the lazy RunStore (SessionManager is not stopped by Stop)
+
+handler, err := agui.Handler(agui.Config{Agent: bridge})
+// ... serve ...
+```
+
+If you use `aguiadk.Handler` (the convenience entry point) and need graceful
+shutdown, capture the bridge first via `New`, then build the handler from it:
+
+```go
+bridge, err := aguiadk.New(cfg)
+if err != nil { /* handle */ }
+defer aguiadk.Stop(bridge)
+
+// Wire inline tool mode if needed.
+agCfg := agui.Config{ /* ... */ }
+if cfg.ClientTools != nil && cfg.ClientTools.Mode == ClientToolModeInline {
+    if cfg.ClientTools.ResultHandler == nil {
+        cfg.ClientTools.ResultHandler = agui.NewToolResultHandler()
+    }
+    agCfg.ToolResultHandler = cfg.ClientTools.ResultHandler
+    agCfg.ToolMode = agui.ToolModeInline
+}
+agCfg.Agent = bridge
+
+handler, err := agui.Handler(agCfg)
+if err != nil { /* handle */ }
+// ... serve ...
+```
+
+### Caller-Provided `RunStore`
+
+When you set `Config.RunStore`, you own its lifecycle. The bridge will not stop
+it. This is the recommended pattern for production:
+
+```go
+runStore := aguiadk.NewRunStore()
+defer runStore.Stop()
+
+cfg := aguiadk.Config{
+    Agent:    myAgent,
+    RunStore: runStore,
+    // ...
+}
+```
+
+### `SessionManager` (Advanced)
+
+The bridge creates and manages a `SessionManager` internally. You do not need
+to interact with it directly unless you are building custom integrations that
+share session state across bridge instances. In that case, construct a
+`SessionManager` and reuse it — but note that the bridge does not expose a way
+to inject one; you would need to share the underlying `session.Service`
+instead.
 
 ## Full Example
 

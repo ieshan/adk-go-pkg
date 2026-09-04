@@ -34,6 +34,11 @@ type Config struct {
 
 	// MaxBodySize limits request body size in bytes. Default: 10 MB (10 << 20).
 	MaxBodySize int64
+
+	// Capabilities describes the agent's capabilities for GET discovery
+	// (GET / or GET /capabilities). Optional; when nil, discovery requests
+	// return 404.
+	Capabilities *AgentCapabilities
 }
 
 func (c *Config) validate() error {
