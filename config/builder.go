@@ -184,32 +184,32 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, root
 
 	tools := make([]tool.Tool, 0, len(cfg.Tools))
 	for _, ref := range cfg.Tools {
-		t, err := reg.ResolveTool(ref.Name, ref.Args) //nolint:shadow -- loop-scoped err, acceptable per AGENTS.md
-		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), err)
+		t, toolErr := reg.ResolveTool(ref.Name, ref.Args)
+		if toolErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: %w", cfg.Name(), toolErr)
 		}
 		tools = append(tools, t)
 	}
 
 	var toolsets []tool.Toolset
 	for _, ref := range cfg.Skillsets {
-		source, err := reg.ResolveSkill(ref.Name, ref.Config) //nolint:shadow -- loop-scoped err, acceptable per AGENTS.md
-		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
+		source, skillErr := reg.ResolveSkill(ref.Name, ref.Config)
+		if skillErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, skillErr)
 		}
 		if len(ref.Names) > 0 {
 			source = NewFilteredSource(source, ref.Names)
 		}
-		source, err = applyPreload(ctx, source, ref.Preload)
-		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name(), ref.Name, err)
+		source, skillErr = applyPreload(ctx, source, ref.Preload)
+		if skillErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q preload: %w", cfg.Name(), ref.Name, skillErr)
 		}
-		skillToolset, err := skilltoolset.New(ctx, skilltoolset.Config{
+		skillToolset, skillErr := skilltoolset.New(ctx, skilltoolset.Config{
 			Source:            source,
 			SystemInstruction: ref.SystemInstruction,
 		})
-		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, err)
+		if skillErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: skillset %q: %w", cfg.Name(), ref.Name, skillErr)
 		}
 		toolsets = append(toolsets, skillToolset)
 	}
@@ -259,8 +259,8 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, root
 
 	var instructionProvider llmagent.InstructionProvider
 	if cfg.InstructionTemplate != nil && cfg.InstructionTemplate.IsSet() {
-		if err := cfg.InstructionTemplate.Validate(); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
-			return nil, fmt.Errorf("config.Build [llm %q]: instruction_template: %w", cfg.Name(), err)
+		if validateErr := cfg.InstructionTemplate.Validate(); validateErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: instruction_template: %w", cfg.Name(), validateErr)
 		}
 		var engine *prompt.TemplateEngine
 		if reg.TemplateRegistry() != nil {
@@ -269,9 +269,9 @@ func buildLLMAgent(ctx context.Context, cfg *LLMAgentConfig, reg *Registry, root
 			engine = prompt.New()
 		}
 		loader := prompt.NewLoader(engine, root)
-		tmpl, err := cfg.InstructionTemplate.Resolve(reg.TemplateRegistry(), loader) //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
-		if err != nil {
-			return nil, fmt.Errorf("config.Build [llm %q]: resolve instruction_template: %w", cfg.Name(), err)
+		tmpl, resolveErr := cfg.InstructionTemplate.Resolve(reg.TemplateRegistry(), loader)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("config.Build [llm %q]: resolve instruction_template: %w", cfg.Name(), resolveErr)
 		}
 		instructionProvider = prompt.NewInstructionProviderFromTemplate(tmpl)
 	}

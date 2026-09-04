@@ -60,9 +60,7 @@ jobs:
 
       # shadow and nilness are the two extra analyzers AGENTS.md requires
       # beyond standard `go vet`. They are installed as standalone vettools
-      # and invoked via `-vettool`. Known acceptable shadows (loop-scoped
-      # `t, err :=` and `if err :=` in config/builder.go) are standard Go
-      # patterns and do not need fixing.
+      # and invoked via `-vettool`.
       - name: Install shadow and nilness analyzers
         run: |
           go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest

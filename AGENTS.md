@@ -88,8 +88,6 @@ Detects variable declarations that shadow outer-scope declarations. Shadowed var
 gocheck shadow ./...
 ```
 
-**Known acceptable shadows**: Loop-scoped `t, err :=` inside `for` loops and `if err :=` scoped error checks in `config/builder.go`, `session/rewind/rewind.go`, and `config/config_test.go` are standard Go patterns and do not need fixing. Each site is marked with a `//nolint:shadow` inline comment so AI agents do not attempt to "fix" them. The `shadow` analyzer has no inline suppression mechanism, so these 10 warnings will still appear in output — they are expected and acceptable.
-
 ### nilness (impossible nil conditions detector)
 
 Detects impossible nil comparisons and redundant nil checks — conditions the type system proves can never be true.

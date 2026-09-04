@@ -167,8 +167,8 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	tmpSess := tmpResp.Session
 
 	for _, ev := range kept {
-		if err := svc.AppendEvent(ctx, tmpSess, ev); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
-			return nil, fmt.Errorf("rewind: failed to append event to temp session: %w", err)
+		if appendErr := svc.AppendEvent(ctx, tmpSess, ev); appendErr != nil {
+			return nil, fmt.Errorf("rewind: failed to append event to temp session: %w", appendErr)
 		}
 		// Refresh tmpSess so AppendEvent has the up-to-date handle.
 		tmpSess, err = fetchSession(ctx, svc, appName, userID, tempID)
@@ -178,12 +178,12 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	}
 
 	// --- Step 3: delete original session ---
-	if err := svc.Delete(ctx, &session.DeleteRequest{ //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
+	if deleteErr := svc.Delete(ctx, &session.DeleteRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionID,
-	}); err != nil {
-		return nil, fmt.Errorf("rewind: failed to delete original session: %w", err)
+	}); deleteErr != nil {
+		return nil, fmt.Errorf("rewind: failed to delete original session: %w", deleteErr)
 	}
 
 	// --- Step 4: create new session with original ID and replayed state ---
@@ -200,8 +200,8 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 
 	// --- Step 5: append kept events to new session ---
 	for _, ev := range kept {
-		if err := svc.AppendEvent(ctx, newSess, ev); err != nil { //nolint:shadow -- if-scoped err, acceptable per AGENTS.md
-			return nil, fmt.Errorf("rewind: failed to append event to new session: %w", err)
+		if appendErr := svc.AppendEvent(ctx, newSess, ev); appendErr != nil {
+			return nil, fmt.Errorf("rewind: failed to append event to new session: %w", appendErr)
 		}
 		newSess, err = fetchSession(ctx, svc, appName, userID, sessionID)
 		if err != nil {
@@ -210,13 +210,13 @@ func applyRewind(ctx context.Context, svc session.Service, appName, userID, sess
 	}
 
 	// --- Step 6: delete temp session ---
-	if err := svc.Delete(ctx, &session.DeleteRequest{
+	if deleteErr := svc.Delete(ctx, &session.DeleteRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: tempID,
-	}); err != nil {
+	}); deleteErr != nil {
 		// Non-fatal; log by returning a wrapped error but still return the new session.
-		return newSess, fmt.Errorf("rewind: cleanup failed (temp session %q not deleted): %w", tempID, err)
+		return newSess, fmt.Errorf("rewind: cleanup failed (temp session %q not deleted): %w", tempID, deleteErr)
 	}
 
 	// --- Step 7: return fresh copy of the final session ---
