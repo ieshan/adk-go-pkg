@@ -1,10 +1,10 @@
-package config
+package config_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/agent"
@@ -12,6 +12,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 
+	"github.com/ieshan/adk-go-pkg/config"
 	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
@@ -21,7 +22,7 @@ import (
 // The registry splits the ref on the first "/" — "openai/gpt-4o" → prefix "openai",
 // remainder "gpt-4o". The factory receives {"model": "gpt-4o", ...generateConfig}.
 func TestRegistry_RegisterModel(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
@@ -54,22 +55,22 @@ func TestRegistry_RegisterModel(t *testing.T) {
 
 // TestRegistry_HasModel verifies the presence check for registered model factories.
 func TestRegistry_HasModel(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 	if r.HasModel("openai") {
-		t.Error("expected HasModel(openai) = false before registration")
+		t.Error("got true, want false for HasModel(openai) before registration")
 	}
 	r.RegisterModel("openai", func(_ map[string]any) (model.LLM, error) {
 		return testutil.NewFakeLLM(), nil
 	})
 	if !r.HasModel("openai") {
-		t.Error("expected HasModel(openai) = true after registration")
+		t.Error("got false, want true for HasModel(openai) after registration")
 	}
 }
 
 // TestRegistry_RegisterTool verifies that a registered ToolFactory can be resolved by name
 // and that the factory receives the provided
 func TestRegistry_RegisterTool(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
@@ -97,26 +98,26 @@ func TestRegistry_RegisterTool(t *testing.T) {
 
 // TestRegistry_ResolveModel_NotFound verifies an error is returned for an unregistered prefix.
 func TestRegistry_ResolveModel_NotFound(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 	_, err := r.ResolveModel("anthropic/claude-3", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown prefix, got nil")
+		t.Fatal("got nil, want error for unknown prefix")
 	}
 }
 
 // TestRegistry_ResolveTool_NotFound verifies an error is returned for an unregistered tool name.
 func TestRegistry_ResolveTool_NotFound(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 	_, err := r.ResolveTool("unknown-tool", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown tool, got nil")
+		t.Fatal("got nil, want error for unknown tool")
 	}
 }
 
 // TestRegistry_ResolveModel_NoPrefixSlash verifies that a ref with no "/" yields an
 // error when no matching prefix is registered.
 func TestRegistry_ResolveModel_NoPrefixSlash(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 	r.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
 		return testutil.NewFakeLLM(), nil
 	})
@@ -124,13 +125,13 @@ func TestRegistry_ResolveModel_NoPrefixSlash(t *testing.T) {
 	// "gpt-4o" has no "/" — no matching prefix factory.
 	_, err := r.ResolveModel("gpt-4o", nil)
 	if err == nil {
-		t.Fatal("expected error for ref without slash and no matching prefix, got nil")
+		t.Fatal("got nil, want error for ref without slash and no matching prefix")
 	}
 }
 
 // TestRegistry_MultipleModels verifies multiple model prefixes can coexist and route correctly.
 func TestRegistry_MultipleModels(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	r.RegisterModel("gemini", func(cfg map[string]any) (model.LLM, error) {
 		return testutil.NewFakeLLM().WithName("gemini:" + cfg["model"].(string)), nil
@@ -158,7 +159,7 @@ func TestRegistry_MultipleModels(t *testing.T) {
 
 // TestRegistry_MultipleTools verifies multiple tool factories can coexist.
 func TestRegistry_MultipleTools(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	r.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
 		return testutil.NewFakeTool("search"), nil
@@ -186,7 +187,7 @@ func TestRegistry_MultipleTools(t *testing.T) {
 
 // TestRegistry_RegisterSkill verifies skill factory registration and resolution.
 func TestRegistry_RegisterSkill(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	var receivedCfg map[string]any
 	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
@@ -211,7 +212,7 @@ func TestRegistry_RegisterSkill(t *testing.T) {
 
 // TestRegistry_RegisterSkill_Overwrite verifies overwriting existing skill factory.
 func TestRegistry_RegisterSkill_Overwrite(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	var firstCalled, secondCalled bool
 	r.RegisterSkill("test", func(cfg map[string]any) (skill.Source, error) {
@@ -238,16 +239,16 @@ func TestRegistry_RegisterSkill_Overwrite(t *testing.T) {
 
 // TestRegistry_ResolveSkill_NotFound verifies error for unregistered skill name.
 func TestRegistry_ResolveSkill_NotFound(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 	_, err := r.ResolveSkill("unknown-skill", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown skill, got nil")
+		t.Fatal("got nil, want error for unknown skill")
 	}
 }
 
 // TestRegistry_ResolveSkill_FactoryError verifies error propagation from factory.
 func TestRegistry_ResolveSkill_FactoryError(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	r.RegisterSkill("failing", func(cfg map[string]any) (skill.Source, error) {
 		return stubSkillSource{}, fmt.Errorf("factory error")
@@ -255,13 +256,13 @@ func TestRegistry_ResolveSkill_FactoryError(t *testing.T) {
 
 	_, err := r.ResolveSkill("failing", nil)
 	if err == nil {
-		t.Fatal("expected error from factory, got nil")
+		t.Fatal("got nil, want error from factory")
 	}
 }
 
 // TestRegistry_ResolveSkill_MultipleSkills verifies multiple skill factories coexist.
 func TestRegistry_ResolveSkill_MultipleSkills(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	r.RegisterSkill("memory", func(cfg map[string]any) (skill.Source, error) {
 		return stubSkillSource{name: "memory"}, nil
@@ -289,18 +290,18 @@ func TestRegistry_ResolveSkill_MultipleSkills(t *testing.T) {
 
 // TestNewRegistry_BuiltinSkills verifies built-in filesystem factory is registered.
 func TestNewRegistry_BuiltinSkills(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	// The filesystem factory should be registered by default.
 	// It will fail without a valid path, but we can verify it's registered
 	// by checking that it attempts to resolve the path.
 	_, err := r.ResolveSkill("filesystem", map[string]any{})
 	if err == nil {
-		t.Fatal("expected error for missing path, got nil")
+		t.Fatal("got nil, want error for missing path")
 	}
-	// Error should mention the missing path requirement.
-	if !strings.Contains(err.Error(), "path") {
-		t.Errorf("error should mention 'path', got: %v", err)
+	// Error should wrap config.ErrMissingPathConfig.
+	if !errors.Is(err, config.ErrMissingPathConfig) {
+		t.Errorf("error should wrap config.ErrMissingPathConfig, got: %v", err)
 	}
 }
 
@@ -328,7 +329,7 @@ func (s stubSkillSource) LoadResource(ctx context.Context, name, resourcePath st
 }
 
 func TestRegistry_ResolveAndInvoke(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	// Register a callback and verify it resolves to the same function value.
 	var beforeCalled bool
@@ -372,12 +373,12 @@ func TestRegistry_ResolveAndInvoke(t *testing.T) {
 		t.Fatal("nil agent")
 	}
 	if a.Name() != "sub" {
-		t.Errorf("expected name sub, got %q", a.Name())
+		t.Errorf("got %q, want sub", a.Name())
 	}
 }
 
 func TestRegistry_MissingResolutions(t *testing.T) {
-	r := NewRegistry()
+	r := config.NewRegistry()
 
 	tests := []struct {
 		name    string
@@ -465,7 +466,7 @@ func TestRegistry_MissingResolutions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.resolve(); err == nil {
-				t.Fatal("expected error for unregistered key")
+				t.Fatal("got nil, want error for unregistered key")
 			}
 		})
 	}

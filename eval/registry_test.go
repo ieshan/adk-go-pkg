@@ -1,51 +1,53 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
-	registry := NewMetricEvaluatorRegistry()
+	registry := eval.NewMetricEvaluatorRegistry()
 
 	registry.RegisterEvaluator(
-		MetricInfo{MetricName: "custom_test"},
-		func(metric EvalMetric) (Evaluator, error) {
-			return NewCustomMetricEvaluator(metric, func(
+		eval.MetricInfo{MetricName: "custom_test"},
+		func(metric eval.EvalMetric) (eval.Evaluator, error) {
+			return eval.NewCustomMetricEvaluator(metric, func(
 				ctx context.Context,
-				em EvalMetric,
-				actual []Invocation,
-				expected []Invocation,
-				cs *ConversationScenario,
-			) (*EvaluationResult, error) {
+				em eval.EvalMetric,
+				actual []eval.Invocation,
+				expected []eval.Invocation,
+				cs *eval.ConversationScenario,
+			) (*eval.EvaluationResult, error) {
 				score := 1.0
-				return &EvaluationResult{
-					OverallEvalStatus: EvalStatusPassed,
+				return &eval.EvaluationResult{
+					OverallEvalStatus: eval.EvalStatusPassed,
 					OverallScore:      &score,
 				}, nil
 			}), nil
 		},
 	)
 
-	got, err := registry.GetEvaluator(EvalMetric{MetricName: "custom_test"})
+	got, err := registry.GetEvaluator(eval.EvalMetric{MetricName: "custom_test"})
 	if err != nil {
 		t.Fatalf("GetEvaluator failed: %v", err)
 	}
 	if got == nil {
-		t.Fatal("expected non-nil evaluator")
+		t.Fatal("got nil evaluator, want non-nil")
 	}
 }
 
 func TestRegistry_NotFound(t *testing.T) {
-	registry := NewMetricEvaluatorRegistry()
-	_, err := registry.GetEvaluator(EvalMetric{MetricName: "nonexistent"})
+	registry := eval.NewMetricEvaluatorRegistry()
+	_, err := registry.GetEvaluator(eval.EvalMetric{MetricName: "nonexistent"})
 	if err == nil {
-		t.Error("expected error for non-existent metric")
+		t.Error("got nil error, want error for non-existent metric")
 	}
 }
 
 func TestDefaultRegistry_HasAllMetrics(t *testing.T) {
-	registry := DefaultMetricEvaluatorRegistry()
+	registry := eval.DefaultMetricEvaluatorRegistry()
 
 	expectedMetrics := []string{
 		"tool_trajectory_avg_score",

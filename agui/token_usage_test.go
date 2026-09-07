@@ -1,25 +1,26 @@
-package agui
+package agui_test
 
 import (
 	"encoding/json"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"github.com/ieshan/adk-go-pkg/agui"
 )
 
 func TestTokenUsage_Aggregation(t *testing.T) {
 	in1, out1, tot1 := int64(10), int64(20), int64(30)
 	in2, out2, tot2 := int64(5), int64(15), int64(20)
 
-	u1 := TokenUsage{Provider: "google", Model: "gemini-2.5-flash", InputTokens: &in1, OutputTokens: &out1, TotalTokens: &tot1}
-	u2 := TokenUsage{Provider: "google", Model: "gemini-2.5-flash", InputTokens: &in2, OutputTokens: &out2, TotalTokens: &tot2}
+	u1 := agui.TokenUsage{Provider: "google", Model: "gemini-2.5-flash", InputTokens: &in1, OutputTokens: &out1, TotalTokens: &tot1}
+	u2 := agui.TokenUsage{Provider: "google", Model: "gemini-2.5-flash", InputTokens: &in2, OutputTokens: &out2, TotalTokens: &tot2}
 
-	merged := AggregateTokenUsage([]TokenUsage{u1, u2})
+	merged := agui.AggregateTokenUsage([]agui.TokenUsage{u1, u2})
 	if len(merged) != 1 {
-		t.Fatalf("expected 1 aggregated entry, got %d", len(merged))
+		t.Fatalf("got %d aggregated entries, want 1", len(merged))
 	}
 	if *merged[0].TotalTokens != 50 || *merged[0].InputTokens != 15 || *merged[0].OutputTokens != 35 {
-		t.Fatalf("aggregated counts mismatch: %+v", merged[0])
+		t.Errorf("aggregated counts mismatch: %+v", merged[0])
 	}
 }
 
@@ -27,38 +28,38 @@ func TestTokenUsage_Aggregation_DistinctKeys(t *testing.T) {
 	in1, out1, tot1 := int64(10), int64(20), int64(30)
 	in2, out2, tot2 := int64(5), int64(15), int64(20)
 
-	entries := []TokenUsage{
+	entries := []agui.TokenUsage{
 		{Provider: "google", Model: "gemini-2.5-flash", InputTokens: &in1, OutputTokens: &out1, TotalTokens: &tot1},
 		{Provider: "openai", Model: "gpt-4o", InputTokens: &in2, OutputTokens: &out2, TotalTokens: &tot2},
 	}
-	merged := AggregateTokenUsage(entries)
+	merged := agui.AggregateTokenUsage(entries)
 	if len(merged) != 2 {
-		t.Fatalf("expected 2 aggregated entries, got %d", len(merged))
+		t.Fatalf("got %d aggregated entries, want 2", len(merged))
 	}
 }
 
 func TestTokenUsage_Aggregation_NilCounts(t *testing.T) {
-	entries := []TokenUsage{
+	entries := []agui.TokenUsage{
 		{Provider: "google", Model: "gemini-2.5-flash"},
 		{Provider: "google", Model: "gemini-2.5-flash", InputTokens: new(int64(7))},
 	}
-	merged := AggregateTokenUsage(entries)
+	merged := agui.AggregateTokenUsage(entries)
 	if len(merged) != 1 {
-		t.Fatalf("expected 1 aggregated entry, got %d", len(merged))
+		t.Fatalf("got %d aggregated entries, want 1", len(merged))
 	}
 	if merged[0].InputTokens == nil || *merged[0].InputTokens != 7 {
-		t.Fatalf("expected InputTokens=7, got %+v", merged[0].InputTokens)
+		t.Fatalf("got %+v, want InputTokens=7", merged[0].InputTokens)
 	}
 	if merged[0].OutputTokens != nil {
-		t.Fatalf("expected OutputTokens nil, got %v", *merged[0].OutputTokens)
+		t.Fatalf("got %v, want OutputTokens nil", *merged[0].OutputTokens)
 	}
 }
 
 func TestRunFinishedWithUsageEvent_Serialization(t *testing.T) {
 	in, out, tot := int64(10), int64(20), int64(30)
-	ev := &RunFinishedWithUsageEvent{
+	ev := &agui.RunFinishedWithUsageEvent{
 		RunFinishedEvent: nil, // will be set below
-		Usage: []TokenUsage{{
+		Usage: []agui.TokenUsage{{
 			Provider:     "google",
 			Model:        "gemini-2.5-flash",
 			InputTokens:  &in,
@@ -94,9 +95,9 @@ func TestRunFinishedWithUsageEvent_Serialization(t *testing.T) {
 
 func TestRunErrorWithUsageEvent_Serialization(t *testing.T) {
 	tot := int64(5)
-	ev := &RunErrorWithUsageEvent{
+	ev := &agui.RunErrorWithUsageEvent{
 		RunErrorEvent: events.NewRunErrorEvent("boom"),
-		Usage: []TokenUsage{{
+		Usage: []agui.TokenUsage{{
 			Provider:    "openai",
 			Model:       "gpt-4o",
 			TotalTokens: &tot,
@@ -117,6 +118,6 @@ func TestRunErrorWithUsageEvent_Serialization(t *testing.T) {
 		t.Errorf("message = %v, want boom", m["message"])
 	}
 	if _, ok := m["usage"]; !ok {
-		t.Error("expected usage field present")
+		t.Error("got no usage field, want it present")
 	}
 }

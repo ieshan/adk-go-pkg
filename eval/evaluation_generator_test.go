@@ -1,8 +1,9 @@
-package eval
+package eval_test
 
 import (
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -35,19 +36,19 @@ func TestConvertEventsToInvocation_Basic(t *testing.T) {
 		},
 	}
 
-	invocation := ConvertEventsToInvocation(events, userContent, nil)
+	invocation := eval.ConvertEventsToInvocation(events, userContent, nil)
 	if invocation.UserContent == nil {
-		t.Error("expected non-nil UserContent")
+		t.Errorf("got nil, want non-nil UserContent")
 	}
 	if invocation.FinalResponse == nil {
-		t.Error("expected non-nil FinalResponse")
+		t.Errorf("got nil, want non-nil FinalResponse")
 	}
 	if invocation.IntermediateData == nil {
-		t.Error("expected non-nil IntermediateData")
+		t.Errorf("got nil, want non-nil IntermediateData")
 	}
 	events2 := invocation.IntermediateData.GetInvocationEvents()
 	if len(events2) != 2 {
-		t.Errorf("expected 2 invocation events, got %d", len(events2))
+		t.Errorf("got %d invocation events, want 2", len(events2))
 	}
 }
 
@@ -78,22 +79,22 @@ func TestConvertEventsToInvocation_ExtractsUserContentFromEvents(t *testing.T) {
 		},
 	}
 
-	invocation := ConvertEventsToInvocation(events, nil, nil)
+	invocation := eval.ConvertEventsToInvocation(events, nil, nil)
 	if invocation.UserContent == nil {
-		t.Error("expected to extract UserContent from events")
+		t.Errorf("got nil, want non-nil UserContent extracted from events")
 	}
 }
 
 func TestConvertEventsToInvocation_EmptyEvents(t *testing.T) {
-	invocation := ConvertEventsToInvocation(nil, nil, nil)
+	invocation := eval.ConvertEventsToInvocation(nil, nil, nil)
 	if invocation.UserContent != nil {
-		t.Error("expected nil UserContent for empty events")
+		t.Errorf("got non-nil, want nil UserContent for empty events")
 	}
 	if invocation.FinalResponse != nil {
-		t.Error("expected nil FinalResponse for empty events")
+		t.Errorf("got non-nil, want nil FinalResponse for empty events")
 	}
 	if invocation.IntermediateData != nil {
-		t.Error("expected nil IntermediateData for empty events")
+		t.Errorf("got non-nil, want nil IntermediateData for empty events")
 	}
 }
 
@@ -133,14 +134,14 @@ func TestConvertEventsToEvalInvocations_GroupsByInvocationID(t *testing.T) {
 		},
 	}
 
-	invocations := ConvertEventsToEvalInvocations(events, nil)
+	invocations := eval.ConvertEventsToEvalInvocations(events, nil)
 	if len(invocations) != 2 {
-		t.Fatalf("expected 2 invocations, got %d", len(invocations))
+		t.Fatalf("got %d invocations, want 2", len(invocations))
 	}
 	if invocations[0].InvocationID != "inv1" {
-		t.Errorf("expected inv1, got %s", invocations[0].InvocationID)
+		t.Errorf("got %s, want inv1", invocations[0].InvocationID)
 	}
 	if invocations[1].InvocationID != "inv2" {
-		t.Errorf("expected inv2, got %s", invocations[1].InvocationID)
+		t.Errorf("got %s, want inv2", invocations[1].InvocationID)
 	}
 }

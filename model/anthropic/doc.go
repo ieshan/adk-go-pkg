@@ -32,7 +32,8 @@
 // # Streaming
 //
 // Pass stream=true to [model.LLM.GenerateContent] to enable server-sent-event
-// streaming. Each partial delta is yielded with Partial=true; the final
+// streaming. Text deltas are yielded with Partial=true as they arrive;
+// thinking and tool-input deltas are accumulated internally. The final
 // message_stop event is yielded with TurnComplete=true.
 //
 //	for resp, err := range m.GenerateContent(ctx, req, true) {

@@ -1,17 +1,21 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
+var errToolFailed = errors.New("tool failed")
+var errToolsetBroken = errors.New("broken")
+
 func TestFakeTool_Basic(t *testing.T) {
-	ft := NewFakeTool("my_tool").
+	ft := testutil.NewFakeTool("my_tool").
 		WithDescription("A test tool").
 		WithIsLongRunning(true)
 
@@ -27,15 +31,15 @@ func TestFakeTool_Basic(t *testing.T) {
 }
 
 func TestFakeTool_Run(t *testing.T) {
-	ft := NewFakeTool("adder").
+	ft := testutil.NewFakeTool("adder").
 		WithRunFunc(func(ctx agent.Context, args map[string]any) (any, error) {
 			a, _ := args["a"].(float64)
 			b, _ := args["b"].(float64)
 			return map[string]any{"sum": a + b}, nil
 		})
 
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 
 	result, err := ft.Run(tc, map[string]any{"a": 3.0, "b": 4.0})
 	if err != nil {
@@ -54,43 +58,43 @@ func TestFakeTool_Run(t *testing.T) {
 }
 
 func TestFakeTool_RunError(t *testing.T) {
-	ft := NewFakeTool("failer").
+	ft := testutil.NewFakeTool("failer").
 		WithRunFunc(func(ctx agent.Context, args map[string]any) (any, error) {
-			return nil, errors.New("tool failed")
+			return nil, errToolFailed
 		})
 
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 
 	_, err := ft.Run(tc, map[string]any{})
-	if err == nil || err.Error() != "tool failed" {
-		t.Errorf("Run() error = %v, want 'tool failed'", err)
+	if !errors.Is(err, errToolFailed) {
+		t.Errorf("Run() error = %v, want errToolFailed", err)
 	}
 }
 
 func TestFakeTool_RunDefault(t *testing.T) {
-	ft := NewFakeTool("noop")
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	ft := testutil.NewFakeTool("noop")
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 
 	result, err := ft.Run(tc, map[string]any{})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(result) != 0 {
-		t.Errorf("default Run() should return empty map, got %v", result)
+		t.Errorf("got %v, want empty map", result)
 	}
 }
 
 func TestFakeTool_ProcessRequest(t *testing.T) {
-	ft := NewFakeTool("search").
+	ft := testutil.NewFakeTool("search").
 		WithDeclaration(&genai.FunctionDeclaration{
 			Name:        "search",
 			Description: "Search for things",
 		})
 
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 	req := &model.LLMRequest{}
 
 	err := ft.ProcessRequest(tc, req)
@@ -103,9 +107,10 @@ func TestFakeTool_ProcessRequest(t *testing.T) {
 }
 
 func TestFakeTool_Reset(t *testing.T) {
-	ft := NewFakeTool("reset")
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	ft := testutil.NewFakeTool("reset")
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
+	// error intentionally ignored: exercising Reset path, not validating Run output
 	_, _ = ft.Run(tc, map[string]any{})
 
 	ft.Reset()
@@ -115,10 +120,10 @@ func TestFakeTool_Reset(t *testing.T) {
 }
 
 func TestFakeToolContext(t *testing.T) {
-	cbCtx := NewFakeCallbackContext().
+	cbCtx := testutil.NewFakeCallbackContext().
 		WithUserID("u-1").
 		WithAppName("app-1")
-	tc := NewFakeToolContext(cbCtx).
+	tc := testutil.NewFakeToolContext(cbCtx).
 		WithFunctionCallID("fc-123")
 
 	if tc.FunctionCallID() != "fc-123" {
@@ -130,8 +135,8 @@ func TestFakeToolContext(t *testing.T) {
 }
 
 func TestFakeToolContext_RequestConfirmation(t *testing.T) {
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 
 	err := tc.RequestConfirmation("Please approve", nil)
 	if err != nil {
@@ -148,11 +153,11 @@ func TestFakeToolContext_RequestConfirmation(t *testing.T) {
 }
 
 func TestFakeToolContext_SearchMemory(t *testing.T) {
-	memSvc := NewFakeMemoryService()
-	memSvc.PreloadMemory("u-1", "app-1", NewMemoryEntry("m1", "hello world", "model"))
+	memSvc := testutil.NewFakeMemoryService()
+	memSvc.PreloadMemory("u-1", "app-1", testutil.NewMemoryEntry("m1", "hello world", "model"))
 
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx).
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx).
 		WithMemoryService(memSvc, "u-1", "app-1")
 
 	resp, err := tc.SearchMemory(context.Background(), "hello")
@@ -165,8 +170,8 @@ func TestFakeToolContext_SearchMemory(t *testing.T) {
 }
 
 func TestFakeToolContext_SearchMemoryNotSet(t *testing.T) {
-	cbCtx := NewFakeCallbackContext()
-	tc := NewFakeToolContext(cbCtx)
+	cbCtx := testutil.NewFakeCallbackContext()
+	tc := testutil.NewFakeToolContext(cbCtx)
 
 	_, err := tc.SearchMemory(context.Background(), "hello")
 	if err == nil {
@@ -175,15 +180,15 @@ func TestFakeToolContext_SearchMemoryNotSet(t *testing.T) {
 }
 
 func TestFakeToolset(t *testing.T) {
-	t1 := NewFakeTool("tool1")
-	t2 := NewFakeTool("tool2")
-	ts := NewFakeToolset("my-set", t1, t2)
+	t1 := testutil.NewFakeTool("tool1")
+	t2 := testutil.NewFakeTool("tool2")
+	ts := testutil.NewFakeToolset("my-set", t1, t2)
 
 	if ts.Name() != "my-set" {
 		t.Errorf("Name() = %q, want %q", ts.Name(), "my-set")
 	}
 
-	rc := NewFakeReadonlyContext()
+	rc := testutil.NewFakeReadonlyContext()
 	tools, err := ts.Tools(rc)
 	if err != nil {
 		t.Fatalf("Tools() error = %v", err)
@@ -194,10 +199,10 @@ func TestFakeToolset(t *testing.T) {
 }
 
 func TestFakeToolset_Error(t *testing.T) {
-	ts := NewFakeToolset("err-set").WithError(errors.New("broken"))
-	rc := NewFakeReadonlyContext()
+	ts := testutil.NewFakeToolset("err-set").WithError(errToolsetBroken)
+	rc := testutil.NewFakeReadonlyContext()
 	_, err := ts.Tools(rc)
-	if err == nil || err.Error() != "broken" {
-		t.Errorf("Tools() error = %v, want 'broken'", err)
+	if !errors.Is(err, errToolsetBroken) {
+		t.Errorf("Tools() error = %v, want errToolsetBroken", err)
 	}
 }

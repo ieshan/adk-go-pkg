@@ -23,6 +23,7 @@ const thinkingResponsePlain = "I should first search the web, then summarise wha
 // ThinkingPlanner extracts the steps correctly and sets Plan.Reasoning to the
 // full model response.
 func TestThinking_GeneratePlan_Structured(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponseWithJSON))
 	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
@@ -36,12 +37,12 @@ func TestThinking_GeneratePlan_Structured(t *testing.T) {
 		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
 	}
 	if plan == nil {
-		t.Fatal("expected non-nil Plan")
+		t.Fatal("got nil Plan, want non-nil")
 	}
 
 	// Steps must have been extracted from the embedded JSON.
 	if len(plan.Steps) != 1 {
-		t.Fatalf("expected 1 step from JSON extraction, got %d", len(plan.Steps))
+		t.Fatalf("got %d steps from JSON extraction, want 1", len(plan.Steps))
 	}
 	if plan.Steps[0].ToolName != "search" {
 		t.Errorf("step 0 ToolName: got %q, want %q", plan.Steps[0].ToolName, "search")
@@ -61,6 +62,7 @@ func TestThinking_GeneratePlan_Structured(t *testing.T) {
 // PlanStep whose Description equals the full response text, and that
 // Plan.Reasoning is also set to the full response text.
 func TestThinking_GeneratePlan_Fallback(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
 	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
@@ -71,12 +73,12 @@ func TestThinking_GeneratePlan_Fallback(t *testing.T) {
 		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
 	}
 	if plan == nil {
-		t.Fatal("expected non-nil Plan")
+		t.Fatal("got nil Plan, want non-nil")
 	}
 
 	// Fallback: single step whose Description is the full response.
 	if len(plan.Steps) != 1 {
-		t.Fatalf("expected 1 fallback step, got %d", len(plan.Steps))
+		t.Fatalf("got %d fallback steps, want 1", len(plan.Steps))
 	}
 	if plan.Steps[0].Description != thinkingResponsePlain {
 		t.Errorf("fallback step Description mismatch:\n got:  %q\n want: %q",
@@ -93,6 +95,7 @@ func TestThinking_GeneratePlan_Fallback(t *testing.T) {
 // ThinkingConfig, the budget value appears somewhere in the prompt sent to the
 // model.
 func TestThinking_ThinkingBudget(t *testing.T) {
+	t.Parallel()
 	llmCapture := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
 	p := planner.NewThinking(planner.ThinkingConfig{
 		Model:          llmCapture,
@@ -108,7 +111,7 @@ func TestThinking_ThinkingBudget(t *testing.T) {
 
 	lastCall := llmCapture.LastCall()
 	if lastCall == nil {
-		t.Fatal("expected FakeLLM to record the request, got nil")
+		t.Fatal("got nil, want FakeLLM to record the request")
 	}
 
 	// Extract the prompt text from the first content part.
@@ -121,7 +124,7 @@ func TestThinking_ThinkingBudget(t *testing.T) {
 
 	// Budget hint must be present in the prompt.
 	if !strings.Contains(promptText, "100") {
-		t.Errorf("expected budget value 100 to appear in prompt, prompt was:\n%s", promptText)
+		t.Errorf("got prompt without budget value 100, want it present:\n%s", promptText)
 	}
 }
 
@@ -129,6 +132,7 @@ func TestThinking_ThinkingBudget(t *testing.T) {
 // ThinkingInstructionTemplate is set, the rendered system instruction includes
 // the template data (tools, userMessage, instruction, budget).
 func TestThinking_ThinkingInstructionTemplate(t *testing.T) {
+	t.Parallel()
 	engine := prompt.New()
 	tmpl := engine.MustParse("test-thinking-instruction", "Tools: {{.Input.tools}}\nUser: {{.Input.userMessage}}\nInstr: {{.Input.instruction}}\nBudget: {{.Input.budget}}")
 
@@ -152,26 +156,26 @@ func TestThinking_ThinkingInstructionTemplate(t *testing.T) {
 
 	lastCall := llm.LastCall()
 	if lastCall == nil {
-		t.Fatal("expected FakeLLM to record the request, got nil")
+		t.Fatal("got nil, want FakeLLM to record the request")
 	}
 	if lastCall.Config == nil || lastCall.Config.SystemInstruction == nil {
-		t.Fatal("expected system instruction in LLM request")
+		t.Fatal("got nil system instruction in LLM request, want non-nil")
 	}
 	sysInst := ""
 	for _, part := range lastCall.Config.SystemInstruction.Parts {
 		sysInst += part.Text
 	}
 	if !strings.Contains(sysInst, "Tools:") {
-		t.Errorf("expected 'Tools:' in system instruction, got:\n%s", sysInst)
+		t.Errorf("got system instruction missing 'Tools:', want it present:\n%s", sysInst)
 	}
 	if !strings.Contains(sysInst, "Search the web.") {
-		t.Errorf("expected user message in system instruction, got:\n%s", sysInst)
+		t.Errorf("got system instruction missing user message, want it present:\n%s", sysInst)
 	}
 	if !strings.Contains(sysInst, "Be concise.") {
-		t.Errorf("expected instruction in system instruction, got:\n%s", sysInst)
+		t.Errorf("got system instruction missing instruction, want it present:\n%s", sysInst)
 	}
 	if !strings.Contains(sysInst, "Budget: 50") {
-		t.Errorf("expected budget in system instruction, got:\n%s", sysInst)
+		t.Errorf("got system instruction missing budget, want it present:\n%s", sysInst)
 	}
 }
 
@@ -179,6 +183,7 @@ func TestThinking_ThinkingInstructionTemplate(t *testing.T) {
 // model's full raw response, regardless of whether JSON extraction succeeded
 // or fell back.
 func TestThinking_ReasoningField(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		response string
@@ -189,6 +194,7 @@ func TestThinking_ReasoningField(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			mock := testutil.NewFakeLLM(testutil.NewTextResponse(tc.response))
 			p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
 
@@ -204,4 +210,181 @@ func TestThinking_ReasoningField(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestThinking_EmptyJSONBlock verifies that a response containing an empty
+// ```json fence (no content between the fences) falls back to a single
+// free-text step without panicking. The empty candidate fails to parse as
+// JSON, so the fallback path is taken.
+func TestThinking_EmptyJSONBlock(t *testing.T) {
+	t.Parallel()
+	emptyBlockResponse := "Let me think...\n```json\n```\nDone."
+	mock := testutil.NewFakeLLM(testutil.NewTextResponse(emptyBlockResponse))
+	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
+
+	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "test",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("got nil Plan, want non-nil")
+	}
+	// Fallback: single step whose Description is the full response.
+	if len(plan.Steps) != 1 {
+		t.Fatalf("got %d steps, want 1 (fallback for empty JSON block)", len(plan.Steps))
+	}
+	if plan.Steps[0].Description != emptyBlockResponse {
+		t.Errorf("fallback step Description: got %q, want %q", plan.Steps[0].Description, emptyBlockResponse)
+	}
+	if plan.Reasoning != emptyBlockResponse {
+		t.Errorf("Reasoning: got %q, want %q", plan.Reasoning, emptyBlockResponse)
+	}
+}
+
+// TestThinking_MalformedFence verifies that a response with an unclosed ```
+// fence does not panic and falls back to a single free-text step. The
+// extractor cannot find a closing fence, so no JSON candidate is produced.
+func TestThinking_MalformedFence(t *testing.T) {
+	t.Parallel()
+	malformedFenceResponse := "Thinking...\n```json\n{\"steps\":[{\"description\":\"x\",\"toolName\":\"\",\"args\":{},\"dependsOn\":[]}]}"
+	mock := testutil.NewFakeLLM(testutil.NewTextResponse(malformedFenceResponse))
+	p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
+
+	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "test",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("got nil Plan, want non-nil")
+	}
+	// The unclosed fence means no ```json ... ``` match. However, the raw
+	// marker {"steps": is present, so extraction may still succeed. Either
+	// way, the plan must have at least one step and not panic.
+	if len(plan.Steps) == 0 {
+		t.Error("got 0 steps, want at least 1 (extracted or fallback)")
+	}
+	if plan.Reasoning != malformedFenceResponse {
+		t.Errorf("Reasoning: got %q, want %q", plan.Reasoning, malformedFenceResponse)
+	}
+}
+
+// TestThinking_ZeroThinkingBudget verifies that a ThinkingBudget of 0 does not
+// add a budget hint to the prompt and produces a valid plan without panicking.
+func TestThinking_ZeroThinkingBudget(t *testing.T) {
+	t.Parallel()
+	llm := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
+	p := planner.NewThinking(planner.ThinkingConfig{
+		Model:          llm,
+		ThinkingBudget: 0,
+	})
+
+	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "test",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("got nil Plan, want non-nil")
+	}
+	if len(plan.Steps) == 0 {
+		t.Error("got 0 steps, want at least 1")
+	}
+
+	// Verify the prompt does not contain a budget hint.
+	lastCall := llm.LastCall()
+	if lastCall == nil {
+		t.Fatal("got nil, want FakeLLM to record the request")
+	}
+	var promptText string
+	for _, content := range lastCall.Contents {
+		for _, part := range content.Parts {
+			promptText += part.Text
+		}
+	}
+	if strings.Contains(promptText, "budget:") {
+		t.Errorf("got prompt with budget hint for ThinkingBudget=0, want no hint:\n%s", promptText)
+	}
+}
+
+// TestThinking_NegativeThinkingBudget verifies that a negative ThinkingBudget
+// is treated the same as zero (no budget hint) and produces a valid plan
+// without panicking.
+func TestThinking_NegativeThinkingBudget(t *testing.T) {
+	t.Parallel()
+	llm := testutil.NewFakeLLM(testutil.NewTextResponse(thinkingResponsePlain))
+	p := planner.NewThinking(planner.ThinkingConfig{
+		Model:          llm,
+		ThinkingBudget: -1,
+	})
+
+	plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+		UserMessage: "test",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("got nil Plan, want non-nil")
+	}
+	if len(plan.Steps) == 0 {
+		t.Error("got 0 steps, want at least 1")
+	}
+
+	// Verify the prompt does not contain a budget hint.
+	lastCall := llm.LastCall()
+	if lastCall == nil {
+		t.Fatal("got nil, want FakeLLM to record the request")
+	}
+	var promptText string
+	for _, content := range lastCall.Contents {
+		for _, part := range content.Parts {
+			promptText += part.Text
+		}
+	}
+	if strings.Contains(promptText, "budget:") {
+		t.Errorf("got prompt with budget hint for ThinkingBudget=-1, want no hint:\n%s", promptText)
+	}
+}
+
+// FuzzExtractJSON verifies that the ThinkingPlanner's JSON extraction logic
+// (exercised via GeneratePlan) never panics on arbitrary LLM response text.
+// The planner should always return a non-nil plan with at least one step,
+// using the fallback path when JSON extraction fails.
+func FuzzExtractJSON(f *testing.F) {
+	// Seed: valid markdown with JSON fence.
+	f.Add(thinkingResponseWithJSON)
+	// Seed: malformed fence (opening but no closing).
+	f.Add("Let me think...\n```json\n{\"steps\":[")
+	// Seed: empty string.
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, llmResponse string) {
+		mock := testutil.NewFakeLLM(testutil.NewTextResponse(llmResponse))
+		p := planner.NewThinking(planner.ThinkingConfig{Model: mock})
+
+		plan, err := p.GeneratePlan(context.Background(), &planner.PlanRequest{
+			UserMessage: "test",
+		})
+
+		// The function must not panic — reaching here is the primary assertion.
+		if err != nil {
+			t.Fatalf("GeneratePlan returned unexpected error: %v", err)
+		}
+		if plan == nil {
+			t.Fatal("got nil Plan, want non-nil")
+		}
+		// The plan must always have at least one step (fallback or extracted).
+		if len(plan.Steps) == 0 {
+			t.Error("got 0 steps, want at least 1 (fallback or extracted)")
+		}
+		// Reasoning must always equal the full model response.
+		if plan.Reasoning != llmResponse {
+			t.Errorf("Reasoning mismatch:\n got:  %q\n want: %q", plan.Reasoning, llmResponse)
+		}
+	})
 }

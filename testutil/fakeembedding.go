@@ -14,9 +14,10 @@ import (
 type FakeEmbeddingFunc func(ctx context.Context, text string) ([]float32, error)
 
 // FakeEmbedding implements a deterministic embedding function for testing.
-// It generates reproducible 1536-dimensional float32 vectors from text using
-// SHA-256 hashing. This is suitable for testing semantic search, memory
-// systems, and any code that requires embeddings without calling external APIs.
+// It generates reproducible float32 vectors from text using SHA-256 hashing.
+// The default dimension is 1536; use WithDimension to customize. This is
+// suitable for testing semantic search, memory systems, and any code that
+// requires embeddings without calling external APIs.
 //
 // The embedding function is thread-safe and records all calls for assertions.
 //

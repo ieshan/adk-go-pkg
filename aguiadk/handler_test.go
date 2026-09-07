@@ -38,7 +38,7 @@ func TestHandler_Success(t *testing.T) {
 		t.Fatalf("Handler returned error: %v", err)
 	}
 	if h == nil {
-		t.Fatal("expected non-nil handler")
+		t.Fatal("got nil handler, want non-nil")
 	}
 }
 
@@ -49,14 +49,17 @@ func TestHandler_InvalidConfig(t *testing.T) {
 		agui.Config{},
 	)
 	if err == nil {
-		t.Fatal("expected error for missing Agent")
+		t.Fatal("got nil error, want error for missing Agent")
 	}
 	if h != nil {
-		t.Fatal("expected nil handler on error")
+		t.Fatal("got non-nil handler on error, want nil")
 	}
 }
 
 func TestHandler_E2E_SSE(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	// Create a mock ADK agent that returns a simple text response.
 	ev := session.NewEvent(context.Background(), "inv-1")
 	ev.Author = "e2e-agent"
@@ -89,7 +92,7 @@ func TestHandler_E2E_SSE(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	// Build RunAgentInput payload.
 	input := types.RunAgentInput{
@@ -115,14 +118,14 @@ func TestHandler_E2E_SSE(t *testing.T) {
 	if resp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("got %d, want 200", resp.StatusCode)
 	}
 
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
-		t.Fatalf("expected text/event-stream, got %q", ct)
+		t.Fatalf("got %q, want text/event-stream", ct)
 	}
 
 	// Read the full SSE response.
@@ -134,16 +137,16 @@ func TestHandler_E2E_SSE(t *testing.T) {
 
 	// Verify RUN_STARTED and RUN_FINISHED events are present.
 	if !strings.Contains(sseBody, "RUN_STARTED") {
-		t.Error("expected RUN_STARTED event in SSE response")
+		t.Error("got no RUN_STARTED event in SSE response, want one")
 	}
 	if !strings.Contains(sseBody, "RUN_FINISHED") {
-		t.Error("expected RUN_FINISHED event in SSE response")
+		t.Error("got no RUN_FINISHED event in SSE response, want one")
 	}
 	if !strings.Contains(sseBody, "TEXT_MESSAGE_START") {
-		t.Error("expected TEXT_MESSAGE_START event in SSE response")
+		t.Error("got no TEXT_MESSAGE_START event in SSE response, want one")
 	}
 	if !strings.Contains(sseBody, "Hello from handler!") {
-		t.Error("expected text content in SSE response")
+		t.Error("got no text content in SSE response, want one")
 	}
 }
 
@@ -165,7 +168,7 @@ func TestHandler_InlineToolMode(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	// POST a tool result — the handler should accept it at /tool-result.
 	resultBody, _ := json.Marshal(map[string]string{
@@ -176,7 +179,7 @@ func TestHandler_InlineToolMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /tool-result: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp == nil {
 		t.Fatal("nil response")
 	}
@@ -184,7 +187,7 @@ func TestHandler_InlineToolMode(t *testing.T) {
 	// 404 is expected since no agent run is waiting for this tool call ID,
 	// but the endpoint should exist and respond (not 405 or connection refused).
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected 404 (no pending tool call), got %d", resp.StatusCode)
+		t.Errorf("got %d, want 404 (no pending tool call)", resp.StatusCode)
 	}
 
 	// Verify GET to /tool-result returns 405 (method not allowed via Go 1.22+ pattern).
@@ -195,13 +198,16 @@ func TestHandler_InlineToolMode(t *testing.T) {
 	if getResp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = getResp.Body.Close() }()
+	t.Cleanup(func() { _ = getResp.Body.Close() })
 	if getResp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("GET /tool-result: expected 405, got %d", getResp.StatusCode)
+		t.Errorf("GET /tool-result: got %d, want 405", getResp.StatusCode)
 	}
 }
 
 func TestHandler_PerRequestApproval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	ev := session.NewEvent(context.Background(), "inv-1")
 	ev.Author = "approval-agent"
 	ev.LLMResponse = model.LLMResponse{
@@ -236,7 +242,7 @@ func TestHandler_PerRequestApproval(t *testing.T) {
 			ApprovalModeFunc: func(r *http.Request) bool {
 				sawRequest = true
 				if r == nil {
-					t.Error("expected non-nil *http.Request in ApprovalModeFunc")
+					t.Error("got nil *http.Request in ApprovalModeFunc, want non-nil")
 				}
 				return r.Header.Get("X-AG-Approval") == "auto"
 			},
@@ -248,7 +254,7 @@ func TestHandler_PerRequestApproval(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	input := types.RunAgentInput{
 		ThreadID: "approval-thread",
@@ -273,23 +279,23 @@ func TestHandler_PerRequestApproval(t *testing.T) {
 	if resp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("got %d, want 200", resp.StatusCode)
 	}
 
 	data, _ := io.ReadAll(resp.Body)
 	sseBody := string(data)
 
 	if !sawRequest {
-		t.Fatal("expected ApprovalModeFunc to be called with the HTTP request")
+		t.Fatal("got ApprovalModeFunc not called with HTTP request, want called")
 	}
 
 	if strings.Contains(sseBody, `"interrupt"`) {
-		t.Error("expected no interrupt outcome with auto-approval via X-AG-Approval header")
+		t.Error("got interrupt outcome with auto-approval via X-AG-Approval header, want none")
 	}
 	if !strings.Contains(sseBody, "RUN_FINISHED") {
-		t.Error("expected RUN_FINISHED in SSE response")
+		t.Error("got no RUN_FINISHED in SSE response, want one")
 	}
 }

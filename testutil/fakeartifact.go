@@ -22,7 +22,8 @@ type artifactKey struct {
 }
 
 // FakeArtifactService implements artifact.Service for testing.
-// It stores artifacts in-memory with version tracking and records all calls.
+// It stores artifacts in-memory with version tracking and records Save and
+// Load calls.
 //
 // Thread-safe.
 type FakeArtifactService struct {
@@ -40,9 +41,14 @@ func NewFakeArtifactService() *FakeArtifactService {
 }
 
 // PreloadArtifact adds an artifact for test setup (bypasses Save).
+// User-scoped filenames (prefixed with "user:") are stored with SessionID
+// "user", matching the behaviour of Save and Load.
 func (f *FakeArtifactService) PreloadArtifact(appName, userID, sessionID, filename string, part *genai.Part) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if strings.HasPrefix(filename, "user:") {
+		sessionID = "user"
+	}
 	key := artifactKey{AppName: appName, UserID: userID, SessionID: sessionID, FileName: filename}
 	f.artifacts[key] = append(f.artifacts[key], part)
 }

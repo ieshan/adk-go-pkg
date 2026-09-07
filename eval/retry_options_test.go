@@ -1,22 +1,23 @@
-package eval
+package eval_test
 
 import (
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
 func TestAddDefaultRetryOptionsIfNotPresent_NilRequest(t *testing.T) {
-	AddDefaultRetryOptionsIfNotPresent(nil)
+	eval.AddDefaultRetryOptionsIfNotPresent(nil)
 }
 
 func TestAddDefaultRetryOptionsIfNotPresent_NilConfig(t *testing.T) {
 	req := &model.LLMRequest{}
-	AddDefaultRetryOptionsIfNotPresent(req)
+	eval.AddDefaultRetryOptionsIfNotPresent(req)
 	if req.Config == nil {
-		t.Error("expected Config to be initialized")
+		t.Error("got nil Config, want initialized")
 	}
 }
 
@@ -24,17 +25,17 @@ func TestAddDefaultRetryOptionsIfNotPresent_ExistingConfig(t *testing.T) {
 	req := &model.LLMRequest{
 		Config: &genai.GenerateContentConfig{Temperature: float32Ptr(0.5)},
 	}
-	AddDefaultRetryOptionsIfNotPresent(req)
+	eval.AddDefaultRetryOptionsIfNotPresent(req)
 	if req.Config == nil {
-		t.Fatal("expected Config to remain non-nil")
+		t.Fatal("got nil Config, want non-nil")
 	}
 	if req.Config.Temperature == nil || *req.Config.Temperature != 0.5 {
-		t.Error("expected existing config to be preserved")
+		t.Error("got config overwritten, want preserved")
 	}
 }
 
 func TestEnsureRetryOptionsPlugin_BeforeModelCallback(t *testing.T) {
-	plugin := &EnsureRetryOptionsPlugin{}
+	plugin := &eval.EnsureRetryOptionsPlugin{}
 	req := &model.LLMRequest{}
 	ctx := testutil.NewFakeCallbackContext()
 	resp, err := plugin.BeforeModelCallback(ctx, req)
@@ -42,10 +43,10 @@ func TestEnsureRetryOptionsPlugin_BeforeModelCallback(t *testing.T) {
 		t.Fatalf("BeforeModelCallback failed: %v", err)
 	}
 	if resp != nil {
-		t.Error("expected nil response from before-callback")
+		t.Error("got non-nil response from before-callback, want nil")
 	}
 	if req.Config == nil {
-		t.Error("expected Config to be initialized by AddDefaultRetryOptionsIfNotPresent")
+		t.Error("got nil Config, want initialized by AddDefaultRetryOptionsIfNotPresent")
 	}
 }
 

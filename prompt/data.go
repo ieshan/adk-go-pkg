@@ -11,6 +11,10 @@ import (
 	"google.golang.org/genai"
 )
 
+// ErrNoArtifactSource is returned when an artifact is requested but no
+// artifact source is available in the context.
+var ErrNoArtifactSource = errors.New("prompt: no artifact source available in context")
+
 // TemplateData is the top-level data object passed to prompt templates.
 //
 // Fields are exposed as struct fields and nested data objects provide methods
@@ -41,14 +45,14 @@ type extendedContext interface {
 
 // Artifact loads the text content of the named artifact.
 //
-// The second argument, when true, treats a missing artifact as an empty string
-// rather than an error.
+// The second argument, when true, treats a missing, unloadable, or empty-part
+// artifact as an empty string rather than an error.
 func (d *TemplateData) Artifact(name string, optional ...bool) (string, error) {
 	if d.artifacts == nil {
 		if len(optional) > 0 && optional[0] {
 			return "", nil
 		}
-		return "", fmt.Errorf("artifact %q: no artifact source available in context", name)
+		return "", fmt.Errorf("%w: artifact %q", ErrNoArtifactSource, name)
 	}
 	resp, err := d.artifacts.Load(d.ctx, name)
 	if err != nil {

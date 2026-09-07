@@ -1,19 +1,21 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestResponseEvaluator_ROUGEDelegation(t *testing.T) {
 	threshold := 0.8
-	evalMetric := EvalMetric{MetricName: string(ResponseMatchScore), Threshold: &threshold}
-	evaluator := NewResponseEvaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: string(eval.ResponseMatchScore), Threshold: &threshold}
+	evaluator := eval.NewResponseEvaluator(evalMetric)
 
-	inv := []Invocation{{
+	inv := []eval.Invocation{{
 		FinalResponse: textToContent("the quick brown fox"),
 	}}
-	expected := []Invocation{{
+	expected := []eval.Invocation{{
 		FinalResponse: textToContent("the quick brown fox"),
 	}}
 
@@ -22,18 +24,18 @@ func TestResponseEvaluator_ROUGEDelegation(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallScore == nil || *result.OverallScore != 1.0 {
-		t.Errorf("identical strings should score 1.0, got %v", result.OverallScore)
+		t.Errorf("got %v, want 1.0 for identical strings", result.OverallScore)
 	}
 }
 
 func TestResponseEvaluator_CoherenceNotEvaluated(t *testing.T) {
-	evalMetric := EvalMetric{MetricName: string(ResponseEvaluationScore)}
-	evaluator := NewResponseEvaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: string(eval.ResponseEvaluationScore)}
+	evaluator := eval.NewResponseEvaluator(evalMetric)
 
-	inv := []Invocation{{
+	inv := []eval.Invocation{{
 		FinalResponse: textToContent("some response"),
 	}}
-	expected := []Invocation{{
+	expected := []eval.Invocation{{
 		FinalResponse: textToContent("some response"),
 	}}
 
@@ -41,17 +43,17 @@ func TestResponseEvaluator_CoherenceNotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusNotEvaluated {
-		t.Errorf("coherence without Vertex AI should return NOT_EVALUATED, got %v", result.OverallEvalStatus)
+	if result.OverallEvalStatus != eval.EvalStatusNotEvaluated {
+		t.Errorf("got %v, want NOT_EVALUATED for coherence without Vertex AI", result.OverallEvalStatus)
 	}
 }
 
 func TestResponseEvaluator_UnsupportedMetric(t *testing.T) {
-	evalMetric := EvalMetric{MetricName: "unsupported_metric"}
-	evaluator := NewResponseEvaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: "unsupported_metric"}
+	evaluator := eval.NewResponseEvaluator(evalMetric)
 
 	_, err := evaluator.EvaluateInvocations(context.TODO(), nil, nil, nil)
 	if err == nil {
-		t.Error("expected error for unsupported metric")
+		t.Errorf("got nil error, want non-nil error for unsupported metric")
 	}
 }

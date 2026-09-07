@@ -1,4 +1,4 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
@@ -8,18 +8,20 @@ import (
 	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
+
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
 func TestRunnerBuilder_NoAgent(t *testing.T) {
-	_, err := NewRunnerBuilder().Build()
+	_, err := testutil.NewRunnerBuilder().Build()
 	if err == nil {
 		t.Error("Build() without agent should return error")
 	}
 }
 
 func TestRunnerBuilder_BuildWithFakes(t *testing.T) {
-	ag := MustNewFakeAgent("test-agent")
-	r, fakes, err := NewRunnerBuilder().WithAgent(ag).BuildWithFakes()
+	ag := testutil.MustNewFakeAgent("test-agent")
+	r, fakes, err := testutil.NewRunnerBuilder().WithAgent(ag).BuildWithFakes()
 	if err != nil {
 		t.Fatalf("BuildWithFakes() error = %v", err)
 	}
@@ -38,12 +40,12 @@ func TestRunnerBuilder_BuildWithFakes(t *testing.T) {
 }
 
 func TestRunnerBuilder_CustomServices(t *testing.T) {
-	ag := MustNewFakeAgent("test-agent")
-	customSession := NewFakeSessionService()
-	customArtifact := NewFakeArtifactService()
-	customMemory := NewFakeMemoryService()
+	ag := testutil.MustNewFakeAgent("test-agent")
+	customSession := testutil.NewFakeSessionService()
+	customArtifact := testutil.NewFakeArtifactService()
+	customMemory := testutil.NewFakeMemoryService()
 
-	r, fakes, err := NewRunnerBuilder().
+	r, fakes, err := testutil.NewRunnerBuilder().
 		WithAgent(ag).
 		WithSessionService(customSession).
 		WithArtifactService(customArtifact).
@@ -67,11 +69,11 @@ func TestRunnerBuilder_CustomServices(t *testing.T) {
 }
 
 func TestRunnerBuilder_NonFakeServices(t *testing.T) {
-	ag := MustNewFakeAgent("test-agent")
+	ag := testutil.MustNewFakeAgent("test-agent")
 
 	// Use a non-FakeSessionService (the real in-memory one).
 	realSessionSvc := session.InMemoryService()
-	r, fakes, err := NewRunnerBuilder().
+	r, fakes, err := testutil.NewRunnerBuilder().
 		WithAgent(ag).
 		WithSessionService(realSessionSvc).
 		BuildWithFakes()
@@ -85,8 +87,8 @@ func TestRunnerBuilder_NonFakeServices(t *testing.T) {
 }
 
 func TestRunnerBuilder_WithAppName(t *testing.T) {
-	ag := MustNewFakeAgent("test-agent")
-	r, _, err := NewRunnerBuilder().
+	ag := testutil.MustNewFakeAgent("test-agent")
+	r, _, err := testutil.NewRunnerBuilder().
 		WithAppName("custom-app").
 		WithAgent(ag).
 		BuildWithFakes()
@@ -97,20 +99,20 @@ func TestRunnerBuilder_WithAppName(t *testing.T) {
 }
 
 func TestRunnerBuilder_BuildWithFakesError(t *testing.T) {
-	_, _, err := NewRunnerBuilder().BuildWithFakes()
+	_, _, err := testutil.NewRunnerBuilder().BuildWithFakes()
 	if err == nil {
 		t.Error("BuildWithFakes() without agent should return error")
 	}
 }
 
 func TestFakeArtifacts_Delegation(t *testing.T) {
-	svc := NewFakeArtifactService()
+	svc := testutil.NewFakeArtifactService()
 	ctx := context.Background()
 
 	// Preload via service directly.
 	svc.PreloadArtifact("app", "user", "sess", "test.txt", &genai.Part{Text: "data"})
 
-	art := NewFakeArtifacts(svc, "app", "user", "sess")
+	art := testutil.NewFakeArtifacts(svc, "app", "user", "sess")
 	resp, err := art.Load(ctx, "test.txt")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -148,10 +150,10 @@ func TestFakeArtifacts_Delegation(t *testing.T) {
 }
 
 func TestFakeMemory_Delegation(t *testing.T) {
-	svc := NewFakeMemoryService()
-	svc.PreloadMemory("user1", "app1", NewMemoryEntry("e1", "hello", "model"))
+	svc := testutil.NewFakeMemoryService()
+	svc.PreloadMemory("user1", "app1", testutil.NewMemoryEntry("e1", "hello", "model"))
 
-	mem := NewFakeMemory(svc, "user1", "app1")
+	mem := testutil.NewFakeMemory(svc, "user1", "app1")
 	resp, err := mem.SearchMemory(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("SearchMemory() error = %v", err)
@@ -161,7 +163,7 @@ func TestFakeMemory_Delegation(t *testing.T) {
 	}
 
 	// AddSessionToMemory
-	sess := NewFakeSession().WithAppName("app1").WithUserID("user1")
+	sess := testutil.NewFakeSession().WithAppName("app1").WithUserID("user1")
 	err = mem.AddSessionToMemory(context.Background(), sess)
 	if err != nil {
 		t.Fatalf("AddSessionToMemory() error = %v", err)

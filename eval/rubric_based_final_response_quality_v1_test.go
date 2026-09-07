@@ -1,9 +1,10 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/genai"
 )
@@ -15,26 +16,26 @@ func TestRubricBasedFinalResponseQualityV1Evaluator_AllYes(t *testing.T) {
 Rationale: The response is correct.
 Verdict: yes`,
 	))
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedFinalResponseQualityV1),
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedFinalResponseQualityV1),
 		Threshold:  &threshold,
-		Criterion: &RubricsBasedCriterion{
-			Rubrics: []Rubric{
-				{RubricID: "r1", RubricContent: RubricContent{TextProperty: "The response is accurate."}},
+		Criterion: &eval.RubricsBasedCriterion{
+			Rubrics: []eval.Rubric{
+				{RubricID: "r1", RubricContent: eval.RubricContent{TextProperty: "The response is accurate."}},
 			},
-			LlmAsAJudgeCriterion: LlmAsAJudgeCriterion{JudgeModelOptions: JudgeModelOptions{NumSamples: 1}},
+			LlmAsAJudgeCriterion: eval.LlmAsAJudgeCriterion{JudgeModelOptions: eval.JudgeModelOptions{NumSamples: 1}},
 		},
 	}
-	e, err := NewRubricBasedFinalResponseQualityV1Evaluator(evalMetric, fakeLLM)
+	e, err := eval.NewRubricBasedFinalResponseQualityV1Evaluator(evalMetric, fakeLLM)
 	if err != nil {
 		t.Fatalf("NewRubricBasedFinalResponseQualityV1Evaluator failed: %v", err)
 	}
 
-	actual := []Invocation{{
+	actual := []eval.Invocation{{
 		UserContent:   &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "what is 2+2?"}}},
 		FinalResponse: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "4"}}},
 	}}
-	expected := []Invocation{{
+	expected := []eval.Invocation{{
 		UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "what is 2+2?"}}},
 	}}
 
@@ -42,19 +43,19 @@ Verdict: yes`,
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusPassed {
+	if result.OverallEvalStatus != eval.EvalStatusPassed {
 		t.Errorf("OverallEvalStatus = %v, want PASSED", result.OverallEvalStatus)
 	}
 }
 
 func TestRubricBasedFinalResponseQualityV1Evaluator_NoRubrics(t *testing.T) {
 	fakeLLM := testutil.NewFakeLLM()
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedFinalResponseQualityV1),
-		Criterion:  &RubricsBasedCriterion{},
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedFinalResponseQualityV1),
+		Criterion:  &eval.RubricsBasedCriterion{},
 	}
-	_, err := NewRubricBasedFinalResponseQualityV1Evaluator(evalMetric, fakeLLM)
+	_, err := eval.NewRubricBasedFinalResponseQualityV1Evaluator(evalMetric, fakeLLM)
 	if err == nil {
-		t.Error("expected error when no rubrics provided")
+		t.Error("got nil error, want error when no rubrics provided")
 	}
 }

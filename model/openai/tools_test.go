@@ -34,7 +34,7 @@ func TestTranslateToolDeclarations(t *testing.T) {
 	got := translateToolDeclarations(tools)
 
 	if len(got) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(got))
+		t.Fatalf("got %d tools, want 1", len(got))
 	}
 
 	tool := got[0]
@@ -89,7 +89,7 @@ func TestTranslateToolDeclarations_Multiple(t *testing.T) {
 	got := translateToolDeclarations(tools)
 
 	if len(got) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(got))
+		t.Fatalf("got %d tools, want 2", len(got))
 	}
 
 	names := make(map[string]bool)
@@ -103,10 +103,10 @@ func TestTranslateToolDeclarations_Multiple(t *testing.T) {
 	}
 
 	if !names["func_a"] {
-		t.Error("expected func_a in results")
+		t.Errorf("got func_a not in results, want it present")
 	}
 	if !names["func_b"] {
-		t.Error("expected func_b in results")
+		t.Errorf("got func_b not in results, want it present")
 	}
 }
 
@@ -114,14 +114,14 @@ func TestTranslateToolDeclarations_Multiple(t *testing.T) {
 // return nil.
 func TestTranslateToolDeclarations_Empty(t *testing.T) {
 	if got := translateToolDeclarations(nil); got != nil {
-		t.Errorf("nil input: expected nil, got %v", got)
+		t.Errorf("nil input: got %v, want nil", got)
 	}
 	if got := translateToolDeclarations([]*genai.Tool{}); got != nil {
-		t.Errorf("empty input: expected nil, got %v", got)
+		t.Errorf("empty input: got %v, want nil", got)
 	}
 	// Tool with no declarations also yields nil.
 	if got := translateToolDeclarations([]*genai.Tool{{}}); got != nil {
-		t.Errorf("empty declarations: expected nil, got %v", got)
+		t.Errorf("empty declarations: got %v, want nil", got)
 	}
 }
 
@@ -235,12 +235,12 @@ func TestToolCallsToFunctionCalls(t *testing.T) {
 	parts := toolCallsToFunctionCalls(toolCalls)
 
 	if len(parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(parts))
+		t.Fatalf("got %d parts, want 1", len(parts))
 	}
 
 	fc := parts[0].FunctionCall
 	if fc == nil {
-		t.Fatal("expected FunctionCall to be set")
+		t.Fatal("got nil FunctionCall, want non-nil")
 	}
 	if fc.ID != "call_xyz" {
 		t.Errorf("ID: got %q, want %q", fc.ID, "call_xyz")
@@ -278,21 +278,21 @@ func TestToolCallsToFunctionCalls_Parallel(t *testing.T) {
 	parts := toolCallsToFunctionCalls(toolCalls)
 
 	if len(parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(parts))
+		t.Fatalf("got %d parts, want 2", len(parts))
 	}
 
 	ids := map[string]bool{}
 	for _, p := range parts {
 		if p.FunctionCall == nil {
-			t.Fatal("expected FunctionCall to be set on all parts")
+			t.Fatal("got nil FunctionCall on some part, want non-nil on all")
 		}
 		ids[p.FunctionCall.ID] = true
 	}
 	if !ids["call_1"] {
-		t.Error("expected call_1 in results")
+		t.Errorf("got call_1 not in results, want it present")
 	}
 	if !ids["call_2"] {
-		t.Error("expected call_2 in results")
+		t.Errorf("got call_2 not in results, want it present")
 	}
 }
 
@@ -332,7 +332,7 @@ func TestToolCallsToFunctionCalls_InvalidJSON(t *testing.T) {
 
 	// The invalid entry should be skipped; only the two valid ones remain.
 	if len(parts) != 2 {
-		t.Fatalf("expected 2 parts (invalid skipped), got %d", len(parts))
+		t.Fatalf("got %d parts (invalid skipped), want 2", len(parts))
 	}
 
 	if parts[0].FunctionCall.ID != "call_good" {

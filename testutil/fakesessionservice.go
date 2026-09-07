@@ -13,7 +13,8 @@ import (
 var _ session.Service = (*FakeSessionService)(nil)
 
 // FakeSessionService implements session.Service for testing.
-// It wraps an in-memory store and records all calls for assertions.
+// It wraps an in-memory store and records Create, Get, AppendEvent, and
+// Delete calls for assertions.
 //
 // Thread-safe.
 type FakeSessionService struct {

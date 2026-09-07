@@ -1,8 +1,10 @@
-package eval
+package eval_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestPrompts_HavePlaceholders(t *testing.T) {
@@ -11,13 +13,13 @@ func TestPrompts_HavePlaceholders(t *testing.T) {
 		prompt       string
 		placeholders []string
 	}{
-		{"FinalResponseMatchV2Prompt", FinalResponseMatchV2Prompt, []string{"{prompt}", "{response}", "{golden_response}"}},
-		{"RubricBasedFinalResponseQualityV1Prompt", RubricBasedFinalResponseQualityV1Prompt, []string{"{user_prompt}", "{response_steps}", "{final_answer}", "{tool_declarations}", "{properties}"}},
-		{"RubricBasedToolUseQualityV1Prompt", RubricBasedToolUseQualityV1Prompt, []string{"{user_prompt}", "{tool_usage}", "{tool_declarations}", "{properties}"}},
-		{"RubricBasedMultiTurnTrajectoryPrompt", RubricBasedMultiTurnTrajectoryPrompt, []string{"{user_agent_dialogue}", "{agent_instructions}", "{agent_tool_definitions}", "{properties}"}},
-		{"HallucinationSegmenterPrompt", HallucinationSegmenterPrompt, []string{"{response}"}},
-		{"HallucinationValidatorPrompt", HallucinationValidatorPrompt, []string{"{sentences}", "{context}"}},
-		{"PerTurnUserSimulatorQualityPrompt", PerTurnUserSimulatorQualityPrompt, []string{"{conversation_plan}", "{conversation_history}", "{generated_user_response}", "{stop_signal}"}},
+		{"FinalResponseMatchV2Prompt", eval.FinalResponseMatchV2Prompt, []string{"{prompt}", "{response}", "{golden_response}"}},
+		{"RubricBasedFinalResponseQualityV1Prompt", eval.RubricBasedFinalResponseQualityV1Prompt, []string{"{user_prompt}", "{response_steps}", "{final_answer}", "{tool_declarations}", "{properties}"}},
+		{"RubricBasedToolUseQualityV1Prompt", eval.RubricBasedToolUseQualityV1Prompt, []string{"{user_prompt}", "{tool_usage}", "{tool_declarations}", "{properties}"}},
+		{"RubricBasedMultiTurnTrajectoryPrompt", eval.RubricBasedMultiTurnTrajectoryPrompt, []string{"{user_agent_dialogue}", "{agent_instructions}", "{agent_tool_definitions}", "{properties}"}},
+		{"HallucinationSegmenterPrompt", eval.HallucinationSegmenterPrompt, []string{"{response}"}},
+		{"HallucinationValidatorPrompt", eval.HallucinationValidatorPrompt, []string{"{sentences}", "{context}"}},
+		{"PerTurnUserSimulatorQualityPrompt", eval.PerTurnUserSimulatorQualityPrompt, []string{"{conversation_plan}", "{conversation_history}", "{generated_user_response}", "{stop_signal}"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,13 +34,13 @@ func TestPrompts_HavePlaceholders(t *testing.T) {
 
 func TestPrompts_NotEmpty(t *testing.T) {
 	prompts := map[string]string{
-		"FinalResponseMatchV2Prompt":              FinalResponseMatchV2Prompt,
-		"RubricBasedFinalResponseQualityV1Prompt": RubricBasedFinalResponseQualityV1Prompt,
-		"RubricBasedToolUseQualityV1Prompt":       RubricBasedToolUseQualityV1Prompt,
-		"RubricBasedMultiTurnTrajectoryPrompt":    RubricBasedMultiTurnTrajectoryPrompt,
-		"HallucinationSegmenterPrompt":            HallucinationSegmenterPrompt,
-		"HallucinationValidatorPrompt":            HallucinationValidatorPrompt,
-		"PerTurnUserSimulatorQualityPrompt":       PerTurnUserSimulatorQualityPrompt,
+		"FinalResponseMatchV2Prompt":              eval.FinalResponseMatchV2Prompt,
+		"RubricBasedFinalResponseQualityV1Prompt": eval.RubricBasedFinalResponseQualityV1Prompt,
+		"RubricBasedToolUseQualityV1Prompt":       eval.RubricBasedToolUseQualityV1Prompt,
+		"RubricBasedMultiTurnTrajectoryPrompt":    eval.RubricBasedMultiTurnTrajectoryPrompt,
+		"HallucinationSegmenterPrompt":            eval.HallucinationSegmenterPrompt,
+		"HallucinationValidatorPrompt":            eval.HallucinationValidatorPrompt,
+		"PerTurnUserSimulatorQualityPrompt":       eval.PerTurnUserSimulatorQualityPrompt,
 	}
 	for name, prompt := range prompts {
 		if len(strings.TrimSpace(prompt)) == 0 {

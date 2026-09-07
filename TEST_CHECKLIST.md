@@ -2,7 +2,7 @@
 
 A checklist for ensuring tests in this codebase are high quality and non-redundant. Run it against new and existing tests before merging.
 
-Grounded in the [Go Wiki: Test Comments](https://go.dev/wiki/TestComments), [TableDrivenTests](https://go.dev/wiki/TableDrivenTests), [Code Review Comments](https://go.dev/wiki/CodeReviewComments), the [`testing` package docs](https://pkg.go.dev/testing), Go 1.24-1.26 release notes (`t.Chdir`, `testing.B.Loop`, `errors.AsType`), and this repo's `AGENTS.md` conventions.
+Grounded in the [Go Wiki: Test Comments](https://go.dev/wiki/TestComments), [TableDrivenTests](https://go.dev/wiki/TableDrivenTests), [Code Review Comments](https://go.dev/wiki/CodeReviewComments), the [`testing` package docs](https://pkg.go.dev/testing), Go 1.24-1.27 release notes (`t.Chdir`, `testing.B.Loop`, `errors.AsType`), and this repo's `AGENTS.md` conventions.
 
 ## 1. Structure & Organization
 

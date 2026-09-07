@@ -15,7 +15,7 @@ import (
 func TestClientToolset_Name(t *testing.T) {
 	ts := aguiadk.NewClientToolset()
 	if ts.Name() == "" {
-		t.Error("expected non-empty name")
+		t.Error("got empty name, want non-empty")
 	}
 }
 
@@ -28,7 +28,7 @@ func TestClientToolset_ToolsEmptyContext(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(tools) != 0 {
-		t.Errorf("expected 0 tools, got %d", len(tools))
+		t.Errorf("got %d tools, want 0", len(tools))
 	}
 }
 
@@ -66,13 +66,13 @@ func TestClientToolset_ToolsWithClientTools(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(tools))
+		t.Fatalf("got %d tools, want 2", len(tools))
 	}
 	if tools[0].Name() != "search" {
-		t.Errorf("tool 0: expected name %q, got %q", "search", tools[0].Name())
+		t.Errorf("tool 0: got %q, want %q", tools[0].Name(), "search")
 	}
 	if tools[1].Name() != "navigate" {
-		t.Errorf("tool 1: expected name %q, got %q", "navigate", tools[1].Name())
+		t.Errorf("tool 1: got %q, want %q", tools[1].Name(), "navigate")
 	}
 }
 
@@ -96,7 +96,7 @@ func TestClientToolset_NextRunIsLongRunning(t *testing.T) {
 		t.Fatal("no tools returned")
 	}
 	if !tools[0].IsLongRunning() {
-		t.Error("expected NextRun tool to be long-running")
+		t.Error("got NextRun tool not long-running, want long-running")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestClientToolset_InlineNotLongRunning(t *testing.T) {
 		t.Fatal("no tools returned")
 	}
 	if tools[0].IsLongRunning() {
-		t.Error("expected Inline tool to NOT be long-running")
+		t.Error("got Inline tool long-running, want NOT long-running")
 	}
 }
 

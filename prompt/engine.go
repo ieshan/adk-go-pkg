@@ -2,9 +2,16 @@ package prompt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"text/template"
 )
+
+// ErrTemplateParse is returned when parsing a template fails.
+var ErrTemplateParse = errors.New("prompt: parse template")
+
+// ErrTemplateExecute is returned when executing a template fails.
+var ErrTemplateExecute = errors.New("prompt: execute template")
 
 // TemplateEngine parses and executes text/template prompts.
 //
@@ -68,7 +75,7 @@ func (t *Template) Name() string {
 func (t *Template) Execute(data *TemplateData) (string, error) {
 	var buf bytes.Buffer
 	if err := t.tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execute template %q: %w", t.tmpl.Name(), err)
+		return "", fmt.Errorf("%w %q: %w", ErrTemplateExecute, t.tmpl.Name(), err)
 	}
 	return buf.String(), nil
 }
@@ -77,7 +84,7 @@ func (t *Template) Execute(data *TemplateData) (string, error) {
 func (e *TemplateEngine) Parse(name, text string) (*Template, error) {
 	tmpl, err := template.New(name).Funcs(e.funcs).Parse(text)
 	if err != nil {
-		return nil, fmt.Errorf("parse template %q: %w", name, err)
+		return nil, fmt.Errorf("%w %q: %w", ErrTemplateParse, name, err)
 	}
 	return &Template{tmpl: tmpl}, nil
 }

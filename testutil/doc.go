@@ -13,8 +13,10 @@
 //   - FakeEmbedding: generates deterministic embedding vectors for testing semantic search
 //   - RunnerBuilder: constructs runner.Runner with all fakes pre-wired
 //
-// All fakes support the builder pattern for configuration, record calls for
-// assertions, and are thread-safe.
+// Most fakes support the builder pattern for configuration and record calls
+// for assertions; all are thread-safe. Simple delegating wrappers
+// (FakeArtifacts, FakeMemory) are immutable after construction and do not
+// record calls.
 //
 // # Quick Start
 //
@@ -23,7 +25,7 @@
 //	llm := testutil.NewFakeLLM(testutil.NewTextResponse(`{"steps":[...]}`))
 //	planner := myplanner.New(myplanner.Config{Model: llm})
 //	plan, err := planner.GeneratePlan(ctx, req)
-//	require.Len(t, llm.Calls, 1)
+//	require.Equal(t, 1, llm.CallCount())
 //
 // Run an agent end-to-end:
 //

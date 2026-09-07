@@ -7,9 +7,9 @@ import (
 )
 
 // InferCapabilities inspects an ADK agent and bridge configuration to produce
-// an AgentCapabilities descriptor for AG-UI discovery. It checks the
-// agent's sub-agent tree, the bridge's client-tool configuration, and the
-// HITL/interrupt configuration to produce an accurate capabilities snapshot.
+// an AgentCapabilities descriptor for AG-UI discovery. It checks if the agent
+// has immediate sub-agents, the bridge's client-tool configuration, and the
+// client-tool mode to produce an accurate capabilities snapshot.
 func InferCapabilities(a agent.Agent, cfg Config) *agui.AgentCapabilities {
 	if a == nil {
 		return nil
@@ -34,10 +34,12 @@ func InferCapabilities(a agent.Agent, cfg Config) *agui.AgentCapabilities {
 		Tools: &agui.ToolCapabilities{
 			Supported:   true,
 			ServerTools: true,
+			Streaming:   true,
 		},
 		Reasoning: &agui.ReasoningCapabilities{
 			Supported: true,
 			Streaming: true,
+			Encrypted: true,
 		},
 	}
 
@@ -46,17 +48,16 @@ func InferCapabilities(a agent.Agent, cfg Config) *agui.AgentCapabilities {
 		caps.Tools.ClientTools = true
 	}
 
-	// HITL / interrupt support: the bridge supports interrupts when client
-	// tools are configured in hand-back mode, or when a custom approval mode
-	// function is configured (which implies the approval flow is active).
-	if cfg.ClientTools != nil && cfg.ClientTools.Mode == ClientToolModeHandBack {
-		caps.HumanInTheLoop = &agui.HumanInTheLoopCapabilities{Interrupts: true}
-	} else if cfg.ApprovalModeFunc != nil {
+	// HITL / interrupt support: NextRun mode emits AG-UI interrupts when
+	// approval is required (ApprovalModeFunc is nil or returns false).
+	// HandBack mode does a plain RUN_FINISHED (no interrupt protocol).
+	// Inline mode handles results within the SSE connection (no interrupt).
+	if cfg.ClientTools != nil && cfg.ClientTools.Mode == ClientToolModeNextRun {
 		caps.HumanInTheLoop = &agui.HumanInTheLoopCapabilities{Interrupts: true}
 	}
 
-	// Sub-agent support: if the agent has sub-agents, advertise activity
-	// tracking.
+	// Sub-agent support: if the agent has immediate sub-agents, advertise
+	// activity tracking.
 	if len(a.SubAgents()) > 0 {
 		caps.Activities = &agui.ActivityCapabilities{
 			Snapshots: true,

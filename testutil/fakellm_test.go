@@ -1,4 +1,4 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 
 	"iter"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/model"
 )
 
 func TestFakeLLM_Name(t *testing.T) {
-	f := NewFakeLLM()
+	f := testutil.NewFakeLLM()
 	if got := f.Name(); got != "fake-llm" {
 		t.Errorf("Name() = %q, want %q", got, "fake-llm")
 	}
@@ -23,16 +24,16 @@ func TestFakeLLM_Name(t *testing.T) {
 }
 
 func TestFakeLLM_NonStreaming(t *testing.T) {
-	resp1 := NewTextResponse("hello")
-	resp2 := NewTextResponse("world")
-	f := NewFakeLLM(resp1, resp2)
+	resp1 := testutil.NewTextResponse("hello")
+	resp2 := testutil.NewTextResponse("world")
+	f := testutil.NewFakeLLM(resp1, resp2)
 
-	req := NewLLMRequest(NewUserContent("hi"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 
 	// First call should return resp1.
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	if len(got) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(got))
+		t.Fatalf("got %d responses, want 1", len(got))
 	}
 	if got[0].Content.Parts[0].Text != "hello" {
 		t.Errorf("first call text = %q, want %q", got[0].Content.Parts[0].Text, "hello")
@@ -44,7 +45,7 @@ func TestFakeLLM_NonStreaming(t *testing.T) {
 	// Second call should return resp2.
 	got = collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	if len(got) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(got))
+		t.Fatalf("got %d responses, want 1", len(got))
 	}
 	if got[0].Content.Parts[0].Text != "world" {
 		t.Errorf("second call text = %q, want %q", got[0].Content.Parts[0].Text, "world")
@@ -61,16 +62,16 @@ func TestFakeLLM_NonStreaming(t *testing.T) {
 }
 
 func TestFakeLLM_Streaming(t *testing.T) {
-	resp1 := NewTextResponse("chunk1")
-	resp2 := NewTextResponse("chunk2")
-	resp3 := NewTextResponse("chunk3")
-	f := NewFakeLLM(resp1, resp2, resp3)
+	resp1 := testutil.NewTextResponse("chunk1")
+	resp2 := testutil.NewTextResponse("chunk2")
+	resp3 := testutil.NewTextResponse("chunk3")
+	f := testutil.NewFakeLLM(resp1, resp2, resp3)
 
-	req := NewLLMRequest(NewUserContent("hi"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, true))
 
 	if len(got) != 3 {
-		t.Fatalf("expected 3 responses, got %d", len(got))
+		t.Fatalf("got %d responses, want 3", len(got))
 	}
 
 	// First two should be partial.
@@ -96,13 +97,61 @@ func TestFakeLLM_Streaming(t *testing.T) {
 	}
 }
 
+func TestFakeLLM_StreamingQueueAdvance(t *testing.T) {
+	t.Parallel()
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("chunk1"), testutil.NewTextResponse("chunk2"), testutil.NewTextResponse("chunk3"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
+
+	// First call (idx=0): should yield all 3 responses.
+	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, true))
+	if len(got) != 3 {
+		t.Fatalf("first call: got %d responses, want 3", len(got))
+	}
+	if got[0].Content.Parts[0].Text != "chunk1" {
+		t.Errorf("first call [0] text = %q, want %q", got[0].Content.Parts[0].Text, "chunk1")
+	}
+	if got[1].Content.Parts[0].Text != "chunk2" {
+		t.Errorf("first call [1] text = %q, want %q", got[1].Content.Parts[0].Text, "chunk2")
+	}
+	if got[2].Content.Parts[0].Text != "chunk3" {
+		t.Errorf("first call [2] text = %q, want %q", got[2].Content.Parts[0].Text, "chunk3")
+	}
+	if !got[0].Partial || got[0].TurnComplete {
+		t.Error("first call [0]: Partial should be true, TurnComplete should be false")
+	}
+	if !got[1].Partial || got[1].TurnComplete {
+		t.Error("first call [1]: Partial should be true, TurnComplete should be false")
+	}
+	if got[2].Partial || !got[2].TurnComplete {
+		t.Error("first call [2]: Partial should be false, TurnComplete should be true")
+	}
+
+	// Second call (idx=1): should yield responses[1:] = 2 responses.
+	got = collectLLMResponses(t, f.GenerateContent(context.Background(), req, true))
+	if len(got) != 2 {
+		t.Fatalf("second call: got %d responses, want 2", len(got))
+	}
+	if got[0].Content.Parts[0].Text != "chunk2" {
+		t.Errorf("second call [0] text = %q, want %q", got[0].Content.Parts[0].Text, "chunk2")
+	}
+	if got[1].Content.Parts[0].Text != "chunk3" {
+		t.Errorf("second call [1] text = %q, want %q", got[1].Content.Parts[0].Text, "chunk3")
+	}
+	if !got[0].Partial || got[0].TurnComplete {
+		t.Error("second call [0]: Partial should be true, TurnComplete should be false")
+	}
+	if got[1].Partial || !got[1].TurnComplete {
+		t.Error("second call [1]: Partial should be false, TurnComplete should be true")
+	}
+}
+
 func TestFakeLLM_SingleResponseStreaming(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("only"))
-	req := NewLLMRequest(NewUserContent("hi"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("only"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, true))
 
 	if len(got) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(got))
+		t.Fatalf("got %d responses, want 1", len(got))
 	}
 	if got[0].Partial {
 		t.Error("single response: Partial should be false")
@@ -113,10 +162,10 @@ func TestFakeLLM_SingleResponseStreaming(t *testing.T) {
 }
 
 func TestFakeLLM_ErrorInjection(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("ok"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("ok"))
 	f.SetError(errors.New("boom"))
 
-	req := NewLLMRequest(NewUserContent("hi"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	var gotErr error
 	for _, err := range f.GenerateContent(context.Background(), req, false) {
 		if err != nil {
@@ -124,22 +173,22 @@ func TestFakeLLM_ErrorInjection(t *testing.T) {
 		}
 	}
 	if gotErr == nil || gotErr.Error() != "boom" {
-		t.Errorf("expected error 'boom', got %v", gotErr)
+		t.Errorf("got %v, want error 'boom'", gotErr)
 	}
 
 	// Error persists until cleared.
 	f.ClearError()
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	if len(got) != 1 {
-		t.Fatalf("expected 1 response after ClearError, got %d", len(got))
+		t.Fatalf("got %d responses after ClearError, want 1", len(got))
 	}
 }
 
 func TestFakeLLM_CallRecording(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("ok"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("ok"))
 
-	req1 := NewLLMRequest(NewUserContent("first"))
-	req2 := NewLLMRequest(NewUserContent("second"))
+	req1 := testutil.NewLLMRequest(testutil.NewUserContent("first"))
+	req2 := testutil.NewLLMRequest(testutil.NewUserContent("second"))
 
 	collectLLMResponses(t, f.GenerateContent(context.Background(), req1, false))
 	collectLLMResponses(t, f.GenerateContent(context.Background(), req2, false))
@@ -170,10 +219,10 @@ func TestFakeLLM_CallRecording(t *testing.T) {
 }
 
 func TestFakeLLM_AddResponse(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("first"))
-	f.AddResponse(NewTextResponse("second"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("first"))
+	f.AddResponse(testutil.NewTextResponse("second"))
 
-	req := NewLLMRequest(NewUserContent("hi"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 
 	collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
@@ -186,8 +235,8 @@ func TestFakeLLM_AddResponse(t *testing.T) {
 }
 
 func TestFakeLLM_Reset(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("ok"))
-	req := NewLLMRequest(NewUserContent("hi"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("ok"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 
 	f.Reset()
@@ -200,24 +249,24 @@ func TestFakeLLM_Reset(t *testing.T) {
 }
 
 func TestFakeLLM_ContextCancellation(t *testing.T) {
-	f := NewFakeLLM(NewTextResponse("a"), NewTextResponse("b"))
+	f := testutil.NewFakeLLM(testutil.NewTextResponse("a"), testutil.NewTextResponse("b"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	req := NewLLMRequest(NewUserContent("hi"))
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	got := collectLLMResponses(t, f.GenerateContent(ctx, req, true))
 	// With a cancelled context, no responses should be yielded.
 	if len(got) != 0 {
-		t.Errorf("expected 0 responses with cancelled context, got %d", len(got))
+		t.Errorf("got %d responses with cancelled context, want 0", len(got))
 	}
 }
 
 func TestFakeLLM_DefaultResponse(t *testing.T) {
-	f := NewFakeLLM() // no responses
-	req := NewLLMRequest(NewUserContent("hi"))
+	f := testutil.NewFakeLLM() // no responses
+	req := testutil.NewLLMRequest(testutil.NewUserContent("hi"))
 	got := collectLLMResponses(t, f.GenerateContent(context.Background(), req, false))
 	if len(got) != 1 {
-		t.Fatalf("expected 1 default response, got %d", len(got))
+		t.Fatalf("got %d default responses, want 1", len(got))
 	}
 }
 

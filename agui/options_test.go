@@ -1,6 +1,7 @@
 package agui_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -10,9 +11,9 @@ import (
 func TestConfig_NilAgent(t *testing.T) {
 	_, err := agui.Handler(agui.Config{})
 	if err == nil {
-		t.Fatal("expected error for nil Agent")
+		t.Fatal("got nil error, want error for nil Agent")
 	}
-	if err.Error() != "agui: Agent is required" {
+	if !errors.Is(err, agui.ErrAgentRequired) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -30,7 +31,7 @@ func TestConfig_Defaults(t *testing.T) {
 			t.Fatal(err)
 		}
 		if h == nil {
-			t.Fatal("expected non-nil handler")
+			t.Fatal("got nil handler, want non-nil")
 		}
 	})
 
@@ -45,7 +46,7 @@ func TestConfig_Defaults(t *testing.T) {
 			t.Fatal(err)
 		}
 		if h == nil {
-			t.Fatal("expected non-nil handler")
+			t.Fatal("got nil handler, want non-nil")
 		}
 	})
 }

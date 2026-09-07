@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 	"google.golang.org/genai"
 )
+
+// ErrMissingPathConfig is returned when the filesystem skill factory is
+// created without the required "path" config key.
+var ErrMissingPathConfig = errors.New("filesystem skill factory requires 'path' config key")
 
 // ModelFactory is a constructor function that receives a config map and returns
 // an [model.LLM]. The map always contains at least the key "model" set to the
@@ -135,7 +140,7 @@ func NewRegistry() *Registry {
 	r.RegisterSkill("filesystem", func(cfg map[string]any) (skill.Source, error) {
 		path, ok := cfg["path"].(string)
 		if !ok {
-			return nil, fmt.Errorf("filesystem skill factory requires 'path' config key")
+			return nil, ErrMissingPathConfig
 		}
 		absPath, err := filepath.Abs(path)
 		if err != nil {

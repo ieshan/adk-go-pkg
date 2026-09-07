@@ -28,7 +28,7 @@ func TestMCPAppsMiddleware_Passthrough(t *testing.T) {
 		t.Error("base agent was not called")
 	}
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 }
 
@@ -55,7 +55,7 @@ func TestMCPAppsMiddleware_ProxiedRequest_UnknownServer(t *testing.T) {
 
 	// Should get RUN_STARTED + RUN_FINISHED (with error result, not RUN_ERROR)
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 	if evs[0].Type() != events.EventTypeRunStarted {
 		t.Errorf("event 0: got %s, want RUN_STARTED", evs[0].Type())
@@ -82,7 +82,7 @@ func TestMCPAppsMiddleware_NoPendingUITools(t *testing.T) {
 
 	// Should get all 5 events forwarded
 	if len(evs) != 5 {
-		t.Fatalf("expected 5 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 5", len(evs))
 	}
 	if evs[4].Type() != events.EventTypeRunFinished {
 		t.Errorf("last event: got %s, want RUN_FINISHED", evs[4].Type())
@@ -102,7 +102,7 @@ func TestExtractProxiedRequest(t *testing.T) {
 		}
 		req, ok := agui.ExtractProxiedRequestForTest(input)
 		if !ok {
-			t.Fatal("expected proxied request to be found")
+			t.Fatal("got no proxied request, want it to be found")
 		}
 		if req.ServerID != "srv1" {
 			t.Errorf("ServerID: got %q, want srv1", req.ServerID)
@@ -118,7 +118,7 @@ func TestExtractProxiedRequest(t *testing.T) {
 		}
 		_, ok := agui.ExtractProxiedRequestForTest(input)
 		if ok {
-			t.Error("expected no proxied request")
+			t.Error("got proxied request, want none")
 		}
 	})
 
@@ -126,7 +126,7 @@ func TestExtractProxiedRequest(t *testing.T) {
 		input := types.RunAgentInput{}
 		_, ok := agui.ExtractProxiedRequestForTest(input)
 		if ok {
-			t.Error("expected no proxied request with nil ForwardedProps")
+			t.Error("got proxied request, want none (nil ForwardedProps)")
 		}
 	})
 }
@@ -145,7 +145,7 @@ func TestGetPendingUIToolCalls(t *testing.T) {
 		}
 		pending := agui.GetPendingUIToolCallsForTest(msgs, uiToolMap)
 		if len(pending) != 1 {
-			t.Fatalf("expected 1 pending call, got %d", len(pending))
+			t.Fatalf("got %d pending calls, want 1", len(pending))
 		}
 		if pending[0].ID != "tc1" {
 			t.Errorf("pending call ID: got %s, want tc1", pending[0].ID)
@@ -162,7 +162,7 @@ func TestGetPendingUIToolCalls(t *testing.T) {
 		}
 		pending := agui.GetPendingUIToolCallsForTest(msgs, uiToolMap)
 		if len(pending) != 0 {
-			t.Fatalf("expected 0 pending calls, got %d", len(pending))
+			t.Fatalf("got %d pending calls, want 0", len(pending))
 		}
 	})
 
@@ -175,7 +175,7 @@ func TestGetPendingUIToolCalls(t *testing.T) {
 		}
 		pending := agui.GetPendingUIToolCallsForTest(msgs, uiToolMap)
 		if len(pending) != 0 {
-			t.Fatalf("expected 0 pending calls for non-UI tool, got %d", len(pending))
+			t.Fatalf("got %d pending calls, want 0 (non-UI tool)", len(pending))
 		}
 	})
 }
@@ -202,7 +202,7 @@ func TestMCPAppsMiddleware_ProxiedRequest_Ping(t *testing.T) {
 	})
 
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 	if evs[0].Type() != events.EventTypeRunStarted {
 		t.Errorf("event 0: got %s, want RUN_STARTED", evs[0].Type())
@@ -238,7 +238,7 @@ func TestMCPAppsMiddleware_ProxiedRequest_ToolsCall(t *testing.T) {
 	})
 
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 	if evs[0].Type() != events.EventTypeRunStarted {
 		t.Errorf("event 0: got %s, want RUN_STARTED", evs[0].Type())
@@ -275,7 +275,7 @@ func TestMCPAppsMiddleware_UIToolInjection(t *testing.T) {
 
 	// Should have original + 1 UI tool (plain_tool is not UI-enabled)
 	if len(seenTools) != 2 {
-		t.Fatalf("expected 2 tools, got %d: %+v", len(seenTools), seenTools)
+		t.Fatalf("got %d tools, want 2: %+v", len(seenTools), seenTools)
 	}
 	if seenTools[0].Name != "existing" {
 		t.Errorf("tool 0: got %s, want existing", seenTools[0].Name)
@@ -324,10 +324,10 @@ func TestMCPAppsMiddleware_PendingUIToolExecution(t *testing.T) {
 		}
 	}
 	if !hasToolCallResult {
-		t.Error("expected TOOL_CALL_RESULT event")
+		t.Error("got no TOOL_CALL_RESULT event, want one")
 	}
 	if !hasActivitySnapshot {
-		t.Error("expected ACTIVITY_SNAPSHOT event")
+		t.Error("got no ACTIVITY_SNAPSHOT event, want one")
 	}
 	if len(evs) == 0 {
 		t.Fatal("no events collected")
@@ -372,7 +372,7 @@ func TestMCPAppsMiddleware_ActivitySnapshotContent(t *testing.T) {
 		}
 	}
 	if activity == nil {
-		t.Fatal("expected ACTIVITY_SNAPSHOT event")
+		t.Fatal("got no ACTIVITY_SNAPSHOT event, want one")
 	}
 	if activity.ActivityType != "mcp-apps" {
 		t.Errorf("activityType: got %q, want mcp-apps", activity.ActivityType)
@@ -391,7 +391,7 @@ func TestMCPAppsMiddleware_ActivitySnapshotContent(t *testing.T) {
 		t.Error("serverHash should not be empty")
 	}
 	if activity.Replace == nil || !*activity.Replace {
-		t.Error("expected replace=true on ACTIVITY_SNAPSHOT")
+		t.Error("got replace=false, want replace=true on ACTIVITY_SNAPSHOT")
 	}
 }
 
@@ -423,7 +423,7 @@ func TestMCPAppsMiddleware_FailedServer(t *testing.T) {
 
 	// Should have original + 1 UI tool from the good server (bad server skipped)
 	if len(seenTools) != 2 {
-		t.Fatalf("expected 2 tools (original + UI tool from good server), got %d: %+v", len(seenTools), seenTools)
+		t.Fatalf("got %d tools, want 2 (original + UI tool from good server): %+v", len(seenTools), seenTools)
 	}
 	if seenTools[0].Name != "existing" {
 		t.Errorf("tool 0: got %s, want existing", seenTools[0].Name)

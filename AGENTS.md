@@ -1,7 +1,7 @@
 # adk-go-pkg — AGENTS.md
 
 > Extension library for Google's ADK-Go (`google.golang.org/adk/v2`).
-> Go 1.26+ with `iter.Seq2`, range-over-func, and `google.golang.org/genai` types.
+> Go 1.27+ with `iter.Seq2`, range-over-func, and `google.golang.org/genai` types.
 > `MEMORY.md` contains project-agnostic Go best practices — read it alongside this file.
 
 ## Scope
@@ -56,7 +56,7 @@ go fmt ./...
 # Vulnerability scan (via gocheck — see "Code quality checks" below)
 gocheck govulncheck ./...
 
-# Modernize code to latest idioms (Go 1.26)
+# Modernize code to latest idioms (Go 1.27)
 go fix ./...
 ```
 
@@ -140,7 +140,7 @@ Follow `MEMORY.md` for project-agnostic Go best practices. Key rules:
 
 ### Go language features (1.26)
 
-This project uses Go 1.26 features. Use them where appropriate:
+This project uses Go 1.27 features. Use them where appropriate:
 
 - `iter.Seq2` and range-over-func for streaming (ADK-Go model returns `iter.Seq2[*LLMResponse, error]`).
 - `min`, `max`, `clear` built-ins.

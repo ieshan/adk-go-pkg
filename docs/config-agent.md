@@ -280,8 +280,8 @@ SKILL.md files. Each skill is a directory containing:
 type SkillsetRef struct {
     Name              string         // Factory name (e.g., "filesystem")
     Config            map[string]any // Factory-specific config
-    Names             []string       // Optional: specific skills to load (default: all)
     Preload           string         // "", "complete", or "frontmatters"
+    Names             []string       // Optional: specific skills to load (default: all)
     SystemInstruction string         // Optional custom instruction
 }
 ```
@@ -423,7 +423,7 @@ func Parse(data []byte, format string) (*AppConfig, error)
 ```
 
 Parses raw bytes. `format` must be `"json"` or `"yaml"`.
-Both formats validate type-specific field restrictions — setting an LLM-only field on a non-LLM agent type returns an error.
+Both formats validate type-specific field restrictions — setting an LLM-only field (`before_model_callbacks`, `after_model_callbacks`, `before_tool_callbacks`, `after_tool_callbacks`, `on_model_error_callbacks`, `on_tool_error_callbacks`) on a non-LLM agent type returns an error. Agent-level callbacks (`before_agent_callbacks`, `after_agent_callbacks`) are accepted for all agent types.
 
 ### BuildWithPath
 
@@ -470,6 +470,31 @@ Recognised keys and their target fields:
 | `candidateCount` | `CandidateCount` | `int32` |
 | `stopSequences` | `StopSequences` | `[]string` |
 | `responseMimeType` | `ResponseMIMEType` | `string` |
+| `responseLogprobs` | `ResponseLogprobs` | `bool` |
+| `logprobs` | `Logprobs` | `*int32` |
+| `presencePenalty` | `PresencePenalty` | `*float32` |
+| `frequencyPenalty` | `FrequencyPenalty` | `*float32` |
+| `seed` | `Seed` | `*int32` |
+| `audioTimestamp` | `AudioTimestamp` | `bool` |
+| `cachedContent` | `CachedContent` | `string` |
+| `enableEnhancedCivicAnswers` | `EnableEnhancedCivicAnswers` | `*bool` |
+| `serviceTier` | `ServiceTier` | `genai.ServiceTier` |
+| `mediaResolution` | `MediaResolution` | `genai.MediaResolution` |
+| `responseModalities` | `ResponseModalities` | `[]string` |
+| `labels` | `Labels` | `map[string]string` |
+| `responseSchema` | `ResponseSchema` | `*genai.Schema` |
+| `responseJsonSchema` | `ResponseJsonSchema` | `any` |
+| `safetySettings` | `SafetySettings` | `[]genai.SafetySetting` |
+| `tools` | `Tools` | `[]genai.Tool` |
+| `toolConfig` | `ToolConfig` | `*genai.ToolConfig` |
+| `thinkingConfig` | `ThinkingConfig` | `*genai.ThinkingConfig` |
+| `speechConfig` | `SpeechConfig` | `*genai.SpeechConfig` |
+| `imageConfig` | `ImageConfig` | `*genai.ImageConfig` |
+| `routingConfig` | `RoutingConfig` | `*genai.RoutingConfig` |
+| `modelSelectionConfig` | `ModelSelectionConfig` | `*genai.ModelSelectionConfig` |
+| `modelArmorConfig` | `ModelArmorConfig` | `*genai.ModelArmorConfig` |
+| `httpOptions` | `HTTPOptions` | `*genai.HTTPOptions` |
+| `systemInstruction` | `SystemInstruction` | `*genai.Content` |
 
 Unknown keys are silently ignored. A `nil` map returns an empty config without error.
 
@@ -615,7 +640,20 @@ The following types are parsed from config and returned by `BuildAppWithPath`/`L
 
 - `RunConfig` — runtime behavior configuration (streaming mode, save live blob, custom metadata)
 - `LiveRunConfig` — live run configuration (max LLM calls, etc.)
-- `ContextCacheConfig` — context caching intervals and TTL
+- `ContextCacheConfig` — context caching intervals, TTL, and minimum token threshold
+- `CustomMetadata` — parsed from config but not propagated to `agent.RunConfig`
+
+### StreamingMode
+
+The `streaming_mode` field controls how the ADK runner streams responses:
+
+| Value | Description |
+|-------|-------------|
+| `none` | No streaming (default) |
+| `sse` | Server-sent events streaming |
+| `bidi` | Accepted by Parse but rejected by Build — ADK-Go does not support bidirectional streaming |
+
+`bidi` is kept as a parseable value for forward compatibility. `BuildAppWithPath` returns an error if `streaming_mode: bidi` is used.
 
 Programmatic construction with typed configs:
 

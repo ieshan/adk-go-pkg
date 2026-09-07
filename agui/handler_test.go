@@ -95,7 +95,7 @@ func TestHandler_BasicRun(t *testing.T) {
 	body, _ := json.Marshal(input)
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -104,24 +104,24 @@ func TestHandler_BasicRun(t *testing.T) {
 	if resp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("got %d, want 200", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Errorf("expected Content-Type text/event-stream, got %s", ct)
+		t.Errorf("got %s, want Content-Type text/event-stream", ct)
 	}
 
 	eventTypes := parseSSEEvents(t, resp.Body)
 	if len(eventTypes) < 2 {
-		t.Fatalf("expected at least 2 events, got %d", len(eventTypes))
+		t.Fatalf("got %d events, want at least 2", len(eventTypes))
 	}
 	if eventTypes[0] != "RUN_STARTED" {
-		t.Errorf("event 0: expected RUN_STARTED, got %s", eventTypes[0])
+		t.Errorf("event 0: got %s, want RUN_STARTED", eventTypes[0])
 	}
 	if eventTypes[len(eventTypes)-1] != "RUN_FINISHED" {
-		t.Errorf("last event: expected RUN_FINISHED, got %s", eventTypes[len(eventTypes)-1])
+		t.Errorf("last event: got %s, want RUN_FINISHED", eventTypes[len(eventTypes)-1])
 	}
 }
 
@@ -153,13 +153,13 @@ func TestHandler_StreamsTextMessage(t *testing.T) {
 	body, _ := json.Marshal(input)
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp == nil {
 		t.Fatal("nil response")
 	}
@@ -173,11 +173,11 @@ func TestHandler_StreamsTextMessage(t *testing.T) {
 		"RUN_FINISHED",
 	}
 	if len(eventTypes) != len(expected) {
-		t.Fatalf("expected %d events, got %d: %v", len(expected), len(eventTypes), eventTypes)
+		t.Fatalf("got %d events, want %d: %v", len(eventTypes), len(expected), eventTypes)
 	}
 	for i, want := range expected {
 		if eventTypes[i] != want {
-			t.Errorf("event %d: expected %s, got %s", i, want, eventTypes[i])
+			t.Errorf("event %d: got %s, want %s", i, eventTypes[i], want)
 		}
 	}
 }
@@ -205,13 +205,13 @@ func TestHandler_RunError(t *testing.T) {
 	body, _ := json.Marshal(input)
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp == nil {
 		t.Fatal("nil response")
 	}
@@ -229,10 +229,10 @@ func TestHandler_RunError(t *testing.T) {
 		}
 	}
 	if !hasRunError {
-		t.Errorf("expected RUN_ERROR event in stream, got: %v", rawEvents)
+		t.Errorf("got %v, want RUN_ERROR event in stream", rawEvents)
 	}
 	if gotErr == nil {
-		t.Error("expected OnError callback to be called")
+		t.Error("got nil from OnError callback, want it to be called")
 	}
 }
 
@@ -247,7 +247,7 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL)
 	if err != nil {
@@ -256,12 +256,12 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	if resp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	// GET / without configured capabilities returns 404 (discovery is
 	// opt-in). Previously returned 405 before capabilities discovery.
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", resp.StatusCode)
+		t.Errorf("got %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -276,26 +276,26 @@ func TestHandler_InvalidBody(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL, "application/json", strings.NewReader("{invalid"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp == nil {
 		t.Fatal("nil response")
 	}
 
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", resp.StatusCode)
+		t.Errorf("got %d, want 400", resp.StatusCode)
 	}
 }
 
 func TestHandler_NilAgent(t *testing.T) {
 	_, err := agui.Handler(agui.Config{})
 	if err == nil {
-		t.Fatal("expected error for nil Agent")
+		t.Fatal("got nil error, want error for nil Agent")
 	}
 }
 
@@ -316,7 +316,7 @@ func TestHandler_CORS(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	t.Run("POST with CORS default", func(t *testing.T) {
 		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
@@ -325,7 +325,7 @@ func TestHandler_CORS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
 			t.Errorf("Allow-Origin = %q, want *", got)
 		}
@@ -337,9 +337,9 @@ func TestHandler_CORS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		if resp.StatusCode != http.StatusNoContent {
-			t.Errorf("expected 204, got %d", resp.StatusCode)
+			t.Errorf("got %d, want 204", resp.StatusCode)
 		}
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
 			t.Errorf("Allow-Origin = %q, want *", got)
@@ -358,7 +358,7 @@ func TestHandler_CORS(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv2 := httptest.NewServer(h2)
-		defer srv2.Close()
+		t.Cleanup(srv2.Close)
 
 		input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
 		body, _ := json.Marshal(input)
@@ -366,7 +366,7 @@ func TestHandler_CORS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://myapp.com" {
 			t.Errorf("Allow-Origin = %q, want https://myapp.com", got)
 		}
@@ -397,7 +397,7 @@ func TestHandler_CORSWithCustomHeaders(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	t.Run("OPTIONS preflight with custom headers", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodOptions, srv.URL, nil)
@@ -406,10 +406,10 @@ func TestHandler_CORSWithCustomHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 
 		if resp.StatusCode != http.StatusNoContent {
-			t.Errorf("expected 204, got %d", resp.StatusCode)
+			t.Errorf("got %d, want 204", resp.StatusCode)
 		}
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
 			t.Errorf("Allow-Origin = %q, want https://app.example.com", got)
@@ -441,7 +441,7 @@ func TestHandler_CORSWithCustomHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
 			t.Errorf("Allow-Origin = %q, want https://app.example.com", got)
@@ -479,7 +479,7 @@ func TestHandler_CORSCredentialsWithWildcardOrigin(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	t.Run("OPTIONS reflects request origin", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodOptions, srv.URL, nil)
@@ -488,20 +488,20 @@ func TestHandler_CORSCredentialsWithWildcardOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 
 		origin := resp.Header.Get("Access-Control-Allow-Origin")
 		if origin == "*" {
 			t.Fatal("W3C CORS violation: Access-Control-Allow-Origin cannot be '*' when Allow-Credentials is true")
 		}
 		if origin != "http://localhost:3000" {
-			t.Errorf("expected origin 'http://localhost:3000', got %q", origin)
+			t.Errorf("got %q, want origin 'http://localhost:3000'", origin)
 		}
 		if resp.Header.Get("Vary") != "Origin" {
-			t.Errorf("expected Vary: Origin header, got %q", resp.Header.Get("Vary"))
+			t.Errorf("got %q, want Vary: Origin header", resp.Header.Get("Vary"))
 		}
 		if resp.Header.Get("Access-Control-Allow-Credentials") != "true" {
-			t.Errorf("expected Allow-Credentials: true")
+			t.Errorf("got %q, want Allow-Credentials: true", resp.Header.Get("Access-Control-Allow-Credentials"))
 		}
 	})
 
@@ -515,14 +515,14 @@ func TestHandler_CORSCredentialsWithWildcardOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 
 		origin := resp.Header.Get("Access-Control-Allow-Origin")
 		if origin == "*" {
 			t.Fatal("W3C CORS violation: Access-Control-Allow-Origin cannot be '*' when Allow-Credentials is true")
 		}
 		if origin != "http://localhost:3000" {
-			t.Errorf("expected origin 'http://localhost:3000', got %q", origin)
+			t.Errorf("got %q, want origin 'http://localhost:3000'", origin)
 		}
 	})
 
@@ -535,19 +535,29 @@ func TestHandler_CORSCredentialsWithWildcardOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
+		t.Cleanup(func() { _ = resp.Body.Close() })
 
 		origin := resp.Header.Get("Access-Control-Allow-Origin")
 		if origin != "*" {
-			t.Errorf("expected wildcard for no-Origin request, got %q", origin)
+			t.Errorf("got %q, want wildcard for no-Origin request", origin)
 		}
 	})
 }
 
 func TestHandler_Keepalive(t *testing.T) {
+	// The agent blocks on a channel until the test signals it to proceed.
+	// This keeps the SSE stream open so the keepalive ticker can fire.
+	// The test reads the stream for a ping, then releases the agent.
+	agentProceed := make(chan struct{})
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		return func(yield func(events.Event, error) bool) {
-			time.Sleep(200 * time.Millisecond)
+			// Block until the test signals us to proceed. The keepalive
+			// ticker should fire while we're blocked here.
+			select {
+			case <-agentProceed:
+			case <-ctx.Done():
+				return
+			}
 			if !yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil) {
 				return
 			}
@@ -564,7 +574,7 @@ func TestHandler_Keepalive(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
 	body, _ := json.Marshal(input)
@@ -584,7 +594,7 @@ func TestHandler_Keepalive(t *testing.T) {
 	if resp == nil {
 		t.Fatal("nil response")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	scanner := bufio.NewScanner(resp.Body)
 	hasPing := false
@@ -592,6 +602,9 @@ func TestHandler_Keepalive(t *testing.T) {
 		line := scanner.Text()
 		if strings.HasPrefix(line, ": ping") {
 			hasPing = true
+			// Release the agent so it can emit its events and the stream
+			// can complete cleanly.
+			close(agentProceed)
 			break
 		}
 	}
@@ -599,7 +612,7 @@ func TestHandler_Keepalive(t *testing.T) {
 		t.Fatalf("scanner error: %v", err)
 	}
 	if !hasPing {
-		t.Error("expected at least one keepalive ping before events")
+		t.Error("got no keepalive ping, want at least one before events")
 	}
 }
 
@@ -617,7 +630,7 @@ func TestHandler_MaxBodySize(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	// Body > 100 bytes.
 	bigBody := strings.Repeat("x", 200)
@@ -625,13 +638,13 @@ func TestHandler_MaxBodySize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp == nil {
 		t.Fatal("nil response")
 	}
 
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", resp.StatusCode)
+		t.Errorf("got %d, want 400", resp.StatusCode)
 	}
 }
 
@@ -654,7 +667,7 @@ func TestHandler_DisconnectCancelsAgent(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(h)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	input := types.RunAgentInput{ThreadID: "t1", RunID: "r1"}
 	body, _ := json.Marshal(input)

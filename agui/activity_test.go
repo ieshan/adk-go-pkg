@@ -26,7 +26,7 @@ func TestStepTracker_Lifecycle(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 	if got[0].Type() != events.EventTypeStepStarted {
 		t.Errorf("event[0] type = %s, want STEP_STARTED", got[0].Type())
@@ -45,13 +45,13 @@ func TestStepTracker_ErrorPropagation(t *testing.T) {
 		return want
 	})
 	if !errors.Is(err, want) {
-		t.Fatalf("expected error %v, got %v", want, err)
+		t.Fatalf("got %v, want %v", err, want)
 	}
 
 	// Both STEP_STARTED and STEP_FINISHED should still be emitted.
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events even on error, got %d", len(got))
+		t.Fatalf("got %d events, want 2 (even on error)", len(got))
 	}
 	if got[0].Type() != events.EventTypeStepStarted {
 		t.Errorf("event[0] type = %s, want STEP_STARTED", got[0].Type())
@@ -80,7 +80,7 @@ func TestActivityTracker_SnapshotAndDelta(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 	if got[0].Type() != events.EventTypeActivitySnapshot {
 		t.Errorf("event[0] type = %s, want ACTIVITY_SNAPSHOT", got[0].Type())

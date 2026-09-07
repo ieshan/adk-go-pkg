@@ -3,11 +3,18 @@ package agui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 )
+
+// ErrToolCallTimeout is returned when a tool call wait exceeds the timeout.
+var ErrToolCallTimeout = errors.New("agui: tool call timed out")
+
+// ErrNoPendingToolCall is returned when no pending tool call exists for the given ID.
+var ErrNoPendingToolCall = errors.New("agui: no pending tool call")
 
 // ToolMode controls how client tool results are received.
 type ToolMode int
@@ -52,7 +59,7 @@ func (h *ToolResultHandler) Wait(ctx context.Context, toolCallID string, timeout
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case <-timer.C:
-		return "", fmt.Errorf("agui: tool call %s timed out after %v", toolCallID, timeout)
+		return "", fmt.Errorf("%w: %s after %v", ErrToolCallTimeout, toolCallID, timeout)
 	}
 }
 
@@ -62,10 +69,20 @@ func (h *ToolResultHandler) SubmitResult(toolCallID, content string) error {
 	ch, ok := h.pending[toolCallID]
 	h.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("agui: no pending tool call %s", toolCallID)
+		return fmt.Errorf("%w: %s", ErrNoPendingToolCall, toolCallID)
 	}
 	ch <- content
 	return nil
+}
+
+// HasPendingToolCall reports whether a waiter is currently registered for the
+// given tool call ID. Tests can poll this to deterministically wait for Wait
+// to register before calling SubmitResult, instead of relying on time.Sleep.
+func (h *ToolResultHandler) HasPendingToolCall(toolCallID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.pending[toolCallID]
+	return ok
 }
 
 // ToolResultEndpoint returns an http.Handler for POST /tool-result.

@@ -108,6 +108,9 @@ func toAgentLiveRunConfig(cfg *LiveRunConfig) *agent.LiveRunConfig {
 //
 // root and configPath have the same semantics as in [BuildWithPath].
 func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error) {
+	if appCfg.RunConfig != nil && appCfg.RunConfig.StreamingMode == StreamingModeBIDI {
+		return nil, nil, nil, nil, fmt.Errorf("config: streaming_mode %q is not supported by ADK-Go (supported: %q, %q)", StreamingModeBIDI, StreamingModeNone, StreamingModeSSE)
+	}
 	ag, err := BuildWithPath(ctx, appCfg.AgentConfig, reg, root, configPath)
 	if err != nil {
 		return nil, nil, nil, nil, err

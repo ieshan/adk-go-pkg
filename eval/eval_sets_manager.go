@@ -10,7 +10,7 @@ type EvalSetsManager interface {
 	// CreateEvalSet creates a new empty eval set.
 	CreateEvalSet(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
 
-	// ListEvalSets returns the names of all eval sets for the given app.
+	// ListEvalSets returns the IDs of all eval sets for the given app.
 	ListEvalSets(ctx context.Context, appName string) ([]string, error)
 
 	// GetEvalCase returns a specific eval case from an eval set.

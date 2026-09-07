@@ -41,7 +41,8 @@ import (
 //
 // The targetEventID must match the ID of an existing event in the session;
 // otherwise an error is returned. If targetEventID identifies the last event,
-// no events are dropped (effectively a no-op).
+// no events are dropped, though the session is still recreated via the
+// create-before-delete swap.
 //
 // Example:
 //

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Plan: {{.Input.conversation_plan}}, History: {{.Input.conversation_history}}, Stop: {{.Input.stop_signal}}")

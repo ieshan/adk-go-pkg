@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\n  \"steps\": [\n    {\n      \"description\": \"Fetch latest news headlines\",\n      \"toolName\":    \"fetch_news\",\n      \"args\":        {\"category\": \"technology\"},\n      \"dependsOn\":   []\n    }\n  ],\n  \"reasoning\": \"Fetch data first.\"\n}")

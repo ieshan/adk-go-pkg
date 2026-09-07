@@ -219,16 +219,16 @@ func TestLoad_NotFound(t *testing.T) {
 		FileName:  "nonexistent.txt",
 	})
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("got nil error, want non-nil error")
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("expected fs.ErrNotExist, got: %v", err)
+		t.Errorf("got %v, want fs.ErrNotExist", err)
 	}
 }
 
-// TestDelete saves an artifact then deletes it, verifying the artifact
+// TestDelete_RemovesArtifact saves an artifact then deletes it, verifying the artifact
 // directory is removed from disk.
-func TestDelete(t *testing.T) {
+func TestDelete_RemovesArtifact(t *testing.T) {
 	rootDir := t.TempDir()
 	svc, err := file.New(file.Config{RootDir: rootDir})
 	if err != nil {
@@ -318,9 +318,9 @@ func TestList_UserScoped(t *testing.T) {
 	}
 }
 
-// TestVersions saves 3 versions and verifies Versions returns [0, 1, 2] in
+// TestVersions_AscendingOrder saves 3 versions and verifies Versions returns [0, 1, 2] in
 // ascending sorted order.
-func TestVersions(t *testing.T) {
+func TestVersions_AscendingOrder(t *testing.T) {
 	svc := newService(t)
 
 	saveText(t, svc, "versioned.txt", "v0")
@@ -360,7 +360,7 @@ func TestSave_PathTraversal(t *testing.T) {
 		Part:      &genai.Part{Text: "should not be written"},
 	})
 	if err == nil {
-		t.Fatal("expected error for path traversal filename, got nil")
+		t.Fatal("got nil error, want error for path traversal filename")
 	}
 }
 
@@ -376,7 +376,125 @@ func TestSave_AbsolutePath(t *testing.T) {
 		Part:      &genai.Part{Text: "should not be written"},
 	})
 	if err == nil {
-		t.Fatal("expected error for absolute path filename, got nil")
+		t.Fatal("got nil error, want error for absolute path filename")
+	}
+}
+
+// TestPathSegmentValidation verifies that Save rejects UserID and SessionID
+// values that are unsafe as path components: path traversal (".."), empty
+// strings, absolute paths, and path separators. It also confirms that a valid
+// single-segment ID succeeds. These checks are defence-in-depth on top of the
+// kernel-level os.Root boundary and the ADK-Go Validate methods.
+func TestPathSegmentValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		userID    string
+		sessionID string
+		wantErr   bool
+	}{
+		{
+			name:      "traversal in user_id",
+			userID:    "alice/../bob",
+			sessionID: testSession,
+			wantErr:   true,
+		},
+		{
+			name:      "traversal in session_id",
+			userID:    testUser,
+			sessionID: "alice/../bob",
+			wantErr:   true,
+		},
+		{
+			name:      "empty user_id",
+			userID:    "",
+			sessionID: testSession,
+			wantErr:   true,
+		},
+		{
+			name:      "absolute path as user_id",
+			userID:    "/etc",
+			sessionID: testSession,
+			wantErr:   true,
+		},
+		{
+			name:      "forward slash separator in user_id",
+			userID:    "foo/bar",
+			sessionID: testSession,
+			wantErr:   true,
+		},
+		{
+			name:      "backslash separator in user_id",
+			userID:    "foo\\bar",
+			sessionID: testSession,
+			wantErr:   true,
+		},
+		{
+			name:      "valid user_id",
+			userID:    "alice",
+			sessionID: testSession,
+			wantErr:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := newService(t)
+
+			_, err := svc.Save(context.Background(), &artifact.SaveRequest{
+				AppName:   testApp,
+				UserID:    tc.userID,
+				SessionID: tc.sessionID,
+				FileName:  "test.txt",
+				Part:      &genai.Part{Text: "hello"},
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Save: got nil error, want error for user_id=%q session_id=%q",
+						tc.userID, tc.sessionID)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Save: got unexpected error for user_id=%q session_id=%q: %v",
+						tc.userID, tc.sessionID, err)
+				}
+			}
+		})
+	}
+
+	// Also verify Load rejects the same malicious path segments.
+	for _, tc := range tests {
+		t.Run("Load/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := newService(t)
+
+			_, err := svc.Load(context.Background(), &artifact.LoadRequest{
+				AppName:   testApp,
+				UserID:    tc.userID,
+				SessionID: tc.sessionID,
+				FileName:  "test.txt",
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Load: got nil error, want error for user_id=%q session_id=%q",
+						tc.userID, tc.sessionID)
+				}
+			} else {
+				// For valid IDs, Load on a non-existent artifact returns
+				// fs.ErrNotExist, which is not a validation error.
+				if err == nil {
+					return
+				}
+				if !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("Load: got unexpected error for user_id=%q session_id=%q: %v",
+						tc.userID, tc.sessionID, err)
+				}
+			}
+		})
 	}
 }
 
@@ -422,16 +540,16 @@ func TestGetArtifactVersion_Latest(t *testing.T) {
 	}
 
 	if resp.ArtifactVersion == nil {
-		t.Fatal("expected ArtifactVersion, got nil")
+		t.Fatal("got nil, want non-nil ArtifactVersion")
 	}
 	if resp.ArtifactVersion.Version != 1 {
-		t.Errorf("expected version 1 (latest), got %d", resp.ArtifactVersion.Version)
+		t.Errorf("got %d, want version 1 (latest)", resp.ArtifactVersion.Version)
 	}
 	if resp.ArtifactVersion.MimeType != "text/plain" {
-		t.Errorf("expected MIME type text/plain, got %q", resp.ArtifactVersion.MimeType)
+		t.Errorf("got %q, want MIME type text/plain", resp.ArtifactVersion.MimeType)
 	}
 	if resp.ArtifactVersion.CanonicalURI == "" {
-		t.Error("expected non-empty CanonicalURI")
+		t.Error("got empty CanonicalURI, want non-empty")
 	}
 }
 
@@ -466,7 +584,7 @@ func TestGetArtifactVersion_SpecificVersion(t *testing.T) {
 	}
 
 	if resp.ArtifactVersion.Version != 0 {
-		t.Errorf("expected version 0, got %d", resp.ArtifactVersion.Version)
+		t.Errorf("got %d, want version 0", resp.ArtifactVersion.Version)
 	}
 }
 
@@ -484,7 +602,7 @@ func TestGetArtifactVersion_NotFound(t *testing.T) {
 		Version:   0,
 	})
 	if err == nil {
-		t.Fatal("expected error for non-existent artifact, got nil")
+		t.Fatal("got nil error, want error for non-existent artifact")
 	}
 }
 
@@ -502,7 +620,7 @@ func TestGetArtifactVersion_InvalidFileName(t *testing.T) {
 		Version:   0,
 	})
 	if err == nil {
-		t.Fatal("expected error for path traversal filename, got nil")
+		t.Fatal("got nil error, want error for path traversal filename")
 	}
 }
 
@@ -534,6 +652,6 @@ func TestService_Close(t *testing.T) {
 		Part:      &genai.Part{Text: "after close"},
 	})
 	if err == nil {
-		t.Fatal("expected error after Close, got nil")
+		t.Fatal("got nil error, want error after Close")
 	}
 }

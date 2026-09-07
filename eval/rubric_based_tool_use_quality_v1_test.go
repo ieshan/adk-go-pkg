@@ -1,9 +1,10 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/genai"
 )
@@ -15,25 +16,25 @@ func TestRubricBasedToolUseQualityV1Evaluator_AllYes(t *testing.T) {
 Rationale: The tool call matches the expected one.
 Verdict: yes`,
 	))
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedToolUseQualityV1),
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedToolUseQualityV1),
 		Threshold:  &threshold,
-		Criterion: &RubricsBasedCriterion{
-			Rubrics: []Rubric{
-				{RubricID: "r1", RubricContent: RubricContent{TextProperty: "The agent used the correct tool."}},
+		Criterion: &eval.RubricsBasedCriterion{
+			Rubrics: []eval.Rubric{
+				{RubricID: "r1", RubricContent: eval.RubricContent{TextProperty: "The agent used the correct tool."}},
 			},
-			LlmAsAJudgeCriterion: LlmAsAJudgeCriterion{JudgeModelOptions: JudgeModelOptions{NumSamples: 1}},
+			LlmAsAJudgeCriterion: eval.LlmAsAJudgeCriterion{JudgeModelOptions: eval.JudgeModelOptions{NumSamples: 1}},
 		},
 	}
-	e, err := NewRubricBasedToolUseQualityV1Evaluator(evalMetric, fakeLLM)
+	e, err := eval.NewRubricBasedToolUseQualityV1Evaluator(evalMetric, fakeLLM)
 	if err != nil {
 		t.Fatalf("NewRubricBasedToolUseQualityV1Evaluator failed: %v", err)
 	}
 
-	actual := []Invocation{{
+	actual := []eval.Invocation{{
 		UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "get weather"}}},
 	}}
-	expected := []Invocation{{
+	expected := []eval.Invocation{{
 		UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "get weather"}}},
 	}}
 
@@ -41,19 +42,19 @@ Verdict: yes`,
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusPassed {
+	if result.OverallEvalStatus != eval.EvalStatusPassed {
 		t.Errorf("OverallEvalStatus = %v, want PASSED", result.OverallEvalStatus)
 	}
 }
 
 func TestRubricBasedToolUseQualityV1Evaluator_NoRubrics(t *testing.T) {
 	fakeLLM := testutil.NewFakeLLM()
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedToolUseQualityV1),
-		Criterion:  &RubricsBasedCriterion{},
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedToolUseQualityV1),
+		Criterion:  &eval.RubricsBasedCriterion{},
 	}
-	_, err := NewRubricBasedToolUseQualityV1Evaluator(evalMetric, fakeLLM)
+	_, err := eval.NewRubricBasedToolUseQualityV1Evaluator(evalMetric, fakeLLM)
 	if err == nil {
-		t.Error("expected error when no rubrics provided")
+		t.Error("got nil error, want error when no rubrics provided")
 	}
 }

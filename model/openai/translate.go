@@ -53,7 +53,8 @@ type chatMessage struct {
 	Role string `json:"role"`
 	// Content holds the message body. Use string for text, []any for multipart.
 	Content any `json:"content"`
-	// Name is the function name when Role is "tool".
+	// Name is the function name when Role is "tool" (not currently set by
+	// this adapter; ToolCallID is used instead).
 	Name string `json:"name,omitempty"`
 	// ToolCalls contains function-call requests emitted by the model.
 	ToolCalls []any `json:"tool_calls,omitempty"`

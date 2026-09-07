@@ -50,6 +50,8 @@ func fromJSONFunc(s string) (any, error) {
 }
 
 // truncateFunc truncates s to at most n runes, appending "..." if truncated.
+// For n >= 3 the result is at most n runes (n-3 runes plus the ellipsis);
+// for 1 <= n < 3 the result is n runes (no room for the ellipsis).
 func truncateFunc(n int, s string) string {
 	runes := []rune(s)
 	if n <= 0 {
@@ -58,8 +60,8 @@ func truncateFunc(n int, s string) string {
 	if len(runes) <= n {
 		return s
 	}
-	if n <= 3 {
-		return string(runes[:n]) + "..."
+	if n < 3 {
+		return string(runes[:n])
 	}
 	return string(runes[:n-3]) + "..."
 }
@@ -102,7 +104,8 @@ func defaultFunc(def any, val any) any {
 }
 
 // isEmptyValue mirrors the zero value checks used by text/template's "default"
-// helper: nil, false, 0, and "" are empty; empty maps and slices are also empty.
+// helper: nil, false, 0, and "" are empty; nil or zero-length maps, slices,
+// and arrays are also empty.
 func isEmptyValue(v any) bool {
 	if v == nil {
 		return true
@@ -121,7 +124,9 @@ func isEmptyValue(v any) bool {
 		return rv.Complex() == 0
 	case reflect.String:
 		return rv.String() == ""
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+	case reflect.Array, reflect.Slice, reflect.Map:
+		return rv.IsNil() || rv.Len() == 0
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Pointer:
 		return rv.IsNil()
 	default:
 		return false

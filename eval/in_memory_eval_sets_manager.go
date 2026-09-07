@@ -56,7 +56,7 @@ func (m *InMemoryEvalSetsManager) CreateEvalSet(ctx context.Context, appName, ev
 	return evalSet, nil
 }
 
-// ListEvalSets returns the names of all eval sets for the given app.
+// ListEvalSets returns the IDs of all eval sets for the given app.
 func (m *InMemoryEvalSetsManager) ListEvalSets(ctx context.Context, appName string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -1,14 +1,16 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestConversationScenario_StartingPrompt(t *testing.T) {
-	scenario := &ConversationScenario{
+	scenario := &eval.ConversationScenario{
 		StartingPrompt:   "Hello",
 		ConversationPlan: "Plan A",
-		UserPersona:      &UserPersona{ID: "EXPERT"},
+		UserPersona:      &eval.UserPersona{ID: "EXPERT"},
 	}
 
 	if scenario.StartingPrompt != "Hello" {
@@ -18,15 +20,15 @@ func TestConversationScenario_StartingPrompt(t *testing.T) {
 		t.Errorf("got %s, want Plan A", scenario.ConversationPlan)
 	}
 	if scenario.UserPersona == nil || scenario.UserPersona.ID != "EXPERT" {
-		t.Error("expected EXPERT persona")
+		t.Errorf("got persona %v, want EXPERT", scenario.UserPersona)
 	}
 }
 
 func TestConversationGenerationConfig_Defaults(t *testing.T) {
-	config := ConversationGenerationConfig{
+	config := eval.ConversationGenerationConfig{
 		Count: 5,
 	}
 	if config.Count != 5 {
-		t.Errorf("expected 5, got %d", config.Count)
+		t.Errorf("got %d, want 5", config.Count)
 	}
 }

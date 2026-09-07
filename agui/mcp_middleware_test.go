@@ -54,7 +54,7 @@ func TestMCPMiddleware_Passthrough(t *testing.T) {
 		t.Error("base agent was not called")
 	}
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 	if evs[0].Type() != events.EventTypeRunStarted {
 		t.Errorf("event 0: got %s, want RUN_STARTED", evs[0].Type())
@@ -86,7 +86,7 @@ func TestMCPMiddleware_ToolInjection(t *testing.T) {
 
 	// Should have original tool + injected MCP tool
 	if len(seenTools) != 2 {
-		t.Fatalf("expected 2 tools, got %d: %+v", len(seenTools), seenTools)
+		t.Fatalf("got %d tools, want 2: %+v", len(seenTools), seenTools)
 	}
 	if seenTools[0].Name != "existing" {
 		t.Errorf("tool 0: got %s, want existing", seenTools[0].Name)
@@ -135,20 +135,20 @@ func TestMCPMiddleware_ExecutionLoop(t *testing.T) {
 	// Should see: RUN_STARTED, TOOL_CALL_*, TOOL_CALL_RESULT, RUN_STARTED (suppressed), TEXT_MESSAGE_*, RUN_FINISHED
 	// Consumer sees one RUN_STARTED and one RUN_FINISHED
 	if got := countEvents(evs, events.EventTypeRunStarted); got != 1 {
-		t.Errorf("expected 1 RUN_STARTED, got %d", got)
+		t.Errorf("got %d RUN_STARTED, want 1", got)
 	}
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 
 	// Should have a TOOL_CALL_RESULT for the MCP tool
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 1 {
-		t.Errorf("expected 1 TOOL_CALL_RESULT, got %d", got)
+		t.Errorf("got %d TOOL_CALL_RESULT, want 1", got)
 	}
 
 	// Agent should have been called twice (first run + continuation)
 	if callCount.Load() != 2 {
-		t.Errorf("expected agent called twice, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 2", callCount.Load())
 	}
 }
 
@@ -177,16 +177,16 @@ func TestMCPMiddleware_NonMCPToolCallPassthrough(t *testing.T) {
 	evs := collectAllEvents(t, ctx, wrapped, types.RunAgentInput{ThreadID: "t1", RunID: "r1"})
 
 	if len(evs) != 5 {
-		t.Fatalf("expected 5 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 5", len(evs))
 	}
 	if got := countEvents(evs, events.EventTypeRunStarted); got != 1 {
-		t.Errorf("expected 1 RUN_STARTED, got %d", got)
+		t.Errorf("got %d RUN_STARTED, want 1", got)
 	}
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 	if callCount.Load() != 1 {
-		t.Errorf("expected agent called once, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 1", callCount.Load())
 	}
 }
 
@@ -218,11 +218,11 @@ func TestMCPMiddleware_MaxIterations(t *testing.T) {
 
 	// Should still emit RUN_FINISHED after hitting max iterations
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 	// Agent should have been called at most maxIterations+1 times
 	if callCount.Load() > 3 {
-		t.Errorf("expected at most 3 agent calls, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want at most 3", callCount.Load())
 	}
 }
 
@@ -258,10 +258,10 @@ func TestMCPMiddleware_FailedServer(t *testing.T) {
 	// Should still run even if the MCP server is unreachable
 	// Tools should only contain the original (failed server contributes nothing)
 	if len(seenTools) != 1 || seenTools[0].Name != "existing" {
-		t.Errorf("tools should only contain original, got %v", seenTools)
+		t.Errorf("got %v, want tools to only contain original", seenTools)
 	}
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestMCPMiddleware_ToolListingCached(t *testing.T) {
 
 	// Both runs should have seen the injected tools (from cache on second run)
 	if callCount.Load() != firstCount+1 {
-		t.Errorf("expected agent called %d times, got %d", firstCount+1, callCount.Load())
+		t.Errorf("got %d agent calls, want %d", callCount.Load(), firstCount+1)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestMCPMiddleware_RunError(t *testing.T) {
 	evs := collectAllEvents(t, context.Background(), wrapped, types.RunAgentInput{ThreadID: "t1", RunID: "r1"})
 
 	if len(evs) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(evs))
+		t.Fatalf("got %d events, want 2", len(evs))
 	}
 	if evs[1].Type() != events.EventTypeRunError {
 		t.Errorf("event 1: got %s, want RUN_ERROR", evs[1].Type())
@@ -332,7 +332,7 @@ func TestReconstructMessages(t *testing.T) {
 
 	// Should have original + 1 assistant message
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 2", len(msgs))
 	}
 	if msgs[1].Role != types.RoleAssistant {
 		t.Errorf("msg 1 role: got %s, want assistant", msgs[1].Role)
@@ -357,10 +357,10 @@ func TestReconstructMessages_ToolCalls(t *testing.T) {
 
 	// Should have original + 1 assistant message with tool call
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 2", len(msgs))
 	}
 	if len(msgs[1].ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(msgs[1].ToolCalls))
+		t.Fatalf("got %d tool calls, want 1", len(msgs[1].ToolCalls))
 	}
 	tc := msgs[1].ToolCalls[0]
 	if tc.ID != "tc1" {
@@ -386,7 +386,7 @@ func TestGetOpenToolCalls(t *testing.T) {
 
 	open := testGetOpenToolCalls(msgs)
 	if len(open) != 1 {
-		t.Fatalf("expected 1 open tool call, got %d", len(open))
+		t.Fatalf("got %d open tool calls, want 1", len(open))
 	}
 	if open[0].ID != "tc2" {
 		t.Errorf("open call ID: got %s, want tc2", open[0].ID)
@@ -404,7 +404,7 @@ func TestGetOpenToolCalls_None(t *testing.T) {
 
 	open := testGetOpenToolCalls(msgs)
 	if len(open) != 0 {
-		t.Fatalf("expected 0 open tool calls, got %d", len(open))
+		t.Fatalf("got %d open tool calls, want 0", len(open))
 	}
 }
 
@@ -449,17 +449,17 @@ func TestMCPMiddleware_MixedMCPAndNonMCPToolCalls(t *testing.T) {
 
 	// Agent should only be called once (no continuation loop)
 	if callCount.Load() != 1 {
-		t.Errorf("expected agent called once, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 1", callCount.Load())
 	}
 
 	// Should have one TOOL_CALL_RESULT for the MCP tool
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 1 {
-		t.Errorf("expected 1 TOOL_CALL_RESULT, got %d", got)
+		t.Errorf("got %d TOOL_CALL_RESULT, want 1", got)
 	}
 
 	// Should have one RUN_FINISHED
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 }
 
@@ -489,15 +489,15 @@ func TestMCPMiddleware_UnknownMCPToolCall(t *testing.T) {
 
 	// Agent should only be called once (no continuation — ghost tool is not in toolMap)
 	if callCount.Load() != 1 {
-		t.Errorf("expected agent called once, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 1", callCount.Load())
 	}
 	// No TOOL_CALL_RESULT should be emitted for the unknown tool
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 0 {
-		t.Errorf("expected 0 TOOL_CALL_RESULT, got %d", got)
+		t.Errorf("got %d TOOL_CALL_RESULT, want 0", got)
 	}
 	// Should have one RUN_FINISHED
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 }
 
@@ -535,18 +535,18 @@ func TestMCPMiddleware_MultiHopLoop(t *testing.T) {
 
 	// Agent should have been called 3 times (two tool rounds + final text)
 	if callCount.Load() != 3 {
-		t.Errorf("expected agent called 3 times, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 3", callCount.Load())
 	}
 	// Consumer sees exactly one RUN_STARTED and one RUN_FINISHED
 	if got := countEvents(evs, events.EventTypeRunStarted); got != 1 {
-		t.Errorf("expected 1 RUN_STARTED, got %d", got)
+		t.Errorf("got %d RUN_STARTED, want 1", got)
 	}
 	if got := countEvents(evs, events.EventTypeRunFinished); got != 1 {
-		t.Errorf("expected 1 RUN_FINISHED, got %d", got)
+		t.Errorf("got %d RUN_FINISHED, want 1", got)
 	}
 	// Two TOOL_CALL_RESULT events (one per hop)
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 2 {
-		t.Errorf("expected 2 TOOL_CALL_RESULT, got %d", got)
+		t.Errorf("got %d TOOL_CALL_RESULT, want 2", got)
 	}
 }
 
@@ -585,11 +585,11 @@ func TestMCPMiddleware_StreamedArgsAssembly(t *testing.T) {
 
 	// The tool should have been executed (TOOL_CALL_RESULT present)
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 1 {
-		t.Fatalf("expected 1 TOOL_CALL_RESULT, got %d", got)
+		t.Fatalf("got %d TOOL_CALL_RESULT, want 1", got)
 	}
 	// Agent should have been called twice (tool round + continuation)
 	if callCount.Load() != 2 {
-		t.Errorf("expected agent called twice, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 2", callCount.Load())
 	}
 }
 
@@ -628,11 +628,11 @@ func TestMCPMiddleware_MultipleMCPCallsWithFailure(t *testing.T) {
 
 	// Both tool calls should produce TOOL_CALL_RESULT events
 	if got := countEvents(evs, events.EventTypeToolCallResult); got != 2 {
-		t.Errorf("expected 2 TOOL_CALL_RESULT, got %d", got)
+		t.Errorf("got %d TOOL_CALL_RESULT, want 2", got)
 	}
 	// Agent should have been called twice (tool round + continuation)
 	if callCount.Load() != 2 {
-		t.Errorf("expected agent called twice, got %d", callCount.Load())
+		t.Errorf("got %d agent calls, want 2", callCount.Load())
 	}
 }
 
@@ -668,6 +668,6 @@ func TestMCPMiddleware_FailedListingCached(t *testing.T) {
 
 	// Both runs should have called the agent (with no tools injected)
 	if callCount.Load() != firstCount+1 {
-		t.Errorf("expected agent called %d times, got %d", firstCount+1, callCount.Load())
+		t.Errorf("got %d agent calls, want %d", callCount.Load(), firstCount+1)
 	}
 }

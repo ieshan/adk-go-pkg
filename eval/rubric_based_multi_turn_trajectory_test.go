@@ -1,9 +1,10 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/genai"
 )
@@ -15,26 +16,26 @@ func TestRubricBasedMultiTurnTrajectoryEvaluator_LastTurnEvaluated(t *testing.T)
 Rationale: The agent followed the plan.
 Verdict: yes`,
 	))
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedMultiTurnTrajectoryQualityV1),
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedMultiTurnTrajectoryQualityV1),
 		Threshold:  &threshold,
-		Criterion: &RubricsBasedCriterion{
-			Rubrics: []Rubric{
-				{RubricID: "r1", RubricContent: RubricContent{TextProperty: "The trajectory is coherent."}},
+		Criterion: &eval.RubricsBasedCriterion{
+			Rubrics: []eval.Rubric{
+				{RubricID: "r1", RubricContent: eval.RubricContent{TextProperty: "The trajectory is coherent."}},
 			},
-			LlmAsAJudgeCriterion: LlmAsAJudgeCriterion{JudgeModelOptions: JudgeModelOptions{NumSamples: 1}},
+			LlmAsAJudgeCriterion: eval.LlmAsAJudgeCriterion{JudgeModelOptions: eval.JudgeModelOptions{NumSamples: 1}},
 		},
 	}
-	e, err := NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
+	e, err := eval.NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
 	if err != nil {
 		t.Fatalf("NewRubricBasedMultiTurnTrajectoryEvaluator failed: %v", err)
 	}
 
-	actual := []Invocation{
+	actual := []eval.Invocation{
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn 1"}}}},
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn 2"}}}},
 	}
-	expected := []Invocation{
+	expected := []eval.Invocation{
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn 1"}}}},
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn 2"}}}},
 	}
@@ -44,14 +45,14 @@ Verdict: yes`,
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if len(result.PerInvocationResults) != 2 {
-		t.Fatalf("len(PerInvocationResults) = %d, want 2", len(result.PerInvocationResults))
+		t.Errorf("len(PerInvocationResults) = %d, want 2", len(result.PerInvocationResults))
 	}
 	// First turn should be NOT_EVALUATED.
-	if result.PerInvocationResults[0].EvalStatus != EvalStatusNotEvaluated {
+	if result.PerInvocationResults[0].EvalStatus != eval.EvalStatusNotEvaluated {
 		t.Errorf("PerInvocationResults[0].EvalStatus = %v, want NOT_EVALUATED", result.PerInvocationResults[0].EvalStatus)
 	}
 	// Last turn should be evaluated (PASSED).
-	if result.PerInvocationResults[1].EvalStatus != EvalStatusPassed {
+	if result.PerInvocationResults[1].EvalStatus != eval.EvalStatusPassed {
 		t.Errorf("PerInvocationResults[1].EvalStatus = %v, want PASSED", result.PerInvocationResults[1].EvalStatus)
 	}
 }
@@ -63,22 +64,22 @@ func TestRubricBasedMultiTurnTrajectoryEvaluator_SingleTurn(t *testing.T) {
 Rationale: Good.
 Verdict: yes`,
 	))
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedMultiTurnTrajectoryQualityV1),
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedMultiTurnTrajectoryQualityV1),
 		Threshold:  &threshold,
-		Criterion: &RubricsBasedCriterion{
-			Rubrics: []Rubric{
-				{RubricID: "r1", RubricContent: RubricContent{TextProperty: "The trajectory is coherent."}},
+		Criterion: &eval.RubricsBasedCriterion{
+			Rubrics: []eval.Rubric{
+				{RubricID: "r1", RubricContent: eval.RubricContent{TextProperty: "The trajectory is coherent."}},
 			},
-			LlmAsAJudgeCriterion: LlmAsAJudgeCriterion{JudgeModelOptions: JudgeModelOptions{NumSamples: 1}},
+			LlmAsAJudgeCriterion: eval.LlmAsAJudgeCriterion{JudgeModelOptions: eval.JudgeModelOptions{NumSamples: 1}},
 		},
 	}
-	e, err := NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
+	e, err := eval.NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
 	if err != nil {
 		t.Fatalf("NewRubricBasedMultiTurnTrajectoryEvaluator failed: %v", err)
 	}
 
-	actual := []Invocation{
+	actual := []eval.Invocation{
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "only turn"}}}},
 	}
 
@@ -86,33 +87,33 @@ Verdict: yes`,
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusPassed {
+	if result.OverallEvalStatus != eval.EvalStatusPassed {
 		t.Errorf("OverallEvalStatus = %v, want PASSED", result.OverallEvalStatus)
 	}
 }
 
 func TestRubricBasedMultiTurnTrajectoryEvaluator_NoRubrics(t *testing.T) {
 	fakeLLM := testutil.NewFakeLLM()
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedMultiTurnTrajectoryQualityV1),
-		Criterion:  &RubricsBasedCriterion{},
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedMultiTurnTrajectoryQualityV1),
+		Criterion:  &eval.RubricsBasedCriterion{},
 	}
-	_, err := NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
+	_, err := eval.NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
 	if err == nil {
-		t.Error("expected error when no rubrics provided")
+		t.Errorf("got nil error, want non-nil error when no rubrics provided")
 	}
 }
 
 func TestRubricBasedMultiTurnTrajectoryEvaluator_EmptyResults(t *testing.T) {
 	fakeLLM := testutil.NewFakeLLM()
-	evalMetric := EvalMetric{
-		MetricName: string(RubricBasedMultiTurnTrajectoryQualityV1),
-		Criterion: &RubricsBasedCriterion{
-			Rubrics:              []Rubric{{RubricID: "r1", RubricContent: RubricContent{TextProperty: "test"}}},
-			LlmAsAJudgeCriterion: LlmAsAJudgeCriterion{JudgeModelOptions: JudgeModelOptions{NumSamples: 1}},
+	evalMetric := eval.EvalMetric{
+		MetricName: string(eval.RubricBasedMultiTurnTrajectoryQualityV1),
+		Criterion: &eval.RubricsBasedCriterion{
+			Rubrics:              []eval.Rubric{{RubricID: "r1", RubricContent: eval.RubricContent{TextProperty: "test"}}},
+			LlmAsAJudgeCriterion: eval.LlmAsAJudgeCriterion{JudgeModelOptions: eval.JudgeModelOptions{NumSamples: 1}},
 		},
 	}
-	e, err := NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
+	e, err := eval.NewRubricBasedMultiTurnTrajectoryEvaluator(evalMetric, fakeLLM)
 	if err != nil {
 		t.Fatalf("NewRubricBasedMultiTurnTrajectoryEvaluator failed: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestRubricBasedMultiTurnTrajectoryEvaluator_EmptyResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusNotEvaluated {
+	if result.OverallEvalStatus != eval.EvalStatusNotEvaluated {
 		t.Errorf("OverallEvalStatus = %v, want NOT_EVALUATED", result.OverallEvalStatus)
 	}
 }

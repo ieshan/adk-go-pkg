@@ -28,7 +28,7 @@ func TestContextPropagation(t *testing.T) {
 
 	env, ok := RunEnvelopeFrom(ctx)
 	if !ok {
-		t.Fatal("expected RunEnvelope to be retrievable from context")
+		t.Fatal("got nil RunEnvelope from context, want non-nil")
 	}
 	if env.ParentRunID == nil || *env.ParentRunID != parentID {
 		t.Fatalf("ParentRunID = %v, want %q", env.ParentRunID, parentID)
@@ -41,7 +41,7 @@ func TestContextPropagation(t *testing.T) {
 	rc := testutil.NewFakeReadonlyContext().WithContext(ctx)
 	got, ok := ForwardedPropsFrom[map[string]any](rc)
 	if !ok {
-		t.Fatal("expected ForwardedPropsFrom to find the envelope")
+		t.Fatal("got nil from ForwardedPropsFrom, want envelope")
 	}
 	if got["workspaceId"] != "ws-123" {
 		t.Errorf("ForwardedProps workspaceId = %v, want ws-123", got["workspaceId"])
@@ -58,7 +58,7 @@ func TestContextPropagation(t *testing.T) {
 func TestRunEnvelopeFrom_NoEnvelope(t *testing.T) {
 	_, ok := RunEnvelopeFrom(context.Background())
 	if ok {
-		t.Fatal("expected ok=false when no envelope is attached")
+		t.Fatal("got ok=true when no envelope is attached, want false")
 	}
 }
 
@@ -89,7 +89,7 @@ func TestForwardedPropsFrom_FallsBackToState(t *testing.T) {
 	)
 	got, ok := ForwardedPropsFrom[map[string]any](rc)
 	if !ok {
-		t.Fatal("expected ForwardedPropsFrom to find state-stored props")
+		t.Fatal("got nil from ForwardedPropsFrom, want state-stored props")
 	}
 	if got["theme"] != "dark" {
 		t.Errorf("theme = %v, want dark", got["theme"])

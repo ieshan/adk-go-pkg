@@ -102,7 +102,8 @@ for resp, err := range m.GenerateContent(ctx, req, true) {
 ```
 
 Each partial response has `Partial: true`. The final sentinel carries
-`TurnComplete: true`.
+`TurnComplete: true`. Finish-reason chunks have `Partial: false` and arrive
+before the `[DONE]` marker, which has `TurnComplete: true`.
 
 ### Tool Calling
 
@@ -144,6 +145,15 @@ for resp, err := range m.GenerateContent(ctx, req, false) {
 }
 ```
 
+### Tool Results
+
+When submitting tool results via `FunctionResponse`, the following constraints apply:
+
+- `ID` must be non-empty (matches the tool call ID)
+- Exactly one `Part` is expected
+- `InlineData` with `MIMEType: "application/json"` containing the tool result as JSON
+- The `Response` field is ignored — only `InlineData` parts are used
+
 ### Structured Output
 
 Request JSON Schema-constrained output with `ResponseSchema`:
@@ -168,9 +178,17 @@ req := &model.LLMRequest{
 }
 ```
 
-This sends `response_format: { type: "json_schema", json_schema: { ... } }` to
-the API. For unstructured JSON, set `ResponseMIMEType: "application/json"`
+This sends `response_format: { type: "json_schema", json_schema: { name: "response", strict: true, schema: {...} } }` to
+the API. The `name` and `strict` fields are set automatically by the model adapter.
+For unstructured JSON, set `ResponseMIMEType: "application/json"`
 instead (sends `{ type: "json_object" }`).
+
+### Images
+
+The OpenAI model supports image inputs via:
+
+- `InlineData`: base64-encoded data URL (e.g. `data:image/png;base64,...`)
+- `FileData`: URI is sent as `image_url` in the OpenAI API request
 
 ### Custom Base URL (e.g. Ollama)
 
@@ -187,7 +205,8 @@ m, err := openai.New(openai.Config{
 - `New` returns an error when `Config.Model` is empty.
 - `GenerateContent` yields an error for HTTP failures, non-2xx status codes
   (including the response body), JSON marshal/unmarshal failures, and SSE parse
-  errors.
+  errors. The response body is always closed via `defer` — even when reading
+  the error body fails, the connection is properly released.
 - Context cancellation during streaming yields a response with `Interrupted: true`.
 
 ### Finish Reason Mapping

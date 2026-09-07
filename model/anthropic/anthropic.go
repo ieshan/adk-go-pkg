@@ -17,6 +17,16 @@ const (
 	defaultAPIVersion = "2023-06-01"
 )
 
+// HTTPError represents a non-2xx HTTP response from the Anthropic API.
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("anthropic: HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 // Config holds the parameters needed to create an Anthropic-compatible LLM
 // client.
 //
@@ -161,8 +171,9 @@ func (m *anthropicModel) Name() string {
 // to true.
 //
 // When stream is true, the response body is treated as an SSE stream and
-// forwarded to [parseStream]; each SSE event produces one yield. The caller
-// must consume the full iterator or cancel ctx to release resources.
+// forwarded to [parseStream], which yields responses for meaningful events
+// (text deltas and the final message_stop). The caller must consume the full
+// iterator or cancel ctx to release resources.
 //
 // Non-2xx HTTP status codes cause a single error to be yielded and the
 // iterator stops.
@@ -216,8 +227,12 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *model.LLMRequ
 
 		// 6. Check status code.
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errBody, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, string(errBody)))
+			errBody, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				yield(nil, &HTTPError{StatusCode: resp.StatusCode, Body: fmt.Sprintf("body read failed: %v: %s", readErr, errBody)})
+				return
+			}
+			yield(nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(errBody)})
 			return
 		}
 

@@ -17,18 +17,18 @@ func TestStateManager_NewWithInitialState(t *testing.T) {
 	snap := sm.Snapshot().(map[string]any)
 
 	if snap["key"] != "value" {
-		t.Fatalf("expected key=value, got %v", snap["key"])
+		t.Fatalf("got %v, want key=value", snap["key"])
 	}
 	nested := snap["nested"].(map[string]any)
 	if nested["a"] != float64(1) {
-		t.Fatalf("expected nested.a=1, got %v", nested["a"])
+		t.Fatalf("got %v, want nested.a=1", nested["a"])
 	}
 
 	// Mutating original should not affect state manager
 	initial["key"] = "mutated"
 	snap2 := sm.Snapshot().(map[string]any)
 	if snap2["key"] != "value" {
-		t.Fatalf("initial mutation affected state manager: got %v", snap2["key"])
+		t.Fatalf("got %v, want value (initial mutation should not affect state manager)", snap2["key"])
 	}
 }
 
@@ -42,7 +42,7 @@ func TestStateManager_SnapshotDeepCopy(t *testing.T) {
 
 	snap2 := sm.Snapshot().(map[string]any)
 	if snap2["x"] != "original" {
-		t.Fatalf("snapshot mutation affected internal state: got %v", snap2["x"])
+		t.Fatalf("got %v, want original (snapshot mutation should not affect internal state)", snap2["x"])
 	}
 }
 
@@ -60,7 +60,7 @@ func TestStateManager_Set(t *testing.T) {
 		t.Fatal("old key should not exist after Set")
 	}
 	if snap["new"] != "data" {
-		t.Fatalf("expected new=data, got %v", snap["new"])
+		t.Fatalf("got %v, want new=data", snap["new"])
 	}
 }
 
@@ -77,7 +77,7 @@ func TestStateManager_Apply_Add(t *testing.T) {
 	}
 	snap := sm.Snapshot().(map[string]any)
 	if snap["greeting"] != "hello" {
-		t.Fatalf("expected greeting=hello, got %v", snap["greeting"])
+		t.Fatalf("got %v, want greeting=hello", snap["greeting"])
 	}
 }
 
@@ -97,7 +97,7 @@ func TestStateManager_Apply_Remove(t *testing.T) {
 		t.Fatal("key 'a' should have been removed")
 	}
 	if snap["b"] != "2" {
-		t.Fatalf("expected b=2, got %v", snap["b"])
+		t.Fatalf("got %v, want b=2", snap["b"])
 	}
 }
 
@@ -114,7 +114,7 @@ func TestStateManager_Apply_Replace(t *testing.T) {
 	}
 	snap := sm.Snapshot().(map[string]any)
 	if snap["count"] != float64(42) {
-		t.Fatalf("expected count=42, got %v", snap["count"])
+		t.Fatalf("got %v, want count=42", snap["count"])
 	}
 }
 
@@ -134,7 +134,7 @@ func TestStateManager_Apply_Move(t *testing.T) {
 		t.Fatal("src should have been removed after move")
 	}
 	if snap["dst"] != "value" {
-		t.Fatalf("expected dst=value, got %v", snap["dst"])
+		t.Fatalf("got %v, want dst=value", snap["dst"])
 	}
 }
 
@@ -151,10 +151,10 @@ func TestStateManager_Apply_Copy(t *testing.T) {
 	}
 	snap := sm.Snapshot().(map[string]any)
 	if snap["original"] != "data" {
-		t.Fatalf("original should still exist, got %v", snap["original"])
+		t.Fatalf("got %v, want data (original should still exist)", snap["original"])
 	}
 	if snap["duplicate"] != "data" {
-		t.Fatalf("expected duplicate=data, got %v", snap["duplicate"])
+		t.Fatalf("got %v, want duplicate=data", snap["duplicate"])
 	}
 }
 
@@ -214,17 +214,17 @@ func TestStateManager_Diff(t *testing.T) {
 
 	// "change" should be a replace
 	if op, ok := opMap["/change"]; !ok || op.Op != "replace" || op.Value != "new" {
-		t.Fatalf("expected replace /change=new, got %+v", opMap["/change"])
+		t.Fatalf("got %+v, want replace /change=new", opMap["/change"])
 	}
 
 	// "remove" should be a remove
 	if op, ok := opMap["/remove"]; !ok || op.Op != "remove" {
-		t.Fatalf("expected remove /remove, got %+v", opMap["/remove"])
+		t.Fatalf("got %+v, want remove /remove", opMap["/remove"])
 	}
 
 	// "added" should be an add
 	if op, ok := opMap["/added"]; !ok || op.Op != "add" || op.Value != "fresh" {
-		t.Fatalf("expected add /added=fresh, got %+v", opMap["/added"])
+		t.Fatalf("got %+v, want add /added=fresh", opMap["/added"])
 	}
 }
 
@@ -241,9 +241,11 @@ func TestStateManager_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_ = sm.Apply([]events.JSONPatchOperation{
+			if err := sm.Apply([]events.JSONPatchOperation{
 				{Op: "replace", Path: "/counter", Value: float64(n)},
-			})
+			}); err != nil {
+				t.Errorf("concurrent Apply: %v", err)
+			}
 		}(i)
 	}
 
@@ -261,7 +263,9 @@ func TestStateManager_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_ = sm.Set(map[string]any{"counter": float64(n)})
+			if err := sm.Set(map[string]any{"counter": float64(n)}); err != nil {
+				t.Errorf("concurrent Set: %v", err)
+			}
 		}(i)
 	}
 

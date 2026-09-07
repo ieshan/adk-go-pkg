@@ -19,7 +19,7 @@ func TestLlmAsJudgeEvaluator_NilFormatPrompt(t *testing.T) {
 	// FormatAutoRaterPrompt is nil — should error.
 	_, err := base.EvaluateInvocations(context.Background(), nil, nil, nil)
 	if err == nil {
-		t.Error("expected error when FormatAutoRaterPrompt is nil")
+		t.Errorf("got nil error, want non-nil error when FormatAutoRaterPrompt is nil")
 	}
 }
 
@@ -36,7 +36,7 @@ func TestLlmAsJudgeEvaluator_NilConvertResponse(t *testing.T) {
 	// ConvertAutoRaterResponseToScore is nil — should error.
 	_, err := base.EvaluateInvocations(context.Background(), nil, nil, nil)
 	if err == nil {
-		t.Error("expected error when ConvertAutoRaterResponseToScore is nil")
+		t.Errorf("got nil error, want non-nil error when ConvertAutoRaterResponseToScore is nil")
 	}
 }
 
@@ -56,7 +56,7 @@ func TestLlmAsJudgeEvaluator_NilLLM(t *testing.T) {
 	actual := []Invocation{{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}}}
 	_, err := base.EvaluateInvocations(context.Background(), actual, nil, nil)
 	if err == nil {
-		t.Error("expected error when LLM is nil")
+		t.Errorf("got nil error, want non-nil error when LLM is nil")
 	}
 }
 
@@ -104,7 +104,7 @@ func TestLlmAsJudgeEvaluator_ExpectedRequiredButMissing(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if len(result.PerInvocationResults) != 1 {
-		t.Fatalf("len(PerInvocationResults) = %d, want 1", len(result.PerInvocationResults))
+		t.Errorf("len(PerInvocationResults) = %d, want 1", len(result.PerInvocationResults))
 	}
 	if result.PerInvocationResults[0].EvalStatus != EvalStatusNotEvaluated {
 		t.Errorf("EvalStatus = %v, want NOT_EVALUATED", result.PerInvocationResults[0].EvalStatus)
@@ -118,14 +118,14 @@ func TestDefaultAggregateSamples(t *testing.T) {
 	}
 	result := defaultAggregateSamples(samples)
 	if result.Score == nil || *result.Score != 1.0 {
-		t.Errorf("expected first sample score 1.0, got %v", result.Score)
+		t.Errorf("got %v, want first sample score 1.0", result.Score)
 	}
 }
 
 func TestDefaultAggregateSamples_Empty(t *testing.T) {
 	result := defaultAggregateSamples(nil)
 	if result.Score != nil {
-		t.Errorf("expected nil score for empty samples, got %v", result.Score)
+		t.Errorf("got %v, want nil score for empty samples", result.Score)
 	}
 }
 

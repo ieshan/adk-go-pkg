@@ -1,24 +1,25 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"google.golang.org/genai"
 )
 
 func TestInMemoryEvalSetsManager_CRUD(t *testing.T) {
 	ctx := context.Background()
-	manager := NewInMemoryEvalSetsManager()
+	manager := eval.NewInMemoryEvalSetsManager()
 
 	_, err := manager.CreateEvalSet(ctx, "app", "test-set")
 	if err != nil {
 		t.Fatalf("CreateEvalSet failed: %v", err)
 	}
 
-	err = manager.AddEvalCase(ctx, "app", "test-set", EvalCase{
+	err = manager.AddEvalCase(ctx, "app", "test-set", eval.EvalCase{
 		EvalID: "case-1",
-		Conversation: []Invocation{{
+		Conversation: []eval.Invocation{{
 			UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
 		}},
 	})
@@ -56,9 +57,9 @@ func TestInMemoryEvalSetsManager_CRUD(t *testing.T) {
 	}
 
 	// Update eval case.
-	err = manager.UpdateEvalCase(ctx, "app", "test-set", EvalCase{
+	err = manager.UpdateEvalCase(ctx, "app", "test-set", eval.EvalCase{
 		EvalID: "case-1",
-		Conversation: []Invocation{{
+		Conversation: []eval.Invocation{{
 			UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "updated"}}},
 		}},
 	})
@@ -71,7 +72,10 @@ func TestInMemoryEvalSetsManager_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEvalCase failed: %v", err)
 	}
-	got, _ = manager.GetEvalSet(ctx, "app", "test-set")
+	got, err = manager.GetEvalSet(ctx, "app", "test-set")
+	if err != nil {
+		t.Fatalf("GetEvalSet after delete: %v", err)
+	}
 	if got == nil {
 		t.Fatal("nil eval set")
 	}
@@ -82,7 +86,7 @@ func TestInMemoryEvalSetsManager_CRUD(t *testing.T) {
 
 func TestInMemoryEvalSetsManager_DuplicateCreate(t *testing.T) {
 	ctx := context.Background()
-	manager := NewInMemoryEvalSetsManager()
+	manager := eval.NewInMemoryEvalSetsManager()
 
 	_, err := manager.CreateEvalSet(ctx, "app", "dup-set")
 	if err != nil {
@@ -91,15 +95,15 @@ func TestInMemoryEvalSetsManager_DuplicateCreate(t *testing.T) {
 
 	_, err = manager.CreateEvalSet(ctx, "app", "dup-set")
 	if err == nil {
-		t.Error("expected error for duplicate creation")
+		t.Error("got nil error, want error for duplicate creation")
 	}
 }
 
 func TestInMemoryEvalSetsManager_GetNotFound(t *testing.T) {
 	ctx := context.Background()
-	manager := NewInMemoryEvalSetsManager()
+	manager := eval.NewInMemoryEvalSetsManager()
 	_, err := manager.GetEvalSet(ctx, "app", "nonexistent")
 	if err == nil {
-		t.Error("expected error for non-existent eval set")
+		t.Error("got nil error, want error for non-existent eval set")
 	}
 }

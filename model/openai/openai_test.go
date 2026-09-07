@@ -3,12 +3,14 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -50,7 +52,7 @@ func TestNew_ValidConfig(t *testing.T) {
 		t.Fatalf("New: unexpected error: %v", err)
 	}
 	if m == nil {
-		t.Fatal("New: expected non-nil LLM")
+		t.Fatal("New: got nil LLM, want non-nil")
 	}
 	if m.Name() != "gpt-4o" {
 		t.Errorf("Name(): got %q, want %q", m.Name(), "gpt-4o")
@@ -61,7 +63,7 @@ func TestNew_ValidConfig(t *testing.T) {
 func TestNew_EmptyModel(t *testing.T) {
 	_, err := New(Config{APIKey: "sk-test"})
 	if err == nil {
-		t.Error("New: expected error for empty model, got nil")
+		t.Errorf("New: got nil error, want error for empty model")
 	}
 }
 
@@ -75,7 +77,7 @@ func TestNew_DefaultBaseURL(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, cannedChatResponse)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	// Model with explicit base URL pointing at our test server.
 	m, err := New(Config{
@@ -95,7 +97,7 @@ func TestNew_DefaultBaseURL(t *testing.T) {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 	if len(resps) == 0 {
-		t.Fatal("expected at least one response")
+		t.Fatal("got no responses, want at least one")
 	}
 
 	// Now create a model with NO BaseURL — it should default to the OpenAI URL.
@@ -119,15 +121,15 @@ func TestNew_DefaultBaseURL(t *testing.T) {
 func TestGenerateContent_NonStreaming(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+			t.Errorf("got %s, want POST", r.Method)
 		}
 		if r.URL.Path != "/chat/completions" {
-			t.Errorf("expected path /chat/completions, got %s", r.URL.Path)
+			t.Errorf("got %s, want path /chat/completions", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, cannedChatResponse)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -147,22 +149,22 @@ func TestGenerateContent_NonStreaming(t *testing.T) {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 	if len(resps) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(resps))
+		t.Fatalf("got %d responses, want 1", len(resps))
 	}
 
 	resp := resps[0]
 
 	// Verify TurnComplete is set on non-streaming responses.
 	if !resp.TurnComplete {
-		t.Error("expected TurnComplete=true for non-streaming response")
+		t.Errorf("got TurnComplete=false, want true for non-streaming response")
 	}
 
 	// Verify text content.
 	if resp.Content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 	if len(resp.Content.Parts) == 0 {
-		t.Fatal("expected at least one Part")
+		t.Fatal("got no Parts, want at least one")
 	}
 	if resp.Content.Parts[0].Text != "Hello!" {
 		t.Errorf("text: got %q, want %q", resp.Content.Parts[0].Text, "Hello!")
@@ -175,7 +177,7 @@ func TestGenerateContent_NonStreaming(t *testing.T) {
 
 	// Verify usage.
 	if resp.UsageMetadata == nil {
-		t.Fatal("expected non-nil UsageMetadata")
+		t.Fatal("got nil UsageMetadata, want non-nil")
 	}
 	if resp.UsageMetadata.PromptTokenCount != 10 {
 		t.Errorf("prompt_tokens: got %d, want 10", resp.UsageMetadata.PromptTokenCount)
@@ -207,7 +209,7 @@ func TestGenerateContent_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, sseBody)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -227,7 +229,7 @@ func TestGenerateContent_Streaming(t *testing.T) {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 	if len(resps) == 0 {
-		t.Fatal("expected at least one response")
+		t.Fatal("got no responses, want at least one")
 	}
 
 	// Verify at least one partial text response.
@@ -239,13 +241,13 @@ func TestGenerateContent_Streaming(t *testing.T) {
 		}
 	}
 	if !foundPartial {
-		t.Error("expected at least one partial text response")
+		t.Errorf("got no partial text responses, want at least one")
 	}
 
 	// Verify last response is TurnComplete.
 	last := resps[len(resps)-1]
 	if !last.TurnComplete {
-		t.Errorf("last response: expected TurnComplete=true, got %+v", last)
+		t.Errorf("last response: got %+v, want TurnComplete=true", last)
 	}
 }
 
@@ -278,7 +280,7 @@ func TestGenerateContent_ToolCalling(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, toolResp)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -298,12 +300,12 @@ func TestGenerateContent_ToolCalling(t *testing.T) {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 	if len(resps) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(resps))
+		t.Fatalf("got %d responses, want 1", len(resps))
 	}
 
 	resp := resps[0]
 	if resp.Content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 
 	// Find FunctionCall part.
@@ -315,7 +317,7 @@ func TestGenerateContent_ToolCalling(t *testing.T) {
 		}
 	}
 	if fc == nil {
-		t.Fatal("expected a FunctionCall part")
+		t.Fatal("got no FunctionCall part, want one")
 	}
 	if fc.Name != "get_weather" {
 		t.Errorf("FunctionCall.Name: got %q, want %q", fc.Name, "get_weather")
@@ -345,7 +347,7 @@ func TestGenerateContent_StructuredOutput(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, cannedChatResponse)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -375,12 +377,12 @@ func TestGenerateContent_StructuredOutput(t *testing.T) {
 	}
 
 	if receivedBody.ResponseFormat == nil {
-		t.Fatal("expected response_format in request body, got nil")
+		t.Fatal("got nil response_format in request body, want non-nil")
 	}
 
 	rfMap, ok := receivedBody.ResponseFormat.(map[string]any)
 	if !ok {
-		t.Fatalf("response_format: expected map[string]any, got %T", receivedBody.ResponseFormat)
+		t.Fatalf("response_format: got %T, want map[string]any", receivedBody.ResponseFormat)
 	}
 	if rfMap["type"] != "json_schema" {
 		t.Errorf("response_format.type: got %v, want %q", rfMap["type"], "json_schema")
@@ -401,7 +403,7 @@ func TestGenerateContent_CustomHeaders(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, cannedChatResponse)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -439,7 +441,7 @@ func TestGenerateContent_ErrorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"message":"invalid request","type":"invalid_request_error"}}`, http.StatusBadRequest)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -456,7 +458,7 @@ func TestGenerateContent_ErrorResponse(t *testing.T) {
 
 	_, errs := collectResponses(m, context.Background(), req, false)
 	if len(errs) == 0 {
-		t.Fatal("expected at least one error from 400 response, got none")
+		t.Fatal("got no errors from 400 response, want at least one")
 	}
 }
 
@@ -470,7 +472,7 @@ func TestGenerateContent_AuthorizationHeader(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, cannedChatResponse)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	m, err := New(Config{
 		Model:   "gpt-4o",
@@ -493,5 +495,94 @@ func TestGenerateContent_AuthorizationHeader(t *testing.T) {
 	want := "Bearer sk-my-secret-key"
 	if receivedAuth != want {
 		t.Errorf("Authorization: got %q, want %q", receivedAuth, want)
+	}
+}
+
+// TestNon2xxErrorBodyClose verifies that the response body is closed even when
+// io.ReadAll fails during non-2xx error handling. The server returns a 500 with
+// a Content-Length that exceeds the actual body, causing io.ReadAll to fail
+// with io.ErrUnexpectedEOF. A transport with MaxConnsPerHost: 1 ensures that if
+// the body is not closed, a second request cannot obtain a connection and times
+// out — proving the defer resp.Body.Close() releases the connection slot.
+func TestGenerateContent_Non2xxErrorBodyClose(t *testing.T) {
+	t.Parallel()
+
+	var requestCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount > 1 {
+			// Second request: return a normal 500 with a readable body.
+			http.Error(w, `{"error":"bad"}`, http.StatusInternalServerError)
+			return
+		}
+		// First request: hijack and send a truncated body so io.ReadAll
+		// fails on the client side with io.ErrUnexpectedEOF.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatalf("server does not support hijacking")
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_, _ = bufrw.WriteString("HTTP/1.1 500 Internal Server Error\r\n")
+		_, _ = bufrw.WriteString("Content-Length: 100\r\n")
+		_, _ = bufrw.WriteString("\r\n")
+		_, _ = bufrw.WriteString("partial") // only 7 of 100 promised bytes
+		_ = bufrw.Flush()
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	// Use a transport with MaxConnsPerHost: 1 so that if the body from the
+	// first request is not closed, the second request cannot get a connection.
+	transport := &http.Transport{
+		MaxConnsPerHost: 1,
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+
+	m, err := New(Config{
+		Model:      "gpt-4o",
+		APIKey:     "sk-test",
+		BaseURL:    srv.URL,
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hi"}}}},
+	}
+
+	// First request: io.ReadAll fails because the body is truncated.
+	_, errs := collectResponses(m, context.Background(), req, false)
+	if len(errs) == 0 {
+		t.Fatal("got no errors from truncated 500 response, want at least one")
+	}
+
+	// Second request: if the first body was not closed, MaxConnsPerHost: 1
+	// would prevent a new connection and this would hang. Use a timeout
+	// context as a safety net so the test fails fast rather than hanging
+	// indefinitely if the body leak regresses.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	_, errs2 := collectResponses(m, ctx, req, false)
+	if len(errs2) == 0 {
+		t.Fatal("got no errors from second 500 response, want at least one")
+	}
+
+	// Verify the second error is an HTTPError with status 500.
+	found500 := false
+	for _, e := range errs2 {
+		var httpErr *HTTPError
+		if errors.As(e, &httpErr) && httpErr.StatusCode == http.StatusInternalServerError {
+			found500 = true
+			break
+		}
+	}
+	if !found500 {
+		t.Errorf("second errors: got %v, want an HTTPError with status 500", errs2)
 	}
 }

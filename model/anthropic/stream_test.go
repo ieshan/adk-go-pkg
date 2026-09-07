@@ -52,7 +52,7 @@ func TestParseStream_TextOnly(t *testing.T) {
 	}
 
 	if len(partials) != 2 {
-		t.Fatalf("expected 2 partials, got %d: %v", len(partials), partials)
+		t.Fatalf("got %d partials, want 2: %v", len(partials), partials)
 	}
 	if partials[0] != "Hello" {
 		t.Errorf("partial[0]: got %q, want %q", partials[0], "Hello")
@@ -61,16 +61,16 @@ func TestParseStream_TextOnly(t *testing.T) {
 		t.Errorf("partial[1]: got %q, want %q", partials[1], " world")
 	}
 	if final == nil {
-		t.Fatal("expected final TurnComplete response")
+		t.Fatal("got no final TurnComplete response, want one")
 	}
 	if !final.TurnComplete {
-		t.Error("expected TurnComplete=true")
+		t.Errorf("got TurnComplete=false, want true")
 	}
 	if final.FinishReason != genai.FinishReasonStop {
 		t.Errorf("finish_reason: got %v, want %v", final.FinishReason, genai.FinishReasonStop)
 	}
 	if final.Content == nil || len(final.Content.Parts) != 1 {
-		t.Fatal("expected 1 part in final content")
+		t.Fatal("got wrong part count in final content, want 1")
 	}
 	if final.Content.Parts[0].Text != "Hello world" {
 		t.Errorf("final text: got %q, want %q", final.Content.Parts[0].Text, "Hello world")
@@ -101,14 +101,14 @@ func TestParseStream_ToolUse(t *testing.T) {
 	}
 
 	if final == nil {
-		t.Fatal("expected final TurnComplete response")
+		t.Fatal("got no final TurnComplete response, want one")
 	}
 	if final.Content == nil || len(final.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(final.Content.Parts))
+		t.Fatalf("got %d parts, want 1", len(final.Content.Parts))
 	}
 	fc := final.Content.Parts[0].FunctionCall
 	if fc == nil {
-		t.Fatal("expected FunctionCall part")
+		t.Fatal("got no FunctionCall part, want one")
 	}
 	if fc.ID != "toolu_01X" {
 		t.Errorf("ID: got %q, want %q", fc.ID, "toolu_01X")
@@ -147,16 +147,16 @@ func TestParseStream_MultipleBlocks(t *testing.T) {
 	}
 
 	if final == nil {
-		t.Fatal("expected final TurnComplete response")
+		t.Fatal("got no final TurnComplete response, want one")
 	}
 	if final.Content == nil || len(final.Content.Parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d", len(final.Content.Parts))
+		t.Fatalf("got %d parts, want 2", len(final.Content.Parts))
 	}
 	if final.Content.Parts[0].Text != "The weather is" {
 		t.Errorf("text: got %q, want %q", final.Content.Parts[0].Text, "The weather is")
 	}
 	if final.Content.Parts[1].FunctionCall == nil {
-		t.Error("expected FunctionCall on second part")
+		t.Errorf("got no FunctionCall on second part, want one")
 	}
 }
 
@@ -186,7 +186,7 @@ func TestParseStream_Interrupted(t *testing.T) {
 		}
 	}
 	if !gotInterrupted {
-		t.Error("expected Interrupted=true on cancelled context")
+		t.Errorf("got Interrupted=false on cancelled context, want true")
 	}
 }
 
@@ -205,7 +205,7 @@ func TestParseStream_MalformedJSON(t *testing.T) {
 		}
 	}
 	if !gotError {
-		t.Error("expected error for malformed JSON")
+		t.Errorf("got no error for malformed JSON, want error")
 	}
 }
 
@@ -233,14 +233,14 @@ func TestParseStream_Thinking(t *testing.T) {
 	}
 
 	if final == nil {
-		t.Fatal("expected final TurnComplete response")
+		t.Fatal("got no final TurnComplete response, want one")
 	}
 	if final.Content == nil || len(final.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(final.Content.Parts))
+		t.Fatalf("got %d parts, want 1", len(final.Content.Parts))
 	}
 	part := final.Content.Parts[0]
 	if !part.Thought {
-		t.Error("expected Thought=true")
+		t.Errorf("got Thought=false, want true")
 	}
 	if part.Text != "I should check the weather" {
 		t.Errorf("thinking text: got %q, want %q", part.Text, "I should check the weather")
@@ -270,10 +270,10 @@ func TestParseStream_UsageAndCache(t *testing.T) {
 	}
 
 	if final == nil {
-		t.Fatal("expected final TurnComplete response")
+		t.Fatal("got no final TurnComplete response, want one")
 	}
 	if final.UsageMetadata == nil {
-		t.Fatal("expected non-nil UsageMetadata")
+		t.Fatal("got nil UsageMetadata, want non-nil")
 	}
 	if final.UsageMetadata.CandidatesTokenCount != 15 {
 		t.Errorf("output_tokens: got %d, want 15", final.UsageMetadata.CandidatesTokenCount)
@@ -282,7 +282,7 @@ func TestParseStream_UsageAndCache(t *testing.T) {
 		t.Errorf("cache_read: got %d, want 200", final.UsageMetadata.CachedContentTokenCount)
 	}
 	if final.CustomMetadata == nil {
-		t.Fatal("expected non-nil CustomMetadata")
+		t.Fatal("got nil CustomMetadata, want non-nil")
 	}
 	if final.CustomMetadata["cache_creation_input_tokens"] != int32(100) {
 		t.Errorf("cache_creation: got %v, want 100", final.CustomMetadata["cache_creation_input_tokens"])
@@ -290,4 +290,31 @@ func TestParseStream_UsageAndCache(t *testing.T) {
 	if final.CustomMetadata["cache_read_input_tokens"] != int32(200) {
 		t.Errorf("cache_read: got %v, want 200", final.CustomMetadata["cache_read_input_tokens"])
 	}
+}
+
+// FuzzParseStream verifies that parseStream never panics on arbitrary input
+// and always terminates (the iterator reaches completion).
+func FuzzParseStream(f *testing.F) {
+	// Seed: valid SSE stream with a text block.
+	f.Add(buildSSE(
+		`{"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","content":[],"model":"claude","usage":{"input_tokens":1,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	))
+	// Seed: malformed JSON.
+	f.Add("data: {invalid json\n\n")
+	// Seed: empty input.
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		ctx := context.Background()
+		for resp, err := range parseStream(ctx, strings.NewReader(input)) {
+			// The function must not panic. Errors are acceptable for malformed input.
+			_ = resp
+			_ = err
+		}
+	})
 }

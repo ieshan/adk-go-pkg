@@ -116,7 +116,8 @@ assert.NotNil(t, llm.LastCall())
 ```
 
 **Response Queue Behavior:**
-- Responses are returned in order from the queue
+- Non-streaming: returns `responses[idx]` (one per call, advances `idx`)
+- Streaming: yields `responses[idx:]` (all remaining from `idx`, last marked `TurnComplete=true`)
 - If exhausted, the last response is repeated
 - Supports both streaming (`Partial=true`) and final (`TurnComplete=true`) responses
 
@@ -266,6 +267,26 @@ assert.Equal(t, 1, tool.CallCount())
 assert.Equal(t, "test", tool.LastArgs()["query"])
 ```
 
+### FakeToolset
+
+Implements `tool.Toolset` for testing:
+
+```go
+// Create a fake toolset with tools
+ts := testutil.NewFakeToolset("my-set", tool1, tool2)
+
+// Query tools from the toolset
+tools, err := ts.Tools(callbackCtx)
+
+// Configure the toolset to return an error
+ts = testutil.NewFakeToolset("err-set").WithError(errors.New("broken"))
+```
+
+**Features:**
+- Returns configured tools from `Tools()`
+- `WithError` configures the toolset to return an error instead of tools
+- `Name()` returns the configured name
+
 ### FakeArtifactService
 
 Implements `artifact.Service` with in-memory storage and versioning:
@@ -312,11 +333,15 @@ assert.Equal(t, 1, svc.LoadCount())
 - Automatic versioning (each save increments version, starting at 1)
 - Supports user-scoped artifacts (filenames starting with "user:")
 - Validates requests like the real service
-- Records all operations for assertions
+- Records Save and Load operations for assertions
 
 > **Note:** Unlike the real `artifact/file` service (which starts versioning
 > at 0), `FakeArtifactService` starts versioning at 1. The first `Save` call
 > returns `Version: 1`.
+
+> **Note:** `PreloadArtifact` applies the same `user:` prefix mapping as `Save`
+> and `Load` — user-scoped filenames (prefixed with `user:`) are stored with
+> `SessionID: "user"`.
 
 ### FakeMemoryService
 
@@ -764,7 +789,7 @@ This allows `FakeAgent` to be passed anywhere `agent.Agent` is expected.
 
 ### Response Queue Behavior
 
-`FakeLLM` returns responses in order from the queue. If exhausted, the last response is repeated. This enables:
+`FakeLLM` returns responses in order from the queue. In non-streaming mode, each call returns `responses[idx]` and advances `idx`. In streaming mode, each call yields `responses[idx:]` with all remaining responses (last marked `TurnComplete=true`). If exhausted, the last response is repeated. This enables:
 
 - Multi-turn conversation testing with different responses per turn
 - Simple single-response tests
@@ -772,7 +797,7 @@ This allows `FakeAgent` to be passed anywhere `agent.Agent` is expected.
 
 ### Request Validation
 
-`FakeArtifactService` validates requests using the same `Validate()` methods as the real service, ensuring tests catch validation errors early.
+`FakeArtifactService` validates requests using the same `Validate()` methods as the real service. Only `Save` and `Load` operations are tracked for assertions; `Delete`, `List`, `Versions`, and `GetArtifactVersion` are not recorded.
 
 ## Best Practices
 
@@ -786,6 +811,6 @@ This allows `FakeAgent` to be passed anywhere `agent.Agent` is expected.
 
 ## Compatibility
 
-- **Go 1.26+** — Uses `iter.Seq2` and range-over-func
-- **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`)
-- **GenAI v1.64.0** (`google.golang.org/genai`)
+- **Go 1.27+** — Uses `iter.Seq2` and range-over-func
+- **ADK-Go v2.3.0+** (`google.golang.org/adk/v2`)
+- **GenAI v1.71.0** (`google.golang.org/genai`)

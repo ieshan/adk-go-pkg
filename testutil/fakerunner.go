@@ -119,7 +119,7 @@ type RunnerFakes struct {
 // the agent with a single user message, collecting all events.
 //
 // This is the simplest way to test an agent end-to-end with a FakeLLM.
-func RunAgent(ctx context.Context, ag agent.Agent, llm model.LLM, userMsg string, responses ...model.LLMResponse) ([]*session.Event, error) {
+func RunAgent(ctx context.Context, ag agent.Agent, llm model.LLM, userMsg string) ([]*session.Event, error) {
 	if _, ok := llm.(*FakeLLM); !ok {
 		return nil, fmt.Errorf("testutil: RunAgent requires a *FakeLLM, got %T", llm)
 	}

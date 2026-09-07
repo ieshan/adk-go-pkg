@@ -117,6 +117,29 @@ func buildMessageRequest(req *model.LLMRequest, modelName string, stream bool, c
 			mr.ToolChoice = translateToolConfig(cfg.ToolConfig)
 		}
 
+		// Filter tools to AllowedFunctionNames when multiple names are
+		// specified. Anthropic's tool_choice only supports a single tool
+		// name, so filtering the tools list is the only way to restrict
+		// to multiple specific tools.
+		if cfg.ToolConfig != nil && cfg.ToolConfig.FunctionCallingConfig != nil {
+			names := cfg.ToolConfig.FunctionCallingConfig.AllowedFunctionNames
+			if len(names) > 1 {
+				allowed := make(map[string]struct{}, len(names))
+				for _, n := range names {
+					allowed[n] = struct{}{}
+				}
+				var filtered []map[string]any
+				for _, t := range mr.Tools {
+					if name, ok := t["name"].(string); ok {
+						if _, ok := allowed[name]; ok {
+							filtered = append(filtered, t)
+						}
+					}
+				}
+				mr.Tools = filtered
+			}
+		}
+
 		// Thinking config.
 		if cfg.ThinkingConfig != nil {
 			thinking := &thinkingConfig{}
@@ -296,8 +319,10 @@ func partsToContentBlocks(parts []*genai.Part, toolCallParts []*genai.Part) ([]m
 }
 
 // extractCacheControl extracts a cache_control map from a Part's PartMetadata.
-// Returns nil if the part has no cache_control metadata or if the block type
-// is non-cacheable (tool_use, tool_result, thinking).
+// Returns nil if the part has no cache_control metadata. Callers ensure this
+// is only called on cacheable block types (text, image, document); thinking
+// blocks are skipped by the caller, and tool_use/tool_result blocks are
+// handled separately and never reach this function.
 func extractCacheControl(p *genai.Part) map[string]any {
 	if p.PartMetadata == nil {
 		return nil

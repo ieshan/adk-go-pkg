@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestRunLifecycle(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 
 	if got[0].Type() != events.EventTypeRunStarted {
@@ -56,7 +57,7 @@ func TestTextMessageSequence(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 4 {
-		t.Fatalf("expected 4 events, got %d", len(got))
+		t.Fatalf("got %d events, want 4", len(got))
 	}
 
 	expected := []events.EventType{
@@ -92,7 +93,7 @@ func TestToolCallSequence(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 4 {
-		t.Fatalf("expected 4 events, got %d", len(got))
+		t.Fatalf("got %d events, want 4", len(got))
 	}
 
 	expected := []events.EventType{
@@ -126,7 +127,7 @@ func TestStateSnapshotAndDelta(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 
 	if got[0].Type() != events.EventTypeStateSnapshot {
@@ -176,7 +177,7 @@ func TestRunErrorWithCode(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 	if got[0].Type() != events.EventTypeRunError {
 		t.Errorf("event type = %s, want RUN_ERROR", got[0].Type())
@@ -184,7 +185,7 @@ func TestRunErrorWithCode(t *testing.T) {
 
 	errEvt, ok := got[0].(*events.RunErrorEvent)
 	if !ok {
-		t.Fatalf("expected *events.RunErrorEvent, got %T", got[0])
+		t.Fatalf("got %T, want *events.RunErrorEvent", got[0])
 	}
 	if errEvt.Message != "too many requests" {
 		t.Errorf("message = %q, want %q", errEvt.Message, "too many requests")
@@ -204,12 +205,12 @@ func TestRunErrorWithoutCode(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 
 	errEvt, ok := got[0].(*events.RunErrorEvent)
 	if !ok {
-		t.Fatalf("expected *events.RunErrorEvent, got %T", got[0])
+		t.Fatalf("got %T, want *events.RunErrorEvent", got[0])
 	}
 	if errEvt.Code != nil {
 		t.Errorf("code = %v, want nil", errEvt.Code)
@@ -229,7 +230,7 @@ func TestStepStartedFinished(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 	if got[0].Type() != events.EventTypeStepStarted {
 		t.Errorf("event[0] type = %s, want STEP_STARTED", got[0].Type())
@@ -249,7 +250,7 @@ func TestToolCallResult(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 	if got[0].Type() != events.EventTypeToolCallResult {
 		t.Errorf("event type = %s, want TOOL_CALL_RESULT", got[0].Type())
@@ -266,7 +267,7 @@ func TestCustomEvent(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 	if got[0].Type() != events.EventTypeCustom {
 		t.Errorf("event type = %s, want CUSTOM", got[0].Type())
@@ -283,7 +284,7 @@ func TestRawEvent(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 	if got[0].Type() != events.EventTypeRaw {
 		t.Errorf("event type = %s, want RAW", got[0].Type())
@@ -313,7 +314,7 @@ func TestReasoningLifecycle(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 5 {
-		t.Fatalf("expected 5 events, got %d", len(got))
+		t.Fatalf("got %d events, want 5", len(got))
 	}
 
 	expected := []events.EventType{
@@ -338,7 +339,7 @@ func TestEventEmitter_TextMessageChunk(t *testing.T) {
 	}
 	evts := drain(ch)
 	if len(evts) != 1 || evts[0].Type() != events.EventTypeTextMessageChunk {
-		t.Errorf("expected TEXT_MESSAGE_CHUNK, got %v", evts)
+		t.Errorf("got %v, want TEXT_MESSAGE_CHUNK", evts)
 	}
 }
 
@@ -350,7 +351,7 @@ func TestEventEmitter_ReasoningEncryptedValue(t *testing.T) {
 	}
 	evts := drain(ch)
 	if len(evts) != 1 || evts[0].Type() != events.EventTypeReasoningEncryptedValue {
-		t.Errorf("expected REASONING_ENCRYPTED_VALUE, got %v", evts)
+		t.Errorf("got %v, want REASONING_ENCRYPTED_VALUE", evts)
 	}
 }
 
@@ -362,7 +363,7 @@ func TestEventEmitter_MessagesSnapshot(t *testing.T) {
 	}
 	evts := drain(ch)
 	if len(evts) != 1 || evts[0].Type() != events.EventTypeMessagesSnapshot {
-		t.Errorf("expected MESSAGES_SNAPSHOT, got %v", evts)
+		t.Errorf("got %v, want MESSAGES_SNAPSHOT", evts)
 	}
 }
 
@@ -380,11 +381,11 @@ func TestEventEmitter_MessagesSnapshot_ScrubsEncryptedValues(t *testing.T) {
 
 	evts := drain(ch)
 	if len(evts) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(evts))
+		t.Fatalf("got %d events, want 1", len(evts))
 	}
 	ms, ok := evts[0].(*events.MessagesSnapshotEvent)
 	if !ok {
-		t.Fatalf("expected *events.MessagesSnapshotEvent, got %T", evts[0])
+		t.Fatalf("got %T, want *events.MessagesSnapshotEvent", evts[0])
 	}
 	for i, m := range ms.Messages {
 		if m.EncryptedValue != "" {
@@ -415,12 +416,12 @@ func TestEventEmitter_MessagesSnapshot_NoScrubWhenClean(t *testing.T) {
 	}
 	ms, ok := evts[0].(*events.MessagesSnapshotEvent)
 	if !ok {
-		t.Fatalf("expected *events.MessagesSnapshotEvent, got %T", evts[0])
+		t.Fatalf("got %T, want *events.MessagesSnapshotEvent", evts[0])
 	}
 	// The slice should be the same pointer (no copy) when no scrubbing needed.
 	// This is an implementation detail but verifies the no-allocation fast path.
 	if len(ms.Messages) != 1 {
-		t.Errorf("expected 1 message, got %d", len(ms.Messages))
+		t.Errorf("got %d messages, want 1", len(ms.Messages))
 	}
 	if ms.Messages[0].Content != "hello" {
 		t.Errorf("content = %q, want %q", ms.Messages[0].Content, "hello")
@@ -444,7 +445,7 @@ func TestActivitySnapshotAndDelta(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(got))
+		t.Fatalf("got %d events, want 2", len(got))
 	}
 	if got[0].Type() != events.EventTypeActivitySnapshot {
 		t.Errorf("event[0] type = %s, want ACTIVITY_SNAPSHOT", got[0].Type())
@@ -464,12 +465,12 @@ func TestRunErrorWithOptions_RunID(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 
 	errEvt, ok := got[0].(*events.RunErrorEvent)
 	if !ok {
-		t.Fatalf("expected *events.RunErrorEvent, got %T", got[0])
+		t.Fatalf("got %T, want *events.RunErrorEvent", got[0])
 	}
 	if errEvt.RunID() != "run-42" {
 		t.Errorf("RunID = %q, want %q", errEvt.RunID(), "run-42")
@@ -492,21 +493,21 @@ func TestRunFinishedWithOptions_Interrupt(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(got))
+		t.Fatalf("got %d events, want 1", len(got))
 	}
 
 	finEvt, ok := got[0].(*events.RunFinishedEvent)
 	if !ok {
-		t.Fatalf("expected *events.RunFinishedEvent, got %T", got[0])
+		t.Fatalf("got %T, want *events.RunFinishedEvent", got[0])
 	}
 	if finEvt.Outcome == nil {
-		t.Fatal("expected non-nil Outcome")
+		t.Fatal("got nil Outcome, want non-nil Outcome")
 	}
 	if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
 		t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
 	}
 	if len(finEvt.Outcome.Interrupts) != 1 {
-		t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
+		t.Fatalf("got %d interrupts, want 1", len(finEvt.Outcome.Interrupts))
 	}
 	if finEvt.Outcome.Interrupts[0].ID != "int-1" {
 		t.Errorf("Interrupts[0].ID = %q, want %q", finEvt.Outcome.Interrupts[0].ID, "int-1")
@@ -520,10 +521,10 @@ func TestEventEmitter_TransportErrorOnClosedChannel(t *testing.T) {
 
 	err := em.RunStarted("thread-1", "run-1")
 	if err == nil {
-		t.Fatal("expected error when writing to closed channel")
+		t.Fatal("got nil error, want error when writing to closed channel")
 	}
 	if !errors.Is(err, agui.ErrTransport) {
-		t.Errorf("expected ErrTransport, got %v", err)
+		t.Errorf("got %v, want ErrTransport", err)
 	}
 }
 
@@ -538,21 +539,28 @@ func TestEventEmitter_ContextCancellationUnblocks(t *testing.T) {
 	em := agui.NewEventEmitterWithContext(ctx, ch)
 
 	errCh := make(chan error, 1)
+	// Use a WaitGroup to know the goroutine has been scheduled and is about
+	// to call emit. The emit select handles ctx.Done(), so whether the
+	// goroutine is blocked on the send or has not yet entered the select,
+	// cancelling the context unblocks it.
+	var started sync.WaitGroup
+	started.Add(1)
 	go func() {
+		started.Done()
 		errCh <- em.RunStarted("t1", "r1")
 	}()
 
-	// Give the goroutine a moment to block on the send, then cancel.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for the goroutine to start, then cancel the context.
+	started.Wait()
 	cancel()
 
 	select {
 	case err := <-errCh:
 		if err == nil {
-			t.Fatal("expected error when context cancelled during emit, got nil")
+			t.Fatal("got nil error, want error when context cancelled during emit")
 		}
 		if !errors.Is(err, agui.ErrTransport) && !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected transport or canceled error, got: %v", err)
+			t.Fatalf("got %v, want transport or canceled error", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("emitter blocked indefinitely despite context cancellation")

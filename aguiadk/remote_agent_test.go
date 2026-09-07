@@ -1,4 +1,4 @@
-package aguiadk
+package aguiadk_test
 
 import (
 	"context"
@@ -7,12 +7,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/aguiadk"
 	"github.com/ieshan/adk-go-pkg/testutil"
 
 	"google.golang.org/genai"
 )
 
 func TestNewRemoteAgent_ADKExecution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
@@ -27,9 +31,9 @@ func TestNewRemoteAgent_ADKExecution(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "event: RUN_FINISHED\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"t1\",\"runId\":\"r1\"}\n\n")
 		flusher.Flush()
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
-	remAgent, err := NewRemoteAgent(RemoteAgentConfig{
+	remAgent, err := aguiadk.NewRemoteAgent(aguiadk.RemoteAgentConfig{
 		Name:        "remote_assistant",
 		Description: "Remote AG-UI agent",
 		Endpoint:    server.URL,
@@ -56,20 +60,20 @@ func TestNewRemoteAgent_ADKExecution(t *testing.T) {
 	}
 
 	if textReceived != "Hello from remote!" {
-		t.Fatalf("expected 'Hello from remote!', got %q", textReceived)
+		t.Fatalf("got %q, want 'Hello from remote!'", textReceived)
 	}
 }
 
 func TestNewRemoteAgent_MissingName(t *testing.T) {
-	_, err := NewRemoteAgent(RemoteAgentConfig{Endpoint: "http://localhost"})
+	_, err := aguiadk.NewRemoteAgent(aguiadk.RemoteAgentConfig{Endpoint: "http://localhost"})
 	if err == nil {
-		t.Fatal("expected error for missing name")
+		t.Fatal("got nil error, want error for missing name")
 	}
 }
 
 func TestNewRemoteAgent_MissingEndpoint(t *testing.T) {
-	_, err := NewRemoteAgent(RemoteAgentConfig{Name: "test"})
+	_, err := aguiadk.NewRemoteAgent(aguiadk.RemoteAgentConfig{Name: "test"})
 	if err == nil {
-		t.Fatal("expected error for missing endpoint")
+		t.Fatal("got nil error, want error for missing endpoint")
 	}
 }

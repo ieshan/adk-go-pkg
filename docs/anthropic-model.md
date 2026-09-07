@@ -16,9 +16,14 @@ Anthropic-compatible endpoint.
 |----------|---------|------|-------------|
 | **Anthropic Direct** | `https://api.anthropic.com` (default) | `x-api-key` | `2023-06-01` |
 | **LiteLLM Gateway** | Custom | `x-api-key` or `Bearer` | `2023-06-01` |
-| **AWS Bedrock** | Custom | `Bearer` or SigV4 | `bedrock-2023-05-31` |
-| **Google Vertex AI** | Custom | GCP `Bearer` | Provider-specific |
+| **AWS Bedrock** | Custom (via gateway) | `x-api-key` or `Bearer` | `2023-06-01` |
+| **Google Vertex AI** | Custom (via gateway) | `x-api-key` or `Bearer` | `2023-06-01` |
 | **Corporate Gateway** | Custom | `x-api-key` or `Bearer` | Provider-specific |
+
+> **Note:** AWS Bedrock and Google Vertex AI are **not** supported natively.
+> There is no SigV4 or GCP authentication support. They can only be used
+> through a gateway that exposes an Anthropic-compatible `/v1/messages`
+> endpoint and handles the provider-specific auth itself.
 
 Any other server that implements the Anthropic Messages API will also work.
 
@@ -43,6 +48,8 @@ type Config struct {
     APIVersion string
 
     // Auth scheme: "x-api-key" (default) or "bearer".
+    // Case-sensitive — only the lowercase "bearer" is accepted;
+    // "Bearer" or other variants will not be recognized.
     AuthScheme string
 
     // HTTP client. Defaults to http.DefaultClient.
@@ -119,7 +126,10 @@ sentinel; the stream ends naturally at `message_stop`.
 ### Tool Calling
 
 Tools declared in `model.LLMRequest` are automatically translated to Anthropic's
-`tools` array with `input_schema`. When the model calls a tool, the response
+`tools` array with `input_schema`. When the genai `Schema` on a
+`FunctionDeclaration` is not available (nil), the adapter falls back to the
+declaration's `ParametersJsonSchema` field (`map[string]any`) for the tool's
+`input_schema`. When the model calls a tool, the response
 carries `FunctionCall` parts:
 
 ```go
@@ -155,6 +165,16 @@ for resp, err := range m.GenerateContent(ctx, req, false) {
     }
 }
 ```
+
+### ToolConfig
+
+The `ToolConfig` field on `GenerateContentConfig` controls tool selection
+behavior. When `ToolConfig.FunctionCallingConfig.AllowedFunctionNames` contains
+exactly **one** tool name, the adapter sends an explicit tool choice
+(`tool_choice: { type: "tool", name: "<name>" }`) forcing the model to call
+that tool. When **multiple** tool names are allowed (or the list is empty/unset),
+the adapter uses auto tool choice
+(`tool_choice: { type: "auto" }`), letting the model decide which tool to call.
 
 ### Images
 
@@ -212,7 +232,9 @@ This sends `output_config: { format: "json", json_schema: { ... } }` to the
 API. For unstructured JSON, set `ResponseMIMEType: "application/json"` instead
 (sends `output_config: { format: "json" }`).
 
-You can also pass a pre-built schema map via `ResponseJsonSchema`.
+You can also pass a pre-built schema map via `ResponseJsonSchema`. The value
+must be of type `map[string]any` — a typed struct will not be accepted and will
+not be serialized correctly.
 
 ### Thinking Blocks
 
@@ -236,6 +258,12 @@ req := &model.LLMRequest{
 Thinking blocks in the response have `Part.Thought = true` and
 `Part.ThoughtSignature` set. The signature must be preserved and echoed back in
 subsequent requests for multi-turn continuity.
+
+When `ThinkingConfig.IncludeThoughts` is `false`, the adapter sends
+`thinking: { type: "adaptive" }` rather than disabling thinking entirely. In
+adaptive mode the model decides whether to produce thinking blocks based on
+task complexity, and any thinking blocks returned are still surfaced as
+`Part.Thought = true` parts.
 
 ### Prompt Caching
 
@@ -334,9 +362,13 @@ places it at the request root automatically.
 
 ### Tool Result Content
 
-`FunctionResponse.Response` (a `map[string]any`) is serialized to a JSON string
-for the `tool_result.content` field. When `FunctionResponse.Parts` contains
-`InlineData`, each part becomes a content block inside the `tool_result` array.
+When serializing a `FunctionResponse` to the `tool_result` content field, the
+adapter first inspects `FunctionResponse.Parts`. **Only `InlineData` parts are
+used** — text and other part types are ignored. Each `InlineData` part becomes
+a content block inside the `tool_result` array. The `FunctionResponse.Response`
+field (a `map[string]any`) is a **fallback**: it is serialized to a JSON string
+for the `tool_result.content` field only when `Parts` contains no `InlineData`
+parts.
 
 ## Finish Reason Mapping
 

@@ -32,7 +32,7 @@ func TestAgentFunc_Run(t *testing.T) {
 			t.Fatal(err)
 		}
 		if ev.Type() != events.EventTypeRunStarted {
-			t.Errorf("expected RUN_STARTED, got %s", ev.Type())
+			t.Errorf("got %s, want RUN_STARTED", ev.Type())
 		}
 	}
 	if !called {
@@ -58,13 +58,13 @@ func TestChanToIter(t *testing.T) {
 	}
 
 	if len(collected) != 3 {
-		t.Fatalf("expected 3 events, got %d", len(collected))
+		t.Fatalf("got %d events, want 3", len(collected))
 	}
 	if collected[0] != events.EventTypeRunStarted {
-		t.Errorf("event 0: expected RUN_STARTED, got %s", collected[0])
+		t.Errorf("event 0: got %s, want RUN_STARTED", collected[0])
 	}
 	if collected[2] != events.EventTypeRunFinished {
-		t.Errorf("event 2: expected RUN_FINISHED, got %s", collected[2])
+		t.Errorf("event 2: got %s, want RUN_FINISHED", collected[2])
 	}
 }
 
@@ -82,6 +82,6 @@ func TestChanToIter_ContextCancellation(t *testing.T) {
 		}
 	}
 	if gotErr == nil {
-		t.Error("expected context cancellation error")
+		t.Error("got nil error, want context cancellation error")
 	}
 }

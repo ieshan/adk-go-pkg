@@ -1,25 +1,26 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"iter"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
 
 func TestFakeAgent_Name(t *testing.T) {
-	f := MustNewFakeAgent("my-agent")
+	f := testutil.MustNewFakeAgent("my-agent")
 	if f.Name() != "my-agent" {
 		t.Errorf("Name() = %q, want %q", f.Name(), "my-agent")
 	}
 }
 
 func TestFakeAgent_SubAgents(t *testing.T) {
-	child := MustNewFakeAgent("child")
-	parent := MustNewFakeAgent("parent").WithSubAgents(child)
+	child := testutil.MustNewFakeAgent("child")
+	parent := testutil.MustNewFakeAgent("parent").WithSubAgents(child)
 
 	subs := parent.SubAgents()
 	if len(subs) != 1 || subs[0].Name() != "child" {
@@ -38,10 +39,10 @@ func TestFakeAgent_SubAgents(t *testing.T) {
 }
 
 func TestFakeAgent_RunTracking(t *testing.T) {
-	f := MustNewFakeAgent("tracker")
-	ic := NewFakeInvocationContext()
+	f := testutil.MustNewFakeAgent("tracker")
+	ic := testutil.NewFakeInvocationContext()
 
-	events, err := CollectEvents(f.Run(ic))
+	events, err := testutil.CollectEvents(f.Run(ic))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -57,20 +58,20 @@ func TestFakeAgent_RunTracking(t *testing.T) {
 }
 
 func TestFakeAgent_WithRunFunc(t *testing.T) {
-	f := MustNewFakeAgent("custom").
+	f := testutil.MustNewFakeAgent("custom").
 		WithRunFunc(func(ic agent.InvocationContext) iter.Seq2[*session.Event, error] {
 			return func(yield func(*session.Event, error) bool) {
-				yield(NewTextEvent(context.Background(), "custom", "hello"), nil)
+				yield(testutil.NewTextEvent(context.Background(), "custom", "hello"), nil)
 			}
 		})
 
-	ic := NewFakeInvocationContext()
-	events, err := CollectEvents(f.Run(ic))
+	ic := testutil.NewFakeInvocationContext()
+	events, err := testutil.CollectEvents(f.Run(ic))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+		t.Fatalf("got %d events, want 1", len(events))
 	}
 	if events[0].Author != "custom" {
 		t.Errorf("event author = %q, want %q", events[0].Author, "custom")
@@ -78,10 +79,11 @@ func TestFakeAgent_WithRunFunc(t *testing.T) {
 }
 
 func TestFakeAgent_Reset(t *testing.T) {
-	f := MustNewFakeAgent("reset")
-	ic := NewFakeInvocationContext()
-	_, _ = CollectEvents(f.Run(ic))
-	_, _ = CollectEvents(f.Run(ic))
+	f := testutil.MustNewFakeAgent("reset")
+	ic := testutil.NewFakeInvocationContext()
+	// error intentionally ignored: exercising Reset path, not validating Run output
+	_, _ = testutil.CollectEvents(f.Run(ic))
+	_, _ = testutil.CollectEvents(f.Run(ic))
 
 	if f.CallCount() != 2 {
 		t.Errorf("CallCount() = %d, want 2", f.CallCount())
@@ -94,8 +96,8 @@ func TestFakeAgent_Reset(t *testing.T) {
 }
 
 func TestFakeInvocationContext(t *testing.T) {
-	sess := NewFakeSession().WithID("s-42")
-	ic := NewFakeInvocationContext().
+	sess := testutil.NewFakeSession().WithID("s-42")
+	ic := testutil.NewFakeInvocationContext().
 		WithSession(sess).
 		WithInvocationID("inv-1").
 		WithBranch("parent.child").
@@ -132,7 +134,7 @@ func TestFakeInvocationContext(t *testing.T) {
 }
 
 func TestFakeCallbackContext(t *testing.T) {
-	cb := NewFakeCallbackContext().
+	cb := testutil.NewFakeCallbackContext().
 		WithAgentName("my-agent").
 		WithUserID("u-1").
 		WithAppName("app-1").
@@ -162,7 +164,7 @@ func TestFakeCallbackContext(t *testing.T) {
 }
 
 func TestFakeReadonlyContext(t *testing.T) {
-	rc := NewFakeReadonlyContext().
+	rc := testutil.NewFakeReadonlyContext().
 		WithAgentName("ro-agent").
 		WithUserID("u-2").
 		WithAppName("app-2")

@@ -1,10 +1,12 @@
-package simulation
+package simulation_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ieshan/adk-go-pkg/eval"
+	"github.com/ieshan/adk-go-pkg/eval/simulation"
 	"google.golang.org/genai"
 )
 
@@ -14,7 +16,7 @@ func TestStaticUserSimulator_GetNextUserMessage(t *testing.T) {
 		{UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "how are you"}}}},
 	}
 
-	sim := NewStaticUserSimulator(conversation)
+	sim := simulation.NewStaticUserSimulator(conversation)
 
 	msg1, err := sim.GetNextUserMessage(context.Background(), nil)
 	if err != nil {
@@ -24,7 +26,7 @@ func TestStaticUserSimulator_GetNextUserMessage(t *testing.T) {
 		t.Errorf("Status = %v, want %v", msg1.Status, eval.UserSimulatorStatusSuccess)
 	}
 	if msg1.UserMessage == nil {
-		t.Fatal("expected non-nil UserMessage")
+		t.Fatal("got nil UserMessage, want non-nil")
 	}
 
 	msg2, err := sim.GetNextUserMessage(context.Background(), nil)
@@ -50,7 +52,7 @@ func TestStaticUserSimulator_NilUserContent(t *testing.T) {
 		{UserContent: nil},
 	}
 
-	sim := NewStaticUserSimulator(conversation)
+	sim := simulation.NewStaticUserSimulator(conversation)
 
 	msg, err := sim.GetNextUserMessage(context.Background(), nil)
 	if err != nil {
@@ -62,7 +64,7 @@ func TestStaticUserSimulator_NilUserContent(t *testing.T) {
 }
 
 func TestStaticUserSimulator_EmptyConversation(t *testing.T) {
-	sim := NewStaticUserSimulator(nil)
+	sim := simulation.NewStaticUserSimulator(nil)
 
 	msg, err := sim.GetNextUserMessage(context.Background(), nil)
 	if err != nil {
@@ -74,12 +76,12 @@ func TestStaticUserSimulator_EmptyConversation(t *testing.T) {
 }
 
 func TestStaticUserSimulator_GetSimulationEvaluator(t *testing.T) {
-	sim := NewStaticUserSimulator(nil)
+	sim := simulation.NewStaticUserSimulator(nil)
 	ev, err := sim.GetSimulationEvaluator()
-	if err == nil {
-		t.Fatal("expected error from GetSimulationEvaluator")
+	if !errors.Is(err, simulation.ErrSimulationEvaluatorNotImplemented) {
+		t.Fatalf("got %v, want ErrSimulationEvaluatorNotImplemented", err)
 	}
 	if ev != nil {
-		t.Error("expected nil evaluator")
+		t.Error("got non-nil evaluator, want nil")
 	}
 }

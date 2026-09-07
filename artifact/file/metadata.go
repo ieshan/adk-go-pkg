@@ -2,10 +2,14 @@ package file
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 )
+
+// ErrReadMetadata is returned when reading the metadata.json file fails.
+var ErrReadMetadata = errors.New("read metadata")
 
 // VersionMetadata is stored as metadata.json alongside each artifact version.
 // It captures all non-payload information about a single artifact version and
@@ -60,7 +64,7 @@ func (s *Service) writeMetadata(dir string, meta *VersionMetadata) error {
 func (s *Service) readMetadata(dir string) (*VersionMetadata, error) {
 	data, err := s.root.ReadFile(filepath.Join(dir, "metadata.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read metadata: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrReadMetadata, err)
 	}
 	var meta VersionMetadata
 	if err := json.Unmarshal(data, &meta); err != nil {

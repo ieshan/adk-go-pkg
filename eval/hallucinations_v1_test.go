@@ -12,16 +12,16 @@ import (
 
 func TestHallucinationSegmenterPrompt_HasPlaceholder(t *testing.T) {
 	if !strings.Contains(HallucinationSegmenterPrompt, "{response}") {
-		t.Error("expected {response} placeholder in segmenter prompt")
+		t.Errorf("got no {response} placeholder in segmenter prompt, want one")
 	}
 }
 
 func TestHallucinationValidatorPrompt_HasPlaceholders(t *testing.T) {
 	if !strings.Contains(HallucinationValidatorPrompt, "{sentences}") {
-		t.Error("expected {sentences} placeholder in validator prompt")
+		t.Errorf("got no {sentences} placeholder in validator prompt, want one")
 	}
 	if !strings.Contains(HallucinationValidatorPrompt, "{context}") {
-		t.Error("expected {context} placeholder in validator prompt")
+		t.Errorf("got no {context} placeholder in validator prompt, want one")
 	}
 }
 

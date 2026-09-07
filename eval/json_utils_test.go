@@ -1,10 +1,11 @@
-package eval
+package eval_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"google.golang.org/genai"
 )
 
@@ -35,9 +36,9 @@ func TestLoadEvalSetFromFile_NewFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	es, err := LoadEvalSetFromFile(root, "test_eval_set.json")
+	es, err := eval.LoadEvalSetFromFile(root, "test_eval_set.json")
 	if err != nil {
 		t.Fatalf("LoadEvalSetFromFile failed: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestLoadEvalSetFromFile_NewFormat(t *testing.T) {
 		t.Errorf("EvalSetID = %q, want %q", es.EvalSetID, "test-set")
 	}
 	if len(es.EvalCases) != 1 {
-		t.Fatalf("len(EvalCases) = %d, want 1", len(es.EvalCases))
+		t.Errorf("len(EvalCases) = %d, want 1", len(es.EvalCases))
 	}
 	if es.EvalCases[0].EvalID != "case-1" {
 		t.Errorf("EvalID = %q, want %q", es.EvalCases[0].EvalID, "case-1")
@@ -73,17 +74,17 @@ func TestLoadEvalSetFromFile_OldFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	es, err := LoadEvalSetFromFile(root, "old_eval_set.json")
+	es, err := eval.LoadEvalSetFromFile(root, "old_eval_set.json")
 	if err != nil {
 		t.Fatalf("LoadEvalSetFromFile failed: %v", err)
 	}
 	if len(es.EvalCases) != 1 {
-		t.Fatalf("len(EvalCases) = %d, want 1", len(es.EvalCases))
+		t.Errorf("len(EvalCases) = %d, want 1", len(es.EvalCases))
 	}
 	if len(es.EvalCases[0].Conversation) != 1 {
-		t.Fatalf("len(Conversation) = %d, want 1", len(es.EvalCases[0].Conversation))
+		t.Errorf("len(Conversation) = %d, want 1", len(es.EvalCases[0].Conversation))
 	}
 }
 
@@ -92,34 +93,34 @@ func TestLoadEvalSetFromFile_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	_, err = LoadEvalSetFromFile(root, "nonexistent/eval_set.json")
+	_, err = eval.LoadEvalSetFromFile(root, "nonexistent/eval_set.json")
 	if err == nil {
-		t.Error("expected error for non-existent file")
+		t.Error("got nil error, want error for non-existent file")
 	}
 }
 
 func TestMarshalEvalSet_RoundTrip(t *testing.T) {
-	original := &EvalSet{
+	original := &eval.EvalSet{
 		EvalSetID: "round-trip",
 		Name:      "Round Trip",
-		EvalCases: []EvalCase{
+		EvalCases: []eval.EvalCase{
 			{
 				EvalID: "c1",
-				Conversation: []Invocation{{
+				Conversation: []eval.Invocation{{
 					UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
 				}},
 			},
 		},
 	}
 
-	data, err := MarshalEvalSet(original)
+	data, err := eval.MarshalEvalSet(original)
 	if err != nil {
 		t.Fatalf("MarshalEvalSet failed: %v", err)
 	}
 
-	es, err := UnmarshalEvalSet(data)
+	es, err := eval.UnmarshalEvalSet(data)
 	if err != nil {
 		t.Fatalf("UnmarshalEvalSet failed: %v", err)
 	}
@@ -132,8 +133,31 @@ func TestMarshalEvalSet_RoundTrip(t *testing.T) {
 }
 
 func TestUnmarshalEvalSet_InvalidJSON(t *testing.T) {
-	_, err := UnmarshalEvalSet([]byte(`{invalid json`))
+	_, err := eval.UnmarshalEvalSet([]byte(`{invalid json`))
 	if err == nil {
-		t.Error("expected error for invalid JSON")
+		t.Error("got nil error, want error for invalid JSON")
 	}
+}
+
+// FuzzLoadEvalCase verifies that eval.UnmarshalEvalSet never panics on
+// arbitrary byte input. Valid JSON should parse without error; invalid input
+// should return an error (no panic).
+func FuzzLoadEvalCase(f *testing.F) {
+	// Seed: valid JSON eval set.
+	f.Add([]byte(`{"evalSetId":"s","name":"n","evalCases":[]}`))
+	// Seed: malformed JSON.
+	f.Add([]byte(`invalid json`))
+	// Seed: empty bytes.
+	f.Add([]byte(``))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		es, err := eval.UnmarshalEvalSet(data)
+		// The function must not panic — reaching here is the primary assertion.
+		// Both error and non-error outcomes are acceptable as long as no panic
+		// occurred.
+		if err != nil {
+			return
+		}
+		_ = es
+	})
 }

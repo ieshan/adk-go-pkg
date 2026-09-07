@@ -30,7 +30,7 @@ func TestChain_Empty(t *testing.T) {
 		count++
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 event, got %d", count)
+		t.Fatalf("got %d events, want 1", count)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestChain_Single(t *testing.T) {
 	}
 
 	if len(order) != 3 {
-		t.Fatalf("expected 3 entries, got %d: %v", len(order), order)
+		t.Fatalf("got %d entries: %v, want 3", len(order), order)
 	}
 	if order[0] != "mw-before" || order[1] != "base" || order[2] != "mw-after" {
 		t.Errorf("unexpected order: %v", order)
@@ -109,7 +109,7 @@ func TestChain_Ordering(t *testing.T) {
 		"c-after", "b-after", "a-after",
 	}
 	if len(order) != len(expected) {
-		t.Fatalf("expected %d entries, got %d: %v", len(expected), len(order), order)
+		t.Fatalf("got %d entries: %v, want %d", len(order), order, len(expected))
 	}
 	for i, want := range expected {
 		if order[i] != want {

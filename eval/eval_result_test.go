@@ -1,37 +1,39 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestEvalCaseResult_Basic(t *testing.T) {
-	result := &EvalCaseResult{
+	result := &eval.EvalCaseResult{
 		EvalID:          "test_case",
-		FinalEvalStatus: EvalStatusPassed,
-		OverallEvalMetricResults: []EvalMetricResult{
-			{EvalMetric: EvalMetric{MetricName: "test_metric"}, EvalStatus: EvalStatusPassed},
+		FinalEvalStatus: eval.EvalStatusPassed,
+		OverallEvalMetricResults: []eval.EvalMetricResult{
+			{EvalMetric: eval.EvalMetric{MetricName: "test_metric"}, EvalStatus: eval.EvalStatusPassed},
 		},
 	}
 
 	if result.EvalID != "test_case" {
 		t.Errorf("got %s, want test_case", result.EvalID)
 	}
-	if result.FinalEvalStatus != EvalStatusPassed {
+	if result.FinalEvalStatus != eval.EvalStatusPassed {
 		t.Errorf("got %v, want PASSED", result.FinalEvalStatus)
 	}
 	if len(result.OverallEvalMetricResults) != 1 {
-		t.Errorf("expected 1 metric result, got %d", len(result.OverallEvalMetricResults))
+		t.Errorf("got %d metric results, want 1", len(result.OverallEvalMetricResults))
 	}
 }
 
 func TestEvalSetResult_Basic(t *testing.T) {
-	result := &EvalSetResult{
+	result := &eval.EvalSetResult{
 		EvalSetResultID:   "result_1",
 		EvalSetResultName: "test_result",
 		EvalSetID:         "test_set",
-		EvalCaseResults: []EvalCaseResult{
-			{EvalID: "case1", FinalEvalStatus: EvalStatusPassed},
-			{EvalID: "case2", FinalEvalStatus: EvalStatusFailed},
+		EvalCaseResults: []eval.EvalCaseResult{
+			{EvalID: "case1", FinalEvalStatus: eval.EvalStatusPassed},
+			{EvalID: "case2", FinalEvalStatus: eval.EvalStatusFailed},
 		},
 	}
 
@@ -39,23 +41,23 @@ func TestEvalSetResult_Basic(t *testing.T) {
 		t.Errorf("got %s, want result_1", result.EvalSetResultID)
 	}
 	if len(result.EvalCaseResults) != 2 {
-		t.Errorf("expected 2 case results, got %d", len(result.EvalCaseResults))
+		t.Errorf("got %d case results, want 2", len(result.EvalCaseResults))
 	}
 }
 
 func TestCreateEvalSetResult_Basic(t *testing.T) {
-	results := []EvalCaseResult{
-		{EvalID: "case1", FinalEvalStatus: EvalStatusPassed},
+	results := []eval.EvalCaseResult{
+		{EvalID: "case1", FinalEvalStatus: eval.EvalStatusPassed},
 	}
-	result := CreateEvalSetResult("test_app", "test_set", results)
+	result := eval.CreateEvalSetResult("test_app", "test_set", results)
 
 	if result.EvalSetID != "test_set" {
 		t.Errorf("got %s, want test_set", result.EvalSetID)
 	}
 	if len(result.EvalCaseResults) != 1 {
-		t.Errorf("expected 1 case result, got %d", len(result.EvalCaseResults))
+		t.Errorf("got %d case result, want 1", len(result.EvalCaseResults))
 	}
 	if result.CreationTimestamp <= 0 {
-		t.Error("expected positive creation timestamp")
+		t.Errorf("got %v creation timestamp, want positive", result.CreationTimestamp)
 	}
 }

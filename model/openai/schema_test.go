@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"testing"
 
 	"google.golang.org/genai"
@@ -17,7 +18,7 @@ func TestSchemaToJSONSchema_String(t *testing.T) {
 	got := schemaToJSONSchema(s)
 
 	if got == nil {
-		t.Fatal("expected non-nil result")
+		t.Fatal("got nil result, want non-nil")
 	}
 	if got["type"] != "string" {
 		t.Errorf("type: got %v, want %q", got["type"], "string")
@@ -47,7 +48,7 @@ func TestSchemaToJSONSchema_Object(t *testing.T) {
 
 	props, ok := got["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("properties: expected map[string]any, got %T", got["properties"])
+		t.Fatalf("properties: got %T, want map[string]any", got["properties"])
 	}
 	if _, exists := props["name"]; !exists {
 		t.Error("properties: missing 'name'")
@@ -58,7 +59,7 @@ func TestSchemaToJSONSchema_Object(t *testing.T) {
 
 	nameSchema, ok := props["name"].(map[string]any)
 	if !ok {
-		t.Fatalf("properties.name: expected map[string]any, got %T", props["name"])
+		t.Fatalf("properties.name: got %T, want map[string]any", props["name"])
 	}
 	if nameSchema["type"] != "string" {
 		t.Errorf("properties.name.type: got %v, want %q", nameSchema["type"], "string")
@@ -66,7 +67,7 @@ func TestSchemaToJSONSchema_Object(t *testing.T) {
 
 	required, ok := got["required"].([]string)
 	if !ok {
-		t.Fatalf("required: expected []string, got %T", got["required"])
+		t.Fatalf("required: got %T, want []string", got["required"])
 	}
 	if len(required) != 1 || required[0] != "name" {
 		t.Errorf("required: got %v, want [name]", required)
@@ -89,10 +90,10 @@ func TestSchemaToJSONSchema_Nullable(t *testing.T) {
 
 	anyOf, ok := got["anyOf"].([]map[string]any)
 	if !ok {
-		t.Fatalf("anyOf: expected []map[string]any, got %T", got["anyOf"])
+		t.Fatalf("anyOf: got %T, want []map[string]any", got["anyOf"])
 	}
 	if len(anyOf) != 2 {
-		t.Fatalf("anyOf: expected 2 elements, got %d", len(anyOf))
+		t.Fatalf("anyOf: got %d elements, want 2", len(anyOf))
 	}
 
 	// First element should be the original type.
@@ -121,7 +122,7 @@ func TestSchemaToJSONSchema_Array(t *testing.T) {
 
 	items, ok := got["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("items: expected map[string]any, got %T", got["items"])
+		t.Fatalf("items: got %T, want map[string]any", got["items"])
 	}
 	if items["type"] != "number" {
 		t.Errorf("items.type: got %v, want %q", items["type"], "number")
@@ -163,10 +164,10 @@ func TestSchemaToJSONSchema_Enum(t *testing.T) {
 
 	enum, ok := got["enum"].([]string)
 	if !ok {
-		t.Fatalf("enum: expected []string, got %T", got["enum"])
+		t.Fatalf("enum: got %T, want []string", got["enum"])
 	}
 	if len(enum) != 4 {
-		t.Fatalf("enum: expected 4 values, got %d", len(enum))
+		t.Fatalf("enum: got %d values, want 4", len(enum))
 	}
 	if enum[0] != "north" || enum[3] != "west" {
 		t.Errorf("enum: unexpected values %v", enum)
@@ -186,15 +187,15 @@ func TestSchemaToJSONSchema_NullableWithAnyOf(t *testing.T) {
 	got := schemaToJSONSchema(s)
 	anyOf, ok := got["anyOf"].([]map[string]any)
 	if !ok {
-		t.Fatalf("expected anyOf array, got %T: %v", got["anyOf"], got["anyOf"])
+		t.Fatalf("got %T: %v for anyOf, want array", got["anyOf"], got["anyOf"])
 	}
 	// Should have 3 entries: string, integer, null
 	if len(anyOf) != 3 {
-		t.Errorf("expected 3 anyOf entries (string, integer, null), got %d: %v", len(anyOf), anyOf)
+		t.Errorf("got %d anyOf entries: %v, want 3 (string, integer, null)", len(anyOf), anyOf)
 	}
 	// Last entry should be null
 	if anyOf[len(anyOf)-1]["type"] != "null" {
-		t.Errorf("expected last anyOf entry to be null, got %v", anyOf[len(anyOf)-1])
+		t.Errorf("got %v for last anyOf entry, want null", anyOf[len(anyOf)-1])
 	}
 }
 
@@ -202,6 +203,62 @@ func TestSchemaToJSONSchema_NullableWithAnyOf(t *testing.T) {
 func TestSchemaToJSONSchema_Nil(t *testing.T) {
 	got := schemaToJSONSchema(nil)
 	if got != nil {
-		t.Errorf("expected nil for nil input, got %v", got)
+		t.Errorf("got %v for nil input, want nil", got)
 	}
+}
+
+// TestSchemaToJSONSchema_Empty verifies that an empty &genai.Schema{} produces
+// a non-nil empty map without panicking. With no type, no nullable, and no
+// other fields set, the output map should contain no entries.
+func TestSchemaToJSONSchema_Empty(t *testing.T) {
+	// Reaching here without panicking is the primary assertion.
+	got := schemaToJSONSchema(&genai.Schema{})
+	if got == nil {
+		t.Fatal("got nil schema map, want non-nil empty map")
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d entries for empty schema, want 0: %v", len(got), got)
+	}
+}
+
+// TestSchemaToJSONSchema_Unicode verifies that a schema with unicode in its
+// description preserves the unicode content through conversion.
+func TestSchemaToJSONSchema_Unicode(t *testing.T) {
+	s := &genai.Schema{
+		Type:        genai.TypeString,
+		Description: "ユーザー名 — 用户名",
+	}
+	got := schemaToJSONSchema(s)
+	if got == nil {
+		t.Fatal("got nil schema map, want non-nil")
+	}
+	if got["type"] != "string" {
+		t.Errorf("type: got %v, want %q", got["type"], "string")
+	}
+	if got["description"] != "ユーザー名 — 用户名" {
+		t.Errorf("description: got %v, want %q", got["description"], "ユーザー名 — 用户名")
+	}
+}
+
+// FuzzSchemaToJSONSchema verifies that schemaToJSONSchema never panics on
+// arbitrary JSON input. Valid schema JSON should parse and translate without
+// panicking; invalid input is skipped (no panic).
+func FuzzSchemaToJSONSchema(f *testing.F) {
+	// Seed: valid schema JSON.
+	f.Add([]byte(`{"type":"string","description":"A name"}`))
+	// Seed: malformed JSON.
+	f.Add([]byte(`invalid json`))
+	// Seed: empty object.
+	f.Add([]byte(`{}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var s genai.Schema
+		if err := json.Unmarshal(data, &s); err != nil {
+			// Skip unmarshal failures — expected for random bytes.
+			return
+		}
+		js := schemaToJSONSchema(&s)
+		// The function must not panic — reaching here is the primary assertion.
+		_ = js
+	})
 }

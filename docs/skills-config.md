@@ -63,8 +63,8 @@ Detailed markdown instructions for the LLM on how to use this skill...
 type SkillsetRef struct {
     Name              string
     Config            map[string]any
-    Names             []string
     Preload           string
+    Names             []string
     SystemInstruction string
 }
 ```
@@ -73,15 +73,15 @@ type SkillsetRef struct {
 |-------|------|----------|-------------|
 | `Name` | `string` | Yes | Registered SkillFactory identifier (e.g., "filesystem") |
 | `Config` | `map[string]any` | No | Factory-specific configuration |
-| `Names` | `[]string` | No | Specific skills to load (empty = all skills) |
 | `Preload` | `string` | No | Preload strategy: "", "complete", or "frontmatters" |
+| `Names` | `[]string` | No | Specific skills to load (empty = all skills) |
 | `SystemInstruction` | `string` | No | Custom instruction for skill usage |
 
 ### Built-in Skill Factories
 
 | Factory | Config Keys | Description |
 |---------|-------------|-------------|
-| `filesystem` | `path` (string) | Loads skills from local filesystem |
+| `filesystem` | `path` (string) | Loads skills from local filesystem. The `path` is resolved against the process working directory (CWD) via `filepath.Abs`, not against the `*os.Root` passed to `config.LoadAndBuild`. |
 
 ### Preload Strategy Selection
 

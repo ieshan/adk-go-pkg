@@ -34,7 +34,7 @@ func TestTranslateToolDeclarations(t *testing.T) {
 
 	result := translateToolDeclarations(tools)
 	if len(result) != 2 {
-		t.Fatalf("expected 2 tool declarations, got %d", len(result))
+		t.Fatalf("got %d tool declarations, want 2", len(result))
 	}
 
 	first := result[0]
@@ -46,7 +46,7 @@ func TestTranslateToolDeclarations(t *testing.T) {
 	}
 	schema, ok := first["input_schema"].(map[string]any)
 	if !ok {
-		t.Fatal("expected input_schema map")
+		t.Fatal("got non-map input_schema, want map")
 	}
 	if schema["type"] != "object" {
 		t.Errorf("input_schema.type: got %v, want %q", schema["type"], "object")
@@ -57,7 +57,7 @@ func TestTranslateToolDeclarations(t *testing.T) {
 		t.Errorf("name: got %v, want %q", second["name"], "get_time")
 	}
 	if _, hasSchema := second["input_schema"]; hasSchema {
-		t.Error("expected no input_schema for declaration without parameters")
+		t.Errorf("got input_schema for declaration without parameters, want none")
 	}
 }
 
@@ -78,7 +78,7 @@ func TestTranslateToolDeclarations_SkipsNonFunction(t *testing.T) {
 
 	result := translateToolDeclarations(tools)
 	if len(result) != 1 {
-		t.Fatalf("expected 1 tool declaration, got %d", len(result))
+		t.Fatalf("got %d tool declarations, want 1", len(result))
 	}
 	if result[0]["name"] != "valid_func" {
 		t.Errorf("name: got %v, want %q", result[0]["name"], "valid_func")
@@ -184,7 +184,7 @@ func TestFunctionCallToToolUse(t *testing.T) {
 	}
 	input, ok := block["input"].(map[string]any)
 	if !ok {
-		t.Fatal("expected input map")
+		t.Fatal("got non-map input, want map")
 	}
 	if input["location"] != "Paris" {
 		t.Errorf("input.location: got %v, want %q", input["location"], "Paris")

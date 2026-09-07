@@ -237,8 +237,9 @@ errors from encoding errors:
 
 - A **transport error** means the client is gone and the run should be
   cancelled — stop emitting.
-- An **encoding error** means the event content is malformed and the event
-  should be dropped while keeping the stream alive for subsequent events.
+- An **encoding error** means the event content is malformed. Any
+  `WriteEvent` error (including encoding failures) stops the stream — see
+  [Encoding Errors](#encoding-errors) below.
 
 ```go
 if err := emitter.TextMessageContent(msgID, delta); err != nil {
@@ -246,8 +247,9 @@ if err := emitter.TextMessageContent(msgID, delta); err != nil {
         // Client is gone — stop the producer goroutine.
         return
     }
-    // Encoding error — log and continue.
-    log.Printf("dropping event: %v", err)
+    // Any other error from the emitter is also fatal — stop emitting.
+    log.Printf("emit error: %v", err)
+    return
 }
 ```
 
@@ -586,11 +588,17 @@ func main() {
 
 ### ToolResultHandler API
 
+```go
+var ErrToolCallTimeout = errors.New("agui: tool call timed out")
+var ErrNoPendingToolCall = errors.New("agui: no pending tool call")
+```
+
 | Method | Description |
 |--------|-------------|
 | `NewToolResultHandler() *ToolResultHandler` | Creates a new handler |
-| `Wait(ctx context.Context, toolCallID string, timeout time.Duration) (string, error)` | Blocks until a result arrives or timeout |
-| `SubmitResult(toolCallID, content string) error` | Delivers a result for a pending call |
+| `Wait(ctx context.Context, toolCallID string, timeout time.Duration) (string, error)` | Blocks until a result arrives or timeout. Returns an error wrapping `ErrToolCallTimeout` on timeout. |
+| `SubmitResult(toolCallID, content string) error` | Delivers a result for a pending call. Returns an error wrapping `ErrNoPendingToolCall` if no waiter is registered. |
+| `HasPendingToolCall(toolCallID string) bool` | Reports whether a waiter is currently registered for the given tool call ID. Tests can poll this to deterministically wait for `Wait` to register before calling `SubmitResult`. |
 
 ### ToolResultEndpoint
 
@@ -927,9 +935,11 @@ type Config struct {
 func Handler(cfg Config) (http.Handler, error)
 ```
 
+`Handler` returns `nil` and `ErrAgentRequired` if `Config.Agent` is not set.
+
 `Handler` returns an `http.Handler` that:
 
-1. On `GET /` or `GET /capabilities` (matched by path suffix — `/` or ending in `/capabilities` — so the handler works correctly when mounted at a sub-path via `http.ServeMux`), returns the configured `AgentCapabilities` as JSON (404 if `Config.Capabilities` is nil)
+1. On `GET /` (exact `r.URL.Path == "/"` match) or `GET /capabilities` (path suffix match — ending in `/capabilities` — so the handler works correctly when mounted at a sub-path via `http.ServeMux`), returns the configured `AgentCapabilities` as JSON (404 if `Config.Capabilities` is nil)
 2. Returns `405 Method Not Allowed` for any other HTTP method that is not `GET` or `POST`
 3. Accepts `POST` requests with a JSON `RunAgentInput` body, limited to `MaxBodySize` bytes (default 10 MB) via `http.MaxBytesReader`
 4. Sets SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`)
@@ -939,12 +949,13 @@ func Handler(cfg Config) (http.Handler, error)
 8. On iterator error, emits a `RUN_ERROR` event (carrying `input.RunID`) and calls `OnError` if configured
 9. On SSE write error, calls `OnError` if configured and stops the stream
 
-> **Mounting / sub-paths:** `agui.Handler` matches capabilities discovery by
-> path suffix (`/` or ending in `/capabilities`), so it works correctly when
-> mounted at sub-paths (e.g. `/api/agent/`). For `aguiadk.Handler`, the
-> `/tool-result` route also matches by path suffix (ending in `/tool-result`),
-> so the combined handler can be mounted at any sub-path without breaking
-> either endpoint.
+> **Mounting / sub-paths:** `agui.Handler` matches capabilities discovery with
+> an exact `r.URL.Path == "/"` for the root endpoint and a path-suffix match
+> (ending in `/capabilities`) for the capabilities endpoint, so it works
+> correctly when mounted at sub-paths (e.g. `/api/agent/`). For
+> `aguiadk.Handler`, the `/tool-result` route also matches by path suffix
+> (ending in `/tool-result`), so the combined handler can be mounted at any
+> sub-path without breaking either endpoint.
 
 ## Capabilities Discovery
 
@@ -1289,11 +1300,13 @@ for the `errors.Is` pattern.
 ### Encoding Errors
 
 An encoding error means a single event is malformed (e.g., contains a value
-that cannot be JSON-serialized). The event should be dropped while keeping the
-stream alive for subsequent events. The emitter itself only returns transport
+that cannot be JSON-serialized). The emitter itself only returns transport
 errors (channel closed, context cancelled) — it does not perform serialization.
 Encoding errors occur downstream in `sseSession.WriteEvent` inside the HTTP
-handler, when the SSE writer serializes the event to the wire format.
+handler, when the SSE writer serializes the event to the wire format. **Any
+`WriteEvent` error — including encoding failures — stops the stream:**
+`WriteEvent` cancels the request context and returns the error, causing the
+handler to call `OnError` (if set) and stop iterating.
 
 ### Handler Error Flow
 
@@ -1435,9 +1448,9 @@ Use `testutil.FakeLLM` to build a deterministic ADK agent, wrap it with
 
 ```go
 func TestBridgeAgent(t *testing.T) {
-    llm := testutil.NewFakeLLM(testutil.WithResponses(
+    llm := testutil.NewFakeLLM(
         &model.LLMResponse{Content: genai.NewContentFromText("hi", genai.RoleModel), TurnComplete: true},
-    ))
+    )
     adkAgent, _ := llmagent.New(llmagent.Config{Name: "test", Model: llm})
     bridge, _ := aguiadk.New(aguiadk.Config{Agent: adkAgent, AppName: "test", UserID: "u"})
     defer aguiadk.Stop(bridge)

@@ -31,7 +31,7 @@ func TestSessionManager_ResolveCreatesNew(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if s1.ID() == "" {
-		t.Fatal("expected non-empty session ID")
+		t.Fatal("got empty session ID, want non-empty")
 	}
 
 	// Second resolve with the same thread should return the same session.
@@ -40,7 +40,7 @@ func TestSessionManager_ResolveCreatesNew(t *testing.T) {
 		t.Fatalf("Resolve (second): %v", err)
 	}
 	if s1.ID() != s2.ID() {
-		t.Fatalf("expected same session ID, got %q and %q", s1.ID(), s2.ID())
+		t.Fatalf("got %q and %q, want same session ID", s1.ID(), s2.ID())
 	}
 }
 
@@ -99,8 +99,8 @@ func TestSessionManager_Stop(t *testing.T) {
 	})
 
 	// Stop should not panic even if called quickly.
+	// Stop joins the background cleanup goroutine via wg.Wait (with a
+	// 5-second timeout), so no additional sleep is needed to ensure
+	// the goroutine has exited.
 	sm.Stop()
-
-	// Give the goroutine a moment to exit.
-	time.Sleep(50 * time.Millisecond)
 }

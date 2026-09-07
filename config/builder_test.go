@@ -1,4 +1,4 @@
-package config
+package config_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/config"
 	"github.com/ieshan/adk-go-pkg/prompt"
 	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/agent"
@@ -14,10 +15,10 @@ import (
 	"google.golang.org/genai"
 )
 
-// testRegistry returns a *Registry pre-loaded with a "mock" model prefix and
+// testRegistry returns a *config.Registry pre-loaded with a "mock" model prefix and
 // a "search" tool factory — sufficient for all builder tests.
-func testRegistry() *Registry {
-	r := NewRegistry()
+func testRegistry() *config.Registry {
+	r := config.NewRegistry()
 
 	r.RegisterModel("mock", func(cfg map[string]any) (model.LLM, error) {
 		name, _ := cfg["model"].(string)
@@ -34,13 +35,13 @@ func testRegistry() *Registry {
 // TestBuild_LLMAgent verifies that Build produces a named LLM agent when given
 // a valid "llm" config with a registered model and tool.
 func TestBuild_LLMAgent(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "chat-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "chat-bot"},
 		Model:           "mock/fast",
-		Tools:           []ToolRef{{Name: "search"}},
+		Tools:           []config.ToolRef{{Name: "search"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -48,95 +49,95 @@ func TestBuild_LLMAgent(t *testing.T) {
 		t.Fatal("Build returned nil agent")
 	}
 	if a.Name() != "chat-bot" {
-		t.Errorf("expected agent name %q, got %q", "chat-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "chat-bot")
 	}
 }
 
 // TestBuild_SequentialAgent verifies that a "sequential" agent with two LLM
 // sub-agents is created correctly and reports the correct sub-agent count.
 func TestBuild_SequentialAgent(t *testing.T) {
-	cfg := &SequentialAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.SequentialAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "pipeline",
-			SubAgentEntries: []SubAgentEntry{
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "step-1"}, Model: "mock/fast"}},
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "step-2"}, Model: "mock/fast"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "step-1"}, Model: "mock/fast"}},
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "step-2"}, Model: "mock/fast"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "pipeline" {
-		t.Errorf("expected agent name %q, got %q", "pipeline", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "pipeline")
 	}
 	if len(a.SubAgents()) != 2 {
-		t.Errorf("expected 2 sub-agents, got %d", len(a.SubAgents()))
+		t.Errorf("got %d sub-agents, want 2", len(a.SubAgents()))
 	}
 }
 
 // TestBuild_ParallelAgent verifies that a "parallel" agent with two sub-agents
 // is constructed without error.
 func TestBuild_ParallelAgent(t *testing.T) {
-	cfg := &ParallelAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.ParallelAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "fan-out",
-			SubAgentEntries: []SubAgentEntry{
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "worker-a"}, Model: "mock/fast"}},
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "worker-b"}, Model: "mock/fast"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "worker-a"}, Model: "mock/fast"}},
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "worker-b"}, Model: "mock/fast"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "fan-out" {
-		t.Errorf("expected agent name %q, got %q", "fan-out", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "fan-out")
 	}
 	if len(a.SubAgents()) != 2 {
-		t.Errorf("expected 2 sub-agents, got %d", len(a.SubAgents()))
+		t.Errorf("got %d sub-agents, want 2", len(a.SubAgents()))
 	}
 }
 
 // TestBuild_LoopAgent verifies that a "loop" agent is built with a positive
 // MaxIterations value without error.
 func TestBuild_LoopAgent(t *testing.T) {
-	cfg := &LoopAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.LoopAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "refiner",
-			SubAgentEntries: []SubAgentEntry{
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "inner"}, Model: "mock/fast"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "inner"}, Model: "mock/fast"}},
 			},
 		},
 		MaxIterations: 3,
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "refiner" {
-		t.Errorf("expected agent name %q, got %q", "refiner", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "refiner")
 	}
 }
 
 // TestBuild_NestedTree verifies a multi-level hierarchy: a root LLM agent that
 // has a sequential sub-agent which itself has two LLM children.
 func TestBuild_NestedTree(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "root",
-			SubAgentEntries: []SubAgentEntry{
-				{Inline: &SequentialAgentConfig{
-					BaseAgentConfig: BaseAgentConfig{
+			SubAgentEntries: []config.SubAgentEntry{
+				{Inline: &config.SequentialAgentConfig{
+					BaseAgentConfig: config.BaseAgentConfig{
 						Name: "seq",
-						SubAgentEntries: []SubAgentEntry{
-							{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "child-a"}, Model: "mock/fast"}},
-							{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "child-b"}, Model: "mock/fast"}},
+						SubAgentEntries: []config.SubAgentEntry{
+							{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "child-a"}, Model: "mock/fast"}},
+							{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "child-b"}, Model: "mock/fast"}},
 						},
 					},
 				}},
@@ -145,91 +146,91 @@ func TestBuild_NestedTree(t *testing.T) {
 		Model: "mock/fast",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "root" {
-		t.Errorf("expected root agent name %q, got %q", "root", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "root")
 	}
 	if len(a.SubAgents()) != 1 {
-		t.Fatalf("expected 1 sub-agent under root, got %d", len(a.SubAgents()))
+		t.Fatalf("got %d sub-agents under root, want 1", len(a.SubAgents()))
 	}
 	seq := a.SubAgents()[0]
 	if seq.Name() != "seq" {
-		t.Errorf("expected sub-agent name %q, got %q", "seq", seq.Name())
+		t.Errorf("got %q, want %q", seq.Name(), "seq")
 	}
 	if len(seq.SubAgents()) != 2 {
-		t.Errorf("expected 2 children under seq, got %d", len(seq.SubAgents()))
+		t.Errorf("got %d children under seq, want 2", len(seq.SubAgents()))
 	}
 }
 
 // TestBuild_NilConfig verifies that Build returns an error for nil
 func TestBuild_NilConfig(t *testing.T) {
-	_, err := BuildWithPath(context.Background(), nil, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), nil, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected an error for nil config, got nil")
+		t.Fatal("got nil, want error for nil config")
 	}
 }
 
 // TestBuild_ModelNotFound verifies that Build returns an error when the model
 // prefix has no registered factory.
 func TestBuild_ModelNotFound(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "bot"},
 		Model:           "unregistered/gpt-x",
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected an error for unregistered model prefix, got nil")
+		t.Fatal("got nil, want error for unregistered model prefix")
 	}
 }
 
 // TestBuild_ToolNotFound verifies that Build returns an error when a tool name
 // has no registered factory.
 func TestBuild_ToolNotFound(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "bot"},
 		Model:           "mock/fast",
-		Tools:           []ToolRef{{Name: "nonexistent-tool"}},
+		Tools:           []config.ToolRef{{Name: "nonexistent-tool"}},
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected an error for unregistered tool, got nil")
+		t.Fatal("got nil, want error for unregistered tool")
 	}
 }
 
 // TestBuild_LLMAgent_WithTransferFlags verifies that transfer flags are passed through.
 func TestBuild_LLMAgent_WithTransferFlags(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:          BaseAgentConfig{Name: "transfer-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:          config.BaseAgentConfig{Name: "transfer-bot"},
 		Model:                    "mock/fast",
 		DisallowTransferToParent: true,
 		DisallowTransferToPeers:  true,
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "transfer-bot" {
-		t.Errorf("expected agent name %q, got %q", "transfer-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "transfer-bot")
 	}
 }
 
 // TestBuild_LLMAgent_DefaultTransferFlags verifies defaults are false when omitted.
 func TestBuild_LLMAgent_DefaultTransferFlags(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "default-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "default-bot"},
 		Model:           "mock/fast",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
 	if a.Name() != "default-bot" {
-		t.Errorf("expected agent name %q, got %q", "default-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "default-bot")
 	}
 }
 
@@ -251,23 +252,23 @@ model: mock/fast
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	a, runCfg, liveRunCfg, cacheCfg, err := LoadAndBuild(context.Background(), root, "agent.yaml", testRegistry())
+	a, runCfg, liveRunCfg, cacheCfg, err := config.LoadAndBuild(context.Background(), root, "agent.yaml", testRegistry())
 	if err != nil {
 		t.Fatalf("LoadAndBuild returned unexpected error: %v", err)
 	}
 	if a.Name() != "file-agent" {
-		t.Errorf("expected agent name %q, got %q", "file-agent", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "file-agent")
 	}
 	if runCfg != nil {
-		t.Errorf("expected nil runCfg when absent, got %+v", runCfg)
+		t.Errorf("got %+v, want nil runCfg when absent", runCfg)
 	}
 	if liveRunCfg != nil {
-		t.Errorf("expected nil liveRunCfg when absent, got %+v", liveRunCfg)
+		t.Errorf("got %+v, want nil liveRunCfg when absent", liveRunCfg)
 	}
 	if cacheCfg != nil {
-		t.Errorf("expected nil cacheCfg when absent, got %+v", cacheCfg)
+		t.Errorf("got %+v, want nil cacheCfg when absent", cacheCfg)
 	}
 }
 
@@ -280,31 +281,33 @@ agent_class: LlmAgent
 model: mock/fast
 `
 	subPath := filepath.Join(dir, "sub.yaml")
-	_ = os.WriteFile(subPath, []byte(subContent), 0644)
+	if err := os.WriteFile(subPath, []byte(subContent), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	cfg := &SequentialAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.SequentialAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "root",
-			SubAgentEntries: []SubAgentEntry{
-				{Ref: &AgentRefConfig{ConfigPath: "sub.yaml"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Ref: &config.AgentRefConfig{ConfigPath: "sub.yaml"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if len(a.SubAgents()) != 1 {
-		t.Fatalf("expected 1 sub-agent, got %d", len(a.SubAgents()))
+		t.Fatalf("got %d sub-agents, want 1", len(a.SubAgents()))
 	}
 	if a.SubAgents()[0].Name() != "sub" {
-		t.Errorf("expected sub-agent name %q, got %q", "sub", a.SubAgents()[0].Name())
+		t.Errorf("got %q, want %q", a.SubAgents()[0].Name(), "sub")
 	}
 }
 
@@ -317,24 +320,24 @@ func TestBuild_SubAgentFromCode(t *testing.T) {
 	}
 	reg.RegisterAgent("myapp.agents.sub", fakeSub)
 
-	cfg := &SequentialAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.SequentialAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name: "root",
-			SubAgentEntries: []SubAgentEntry{
-				{Ref: &AgentRefConfig{Code: "myapp.agents.sub"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Ref: &config.AgentRefConfig{Code: "myapp.agents.sub"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if len(a.SubAgents()) != 1 {
-		t.Fatalf("expected 1 sub-agent, got %d", len(a.SubAgents()))
+		t.Fatalf("got %d sub-agents, want 1", len(a.SubAgents()))
 	}
 	if a.SubAgents()[0].Name() != "code-sub" {
-		t.Errorf("expected name %q, got %q", "code-sub", a.SubAgents()[0].Name())
+		t.Errorf("got %q, want %q", a.SubAgents()[0].Name(), "code-sub")
 	}
 }
 
@@ -346,32 +349,32 @@ func TestBuild_LLMAgent_WithModelCode(t *testing.T) {
 		return fakeLLM, nil
 	})
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "code-model-bot"},
-		ModelCode:       &CodeConfig{Name: "myapp.models.custom"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "code-model-bot"},
+		ModelCode:       &config.CodeConfig{Name: "myapp.models.custom"},
 		Instruction:     "hi",
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "code-model-bot" {
-		t.Errorf("expected name %q, got %q", "code-model-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "code-model-bot")
 	}
 }
 
 // TestBuild_LLMAgent_ModelAndModelCodeError verifies Build rejects both.
 func TestBuild_LLMAgent_ModelAndModelCodeError(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "bad"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "bad"},
 		Model:           "mock/fast",
-		ModelCode:       &CodeConfig{Name: "myapp.models.custom"},
+		ModelCode:       &config.CodeConfig{Name: "myapp.models.custom"},
 		Instruction:     "hi",
 	}
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected error when both model and modelCode set")
+		t.Fatal("got nil, want error when both model and modelCode set")
 	}
 }
 
@@ -382,37 +385,37 @@ func TestBuild_LLMAgent_WithCallbacks(t *testing.T) {
 		return nil, nil
 	})
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:      BaseAgentConfig{Name: "cb-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:      config.BaseAgentConfig{Name: "cb-bot"},
 		Model:                "mock/fast",
 		Instruction:          "hi",
-		BeforeModelCallbacks: []CodeConfig{{Name: "my.cb"}},
+		BeforeModelCallbacks: []config.CodeConfig{{Name: "my.cb"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "cb-bot" {
-		t.Errorf("expected name %q, got %q", "cb-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "cb-bot")
 	}
 }
 
 // TestBuild_LLMAgent_WithOutputKey verifies OutputKey is passed through.
 func TestBuild_LLMAgent_WithOutputKey(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "key-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "key-bot"},
 		Model:           "mock/fast",
 		Instruction:     "hi",
 		OutputKey:       "result",
 		IncludeContents: "none",
 	}
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "key-bot" {
-		t.Errorf("expected name %q, got %q", "key-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "key-bot")
 	}
 }
 
@@ -421,88 +424,88 @@ func TestBuild_LLMAgent_WithSchemaRefs(t *testing.T) {
 	reg := testRegistry()
 	inputSch := &genai.Schema{Type: genai.TypeObject, Description: "input"}
 	outputSch := &genai.Schema{Type: genai.TypeString, Description: "output"}
-	reg.RegisterSchema("myapp.schemas.input", StaticSchema(inputSch))
-	reg.RegisterSchema("myapp.schemas.output", StaticSchema(outputSch))
+	reg.RegisterSchema("myapp.schemas.input", config.StaticSchema(inputSch))
+	reg.RegisterSchema("myapp.schemas.output", config.StaticSchema(outputSch))
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "schema-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "schema-bot"},
 		Model:           "mock/fast",
-		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.input"}},
-		OutputSchema:    &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.output"}},
+		InputSchema:     &config.SchemaRef{Ref: &config.CodeConfig{Name: "myapp.schemas.input"}},
+		OutputSchema:    &config.SchemaRef{Ref: &config.CodeConfig{Name: "myapp.schemas.output"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "schema-bot" {
-		t.Errorf("expected name %q, got %q", "schema-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "schema-bot")
 	}
 }
 
 // TestBuild_LLMAgent_WithInlineSchema verifies that inline schemas are passed through.
 func TestBuild_LLMAgent_WithInlineSchema(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "inline-schema-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "inline-schema-bot"},
 		Model:           "mock/fast",
-		InputSchema: &SchemaRef{Inline: &genai.Schema{
+		InputSchema: &config.SchemaRef{Inline: &genai.Schema{
 			Type:        genai.TypeObject,
 			Description: "inline input",
 		}},
-		OutputSchema: &SchemaRef{Inline: &genai.Schema{
+		OutputSchema: &config.SchemaRef{Inline: &genai.Schema{
 			Type:        genai.TypeString,
 			Description: "inline output",
 		}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "inline-schema-bot" {
-		t.Errorf("expected name %q, got %q", "inline-schema-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "inline-schema-bot")
 	}
 }
 
 // TestBuild_LLMAgent_WithSchemaShorthand verifies that string-shorthand schema refs work.
 func TestBuild_LLMAgent_WithSchemaShorthand(t *testing.T) {
 	reg := testRegistry()
-	reg.RegisterSchema("myapp.schemas.input", StaticSchema(&genai.Schema{Type: genai.TypeObject}))
+	reg.RegisterSchema("myapp.schemas.input", config.StaticSchema(&genai.Schema{Type: genai.TypeObject}))
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "shorthand-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "shorthand-bot"},
 		Model:           "mock/fast",
-		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.input"}},
+		InputSchema:     &config.SchemaRef{Ref: &config.CodeConfig{Name: "myapp.schemas.input"}},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "shorthand-bot" {
-		t.Errorf("expected name %q, got %q", "shorthand-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "shorthand-bot")
 	}
 }
 
 // TestBuild_LLMAgent_MissingSchemaRef verifies error for unregistered schema reference.
 func TestBuild_LLMAgent_MissingSchemaRef(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "missing-schema-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "missing-schema-bot"},
 		Model:           "mock/fast",
-		InputSchema:     &SchemaRef{Ref: &CodeConfig{Name: "myapp.schemas.missing"}},
+		InputSchema:     &config.SchemaRef{Ref: &config.CodeConfig{Name: "myapp.schemas.missing"}},
 	}
 
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected error for missing schema registration, got nil")
+		t.Fatal("got nil, want error for missing schema registration")
 	}
 }
 
 // TestRegistry_SchemaResolution verifies RegisterSchema and ResolveSchema with StaticSchema.
 func TestRegistry_SchemaResolution(t *testing.T) {
-	reg := NewRegistry()
+	reg := config.NewRegistry()
 	schema := &genai.Schema{Type: genai.TypeObject, Description: "test"}
-	reg.RegisterSchema("myapp.test", StaticSchema(schema))
+	reg.RegisterSchema("myapp.test", config.StaticSchema(schema))
 
 	got, err := reg.ResolveSchema("myapp.test", nil)
 	if err != nil {
@@ -517,7 +520,7 @@ func TestRegistry_SchemaResolution(t *testing.T) {
 
 	_, err = reg.ResolveSchema("myapp.missing", nil)
 	if err == nil {
-		t.Fatal("expected error for missing schema, got nil")
+		t.Fatal("got nil, want error for missing schema")
 	}
 }
 
@@ -528,77 +531,77 @@ func TestBuild_Sequential_WithCallbacks(t *testing.T) {
 		return nil, nil
 	})
 
-	cfg := &SequentialAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{
+	cfg := &config.SequentialAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{
 			Name:                 "seq-cb",
-			BeforeAgentCallbacks: []CodeConfig{{Name: "seq.cb"}},
-			SubAgentEntries: []SubAgentEntry{
-				{Inline: &LLMAgentConfig{BaseAgentConfig: BaseAgentConfig{Name: "child"}, Model: "mock/fast"}},
+			BeforeAgentCallbacks: []config.CodeConfig{{Name: "seq.cb"}},
+			SubAgentEntries: []config.SubAgentEntry{
+				{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "child"}, Model: "mock/fast"}},
 			},
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if a.Name() != "seq-cb" {
-		t.Errorf("expected name %q, got %q", "seq-cb", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "seq-cb")
 	}
 }
 
 // TestBuildApp_ReturnsAgent verifies BuildApp returns a non-nil agent for an LLM config.
 func TestBuildApp_ReturnsAgent(t *testing.T) {
-	appCfg := &AppConfig{
-		AgentConfig: &LLMAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{Name: "app-bot"},
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.LLMAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{Name: "app-bot"},
 			Model:           "mock/fast",
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
+	a, runCfg, liveRunCfg, cacheCfg, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
 	if a == nil {
-		t.Fatal("expected non-nil agent")
+		t.Fatal("got nil agent, want non-nil agent")
 	}
 	if a.Name() != "app-bot" {
-		t.Errorf("expected name %q, got %q", "app-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "app-bot")
 	}
 	if runCfg != nil {
-		t.Errorf("expected nil runCfg, got %+v", runCfg)
+		t.Errorf("got %+v, want nil runCfg", runCfg)
 	}
 	if liveRunCfg != nil {
-		t.Errorf("expected nil liveRunCfg, got %+v", liveRunCfg)
+		t.Errorf("got %+v, want nil liveRunCfg", liveRunCfg)
 	}
 	if cacheCfg != nil {
-		t.Errorf("expected nil cacheCfg, got %+v", cacheCfg)
+		t.Errorf("got %+v, want nil cacheCfg", cacheCfg)
 	}
 }
 
 // TestBuildApp_ReturnsRunConfig verifies BuildApp translates RunConfig to agent.RunConfig.
 func TestBuildApp_ReturnsRunConfig(t *testing.T) {
-	appCfg := &AppConfig{
-		AgentConfig: &LLMAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{Name: "run-cfg-bot"},
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.LLMAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{Name: "run-cfg-bot"},
 			Model:           "mock/fast",
 		},
-		RunConfig: &RunConfig{
-			StreamingMode: StreamingModeSSE,
+		RunConfig: &config.RunConfig{
+			StreamingMode: config.StreamingModeSSE,
 			SaveLiveBlob:  true,
 		},
 	}
 
-	a, runCfg, liveRunCfg, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
+	a, runCfg, liveRunCfg, cacheCfg, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
 	if a.Name() != "run-cfg-bot" {
-		t.Errorf("expected name %q, got %q", "run-cfg-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "run-cfg-bot")
 	}
 	if runCfg == nil {
-		t.Fatal("expected non-nil runCfg")
+		t.Fatal("got nil runCfg, want non-nil runCfg")
 	}
 	if runCfg.StreamingMode != agent.StreamingModeSSE {
 		t.Errorf("StreamingMode: got %v, want %v", runCfg.StreamingMode, agent.StreamingModeSSE)
@@ -607,49 +610,31 @@ func TestBuildApp_ReturnsRunConfig(t *testing.T) {
 		t.Errorf("SaveInputBlobsAsArtifacts: got false, want true")
 	}
 	if liveRunCfg != nil {
-		t.Errorf("expected nil liveRunCfg, got %+v", liveRunCfg)
+		t.Errorf("got %+v, want nil liveRunCfg", liveRunCfg)
 	}
 	if cacheCfg != nil {
-		t.Errorf("expected nil cacheCfg, got %+v", cacheCfg)
-	}
-}
-
-// TestBuildApp_NilRunConfig verifies BuildApp returns nil *agent.RunConfig when input has none.
-func TestBuildApp_NilRunConfig(t *testing.T) {
-	appCfg := &AppConfig{
-		AgentConfig: &LLMAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{Name: "nil-run-bot"},
-			Model:           "mock/fast",
-		},
-	}
-
-	_, runCfg, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
-	if err != nil {
-		t.Fatalf("BuildApp: %v", err)
-	}
-	if runCfg != nil {
-		t.Errorf("expected nil runCfg, got %+v", runCfg)
+		t.Errorf("got %+v, want nil cacheCfg", cacheCfg)
 	}
 }
 
 // TestBuildApp_ReturnsLiveRunConfig verifies BuildApp translates LiveRunConfig to agent.LiveRunConfig.
 func TestBuildApp_ReturnsLiveRunConfig(t *testing.T) {
-	appCfg := &AppConfig{
-		AgentConfig: &LLMAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{Name: "live-run-cfg-bot"},
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.LLMAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{Name: "live-run-cfg-bot"},
 			Model:           "mock/fast",
 		},
-		LiveRunConfig: &LiveRunConfig{
+		LiveRunConfig: &config.LiveRunConfig{
 			MaxLLMCalls: 750,
 		},
 	}
 
-	_, _, liveRunCfg, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
+	_, _, liveRunCfg, _, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
 	if liveRunCfg == nil {
-		t.Fatal("expected non-nil liveRunCfg")
+		t.Fatal("got nil liveRunCfg, want non-nil liveRunCfg")
 	}
 	if liveRunCfg.MaxLLMCalls != 750 {
 		t.Errorf("MaxLLMCalls: got %d, want 750", liveRunCfg.MaxLLMCalls)
@@ -658,24 +643,24 @@ func TestBuildApp_ReturnsLiveRunConfig(t *testing.T) {
 
 // TestBuildApp_ReturnsContextCacheConfig verifies BuildApp passes through ContextCacheConfig.
 func TestBuildApp_ReturnsContextCacheConfig(t *testing.T) {
-	appCfg := &AppConfig{
-		AgentConfig: &LLMAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{Name: "cache-bot"},
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.LLMAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{Name: "cache-bot"},
 			Model:           "mock/fast",
 		},
-		ContextCacheConfig: &ContextCacheConfig{
+		ContextCacheConfig: &config.ContextCacheConfig{
 			CacheIntervals: 5,
 			TTLSeconds:     600,
 			MinTokens:      100,
 		},
 	}
 
-	_, _, _, cacheCfg, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
+	_, _, _, cacheCfg, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("BuildApp: %v", err)
 	}
 	if cacheCfg == nil {
-		t.Fatal("expected non-nil cacheCfg")
+		t.Fatal("got nil cacheCfg, want non-nil cacheCfg")
 	}
 	if cacheCfg.CacheIntervals != 5 {
 		t.Errorf("CacheIntervals: got %d, want 5", cacheCfg.CacheIntervals)
@@ -691,8 +676,8 @@ func TestBuildApp_ReturnsContextCacheConfig(t *testing.T) {
 // TestBuild_LLMAgent_WithRichGenerateConfig verifies that Build handles a realistic
 // mixed GenerateConfig without error.
 func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "rich-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "rich-bot"},
 		Model:           "mock/fast",
 		GenerateConfig: map[string]any{
 			"temperature": 0.7,
@@ -704,7 +689,7 @@ func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
 		},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -712,20 +697,20 @@ func TestBuild_LLMAgent_WithRichGenerateConfig(t *testing.T) {
 		t.Fatal("Build returned nil agent")
 	}
 	if a.Name() != "rich-bot" {
-		t.Errorf("expected agent name %q, got %q", "rich-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "rich-bot")
 	}
 }
 
 // TestBuild_LLMAgent_WithInstructionTemplate_Inline verifies that an inline
 // InstructionTemplate is resolved and produces a non-nil agent.
 func TestBuild_LLMAgent_WithInstructionTemplate_Inline(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-inline-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:     config.BaseAgentConfig{Name: "tmpl-inline-bot"},
 		Model:               "mock/fast",
 		InstructionTemplate: &prompt.TemplateRef{Inline: "You are {{.Agent.Name}}."},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -733,7 +718,7 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Inline(t *testing.T) {
 		t.Fatal("Build returned nil agent")
 	}
 	if a.Name() != "tmpl-inline-bot" {
-		t.Errorf("expected agent name %q, got %q", "tmpl-inline-bot", a.Name())
+		t.Errorf("got %q, want %q", a.Name(), "tmpl-inline-bot")
 	}
 }
 
@@ -746,13 +731,13 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Name(t *testing.T) {
 		t.Fatalf("RegisterString: %v", err)
 	}
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-name-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:     config.BaseAgentConfig{Name: "tmpl-name-bot"},
 		Model:               "mock/fast",
 		InstructionTemplate: &prompt.TemplateRef{Name: "greeting"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, reg, nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, reg, nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -766,20 +751,22 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Name(t *testing.T) {
 func TestBuild_LLMAgent_WithInstructionTemplate_Path(t *testing.T) {
 	dir := t.TempDir()
 	tmplPath := filepath.Join(dir, "instruction.tmpl")
-	_ = os.WriteFile(tmplPath, []byte("You are a helpful assistant."), 0644)
+	if err := os.WriteFile(tmplPath, []byte("You are a helpful assistant."), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:     BaseAgentConfig{Name: "tmpl-path-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:     config.BaseAgentConfig{Name: "tmpl-path-bot"},
 		Model:               "mock/fast",
 		InstructionTemplate: &prompt.TemplateRef{Path: "instruction.tmpl"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), root, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -791,14 +778,14 @@ func TestBuild_LLMAgent_WithInstructionTemplate_Path(t *testing.T) {
 // TestBuild_LLMAgent_InstructionTemplatePrecedence verifies that
 // InstructionTemplate takes precedence over Instruction.
 func TestBuild_LLMAgent_InstructionTemplatePrecedence(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig:     BaseAgentConfig{Name: "precedence-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig:     config.BaseAgentConfig{Name: "precedence-bot"},
 		Model:               "mock/fast",
 		Instruction:         "static instruction",
 		InstructionTemplate: &prompt.TemplateRef{Inline: "templated instruction"},
 	}
 
-	a, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	a, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err != nil {
 		t.Fatalf("Build returned unexpected error: %v", err)
 	}
@@ -810,8 +797,8 @@ func TestBuild_LLMAgent_InstructionTemplatePrecedence(t *testing.T) {
 // TestBuild_LLMAgent_InvalidInstructionTemplate verifies that an invalid
 // TemplateRef (multiple fields set) returns an error.
 func TestBuild_LLMAgent_InvalidInstructionTemplate(t *testing.T) {
-	cfg := &LLMAgentConfig{
-		BaseAgentConfig: BaseAgentConfig{Name: "bad-tmpl-bot"},
+	cfg := &config.LLMAgentConfig{
+		BaseAgentConfig: config.BaseAgentConfig{Name: "bad-tmpl-bot"},
 		Model:           "mock/fast",
 		InstructionTemplate: &prompt.TemplateRef{
 			Inline: "inline",
@@ -819,9 +806,9 @@ func TestBuild_LLMAgent_InvalidInstructionTemplate(t *testing.T) {
 		},
 	}
 
-	_, err := BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
+	_, err := config.BuildWithPath(context.Background(), cfg, testRegistry(), nil, "")
 	if err == nil {
-		t.Fatal("expected error for invalid InstructionTemplate, got nil")
+		t.Fatal("got nil, want error for invalid InstructionTemplate")
 	}
 }
 
@@ -834,32 +821,57 @@ agent_class: LlmAgent
 model: mock/fast
 `
 	subPath := filepath.Join(dir, "sub.yaml")
-	_ = os.WriteFile(subPath, []byte(subContent), 0644)
+	if err := os.WriteFile(subPath, []byte(subContent), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
-	appCfg := &AppConfig{
-		AgentConfig: &SequentialAgentConfig{
-			BaseAgentConfig: BaseAgentConfig{
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.SequentialAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{
 				Name: "root",
-				SubAgentEntries: []SubAgentEntry{
-					{Ref: &AgentRefConfig{ConfigPath: "sub.yaml"}},
+				SubAgentEntries: []config.SubAgentEntry{
+					{Ref: &config.AgentRefConfig{ConfigPath: "sub.yaml"}},
 				},
 			},
 		},
 	}
 
-	a, _, _, _, err := BuildAppWithPath(context.Background(), appCfg, testRegistry(), root, "root.yaml")
+	a, _, _, _, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), root, "root.yaml")
 	if err != nil {
 		t.Fatalf("BuildAppWithPath: %v", err)
 	}
 	if len(a.SubAgents()) != 1 {
-		t.Fatalf("expected 1 sub-agent, got %d", len(a.SubAgents()))
+		t.Fatalf("got %d sub-agents, want 1", len(a.SubAgents()))
 	}
 	if a.SubAgents()[0].Name() != "sub" {
-		t.Errorf("expected sub-agent name %q, got %q", "sub", a.SubAgents()[0].Name())
+		t.Errorf("got %q, want %q", a.SubAgents()[0].Name(), "sub")
+	}
+}
+
+// TestBuildApp_RejectsBidiStreaming verifies that BuildAppWithPath returns an
+// error when RunConfig.StreamingMode is set to StreamingModeBIDI, which is not
+// supported by ADK-Go.
+func TestBuildApp_RejectsBidiStreaming(t *testing.T) {
+	t.Parallel()
+	appCfg := &config.AppConfig{
+		AgentConfig: &config.SequentialAgentConfig{
+			BaseAgentConfig: config.BaseAgentConfig{
+				Name: "bidi-root",
+				SubAgentEntries: []config.SubAgentEntry{
+					{Inline: &config.LLMAgentConfig{BaseAgentConfig: config.BaseAgentConfig{Name: "child"}, Model: "mock/fast"}},
+				},
+			},
+		},
+		RunConfig: &config.RunConfig{StreamingMode: config.StreamingModeBIDI},
+	}
+
+	_, _, _, _, err := config.BuildAppWithPath(context.Background(), appCfg, testRegistry(), nil, "")
+	if err == nil {
+		t.Fatal("got nil, want error for bidi streaming mode")
 	}
 }

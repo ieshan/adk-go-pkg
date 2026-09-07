@@ -82,10 +82,10 @@ func TestStreamingReasoningLifecycle(t *testing.T) {
 		}
 	}
 	if starts != 1 || ends != 1 {
-		t.Fatalf("expected 1 start and 1 end, got starts=%d, ends=%d", starts, ends)
+		t.Fatalf("got starts=%d, ends=%d, want 1 start and 1 end", starts, ends)
 	}
 	if contents < 2 {
-		t.Fatalf("expected at least 2 content deltas, got %d", contents)
+		t.Fatalf("got %d content deltas, want at least 2", contents)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestReasoningClosesOnText(t *testing.T) {
 		}
 	}
 	if !reasoningEndedBeforeText {
-		t.Fatal("expected REASONING_END to be emitted before TEXT_MESSAGE_START")
+		t.Fatal("got TEXT_MESSAGE_START before REASONING_END, want REASONING_END first")
 	}
 }
 
@@ -153,12 +153,12 @@ func TestDeterministicToolResultID(t *testing.T) {
 		if tr, ok := ev.(*events.ToolCallResultEvent); ok {
 			expected := "result-" + callID
 			if tr.MessageID != expected {
-				t.Fatalf("expected message ID %q, got %q", expected, tr.MessageID)
+				t.Fatalf("got %q, want message ID %q", tr.MessageID, expected)
 			}
 			return
 		}
 	}
-	t.Fatal("expected ToolCallResultEvent not emitted")
+	t.Fatal("got ToolCallResultEvent emitted, want not emitted")
 }
 
 // TestNonTextArtifactsFallback verifies that FileData and InlineData parts
@@ -186,7 +186,7 @@ func TestNonTextArtifactsFallback(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatal("expected non-text FileData to emit a text fallback")
+			t.Fatal("got no text fallback for non-text FileData, want one")
 		}
 	})
 
@@ -212,7 +212,7 @@ func TestNonTextArtifactsFallback(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatal("expected non-text InlineData to emit a text fallback")
+			t.Fatal("got no text fallback for non-text InlineData, want one")
 		}
 	})
 }
@@ -289,7 +289,7 @@ func TestSessionEventsToMessages_CompleteFidelity(t *testing.T) {
 
 	msgs := sessionEventsToMessages(sess.Events())
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d: %+v", len(msgs), msgs)
+		t.Fatalf("got %d messages, want 2: %+v", len(msgs), msgs)
 	}
 
 	// First message: assistant with text + tool call, attributed to sub-agent.
@@ -303,7 +303,7 @@ func TestSessionEventsToMessages_CompleteFidelity(t *testing.T) {
 		t.Errorf("msgs[0].Content = %q, want 'Checking the weather...'", msgs[0].Content)
 	}
 	if len(msgs[0].ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(msgs[0].ToolCalls))
+		t.Fatalf("got %d tool calls, want 1", len(msgs[0].ToolCalls))
 	}
 	tc := msgs[0].ToolCalls[0]
 	if tc.ID != "call_1" {

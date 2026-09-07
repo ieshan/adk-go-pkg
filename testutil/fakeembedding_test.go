@@ -1,14 +1,16 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"errors"
 	"math"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/testutil"
 )
 
 func TestFakeEmbedding_Basic(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 
 	vec, err := f.Embed(context.Background(), "hello world")
 	if err != nil {
@@ -16,7 +18,7 @@ func TestFakeEmbedding_Basic(t *testing.T) {
 	}
 
 	if len(vec) != 1536 {
-		t.Errorf("expected 1536 dimensions, got %d", len(vec))
+		t.Errorf("got %d dimensions, want 1536", len(vec))
 	}
 
 	// Verify dimension accessor
@@ -26,7 +28,7 @@ func TestFakeEmbedding_Basic(t *testing.T) {
 }
 
 func TestFakeEmbedding_Deterministic(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	vec1, err := f.Embed(ctx, "test text")
@@ -72,7 +74,7 @@ func TestFakeEmbedding_Deterministic(t *testing.T) {
 }
 
 func TestFakeEmbedding_CustomDimension(t *testing.T) {
-	f := NewFakeEmbedding().WithDimension(768)
+	f := testutil.NewFakeEmbedding().WithDimension(768)
 
 	vec, err := f.Embed(context.Background(), "hello")
 	if err != nil {
@@ -80,7 +82,7 @@ func TestFakeEmbedding_CustomDimension(t *testing.T) {
 	}
 
 	if len(vec) != 768 {
-		t.Errorf("expected 768 dimensions, got %d", len(vec))
+		t.Errorf("got %d dimensions, want 768", len(vec))
 	}
 
 	if f.Dimension() != 768 {
@@ -89,7 +91,7 @@ func TestFakeEmbedding_CustomDimension(t *testing.T) {
 }
 
 func TestFakeEmbedding_Precomputed(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	precomputed := []float32{0.1, 0.2, 0.3, 0.4, 0.5}
 
 	f.WithPrecomputedEmbedding("known text", precomputed)
@@ -100,7 +102,7 @@ func TestFakeEmbedding_Precomputed(t *testing.T) {
 	}
 
 	if len(vec) != len(precomputed) {
-		t.Fatalf("expected %d dimensions, got %d", len(precomputed), len(vec))
+		t.Fatalf("got %d dimensions, want %d", len(vec), len(precomputed))
 	}
 
 	for i := range precomputed {
@@ -111,7 +113,7 @@ func TestFakeEmbedding_Precomputed(t *testing.T) {
 }
 
 func TestFakeEmbedding_PrecomputedCopy(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	precomputed := []float32{0.1, 0.2, 0.3}
 
 	f.WithPrecomputedEmbedding("test", precomputed)
@@ -134,7 +136,7 @@ func TestFakeEmbedding_PrecomputedCopy(t *testing.T) {
 }
 
 func TestFakeEmbedding_CallRecording(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	if _, err := f.Embed(ctx, "first"); err != nil {
@@ -170,7 +172,7 @@ func TestFakeEmbedding_CallRecording(t *testing.T) {
 }
 
 func TestFakeEmbedding_LastCallEmpty(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 
 	if f.LastCall() != "" {
 		t.Errorf("LastCall() = %q, want empty string", f.LastCall())
@@ -178,7 +180,7 @@ func TestFakeEmbedding_LastCallEmpty(t *testing.T) {
 }
 
 func TestFakeEmbedding_Reset(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	if _, err := f.Embed(ctx, "test"); err != nil {
@@ -202,12 +204,12 @@ func TestFakeEmbedding_Reset(t *testing.T) {
 		t.Errorf("after Reset, Embed() error: %v", err)
 	}
 	if len(vec) != 1536 {
-		t.Errorf("after Reset, expected 1536 dimensions, got %d", len(vec))
+		t.Errorf("after Reset, got %d dimensions, want 1536", len(vec))
 	}
 }
 
 func TestFakeEmbedding_ErrorInjection(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	testErr := errors.New("embedding service unavailable")
@@ -215,7 +217,7 @@ func TestFakeEmbedding_ErrorInjection(t *testing.T) {
 
 	_, err := f.Embed(ctx, "test")
 	if err != testErr {
-		t.Errorf("expected error %v, got %v", testErr, err)
+		t.Errorf("got %v, want %v", err, testErr)
 	}
 
 	// Error should still record the call
@@ -231,26 +233,26 @@ func TestFakeEmbedding_ErrorInjection(t *testing.T) {
 		t.Fatalf("after ClearError, Embed() error: %v", err)
 	}
 	if len(vec) != 1536 {
-		t.Errorf("expected 1536 dimensions, got %d", len(vec))
+		t.Errorf("got %d dimensions, want 1536", len(vec))
 	}
 }
 
 func TestFakeEmbedding_ContextCancellation(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
 	_, err := f.Embed(ctx, "test")
 	if err == nil {
-		t.Error("expected error for cancelled context, got nil")
+		t.Error("got nil error, want error for cancelled context")
 	}
 	if err != context.Canceled {
-		t.Errorf("expected context.Canceled, got %v", err)
+		t.Errorf("got %v, want context.Canceled", err)
 	}
 }
 
 func TestFakeEmbedding_AsFunc(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	fn := f.AsFunc()
 
 	// Verify it returns the correct function type
@@ -259,7 +261,7 @@ func TestFakeEmbedding_AsFunc(t *testing.T) {
 		t.Fatalf("AsFunc() returned function error: %v", err)
 	}
 	if len(vec) != 1536 {
-		t.Errorf("expected 1536 dimensions, got %d", len(vec))
+		t.Errorf("got %d dimensions, want 1536", len(vec))
 	}
 
 	// Verify call is recorded on the FakeEmbedding
@@ -269,7 +271,7 @@ func TestFakeEmbedding_AsFunc(t *testing.T) {
 }
 
 func TestFakeEmbedding_VectorRange(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	vec, err := f.Embed(ctx, "test text for range validation")
@@ -290,7 +292,7 @@ func TestFakeEmbedding_VectorRange(t *testing.T) {
 }
 
 func TestFakeEmbedding_ThreadSafety(t *testing.T) {
-	f := NewFakeEmbedding()
+	f := testutil.NewFakeEmbedding()
 	ctx := context.Background()
 
 	// Run concurrent embeddings

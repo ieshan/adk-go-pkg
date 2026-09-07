@@ -22,7 +22,7 @@ func TestConvertInboundMessages_MultiTurnHistory(t *testing.T) {
 	}
 
 	if len(prior) != 2 {
-		t.Fatalf("expected 2 prior events, got %d", len(prior))
+		t.Fatalf("got %d prior events, want 2", len(prior))
 	}
 	if prior[0].Author != "user" {
 		t.Errorf("prior[0] author = %q, want user", prior[0].Author)
@@ -32,7 +32,7 @@ func TestConvertInboundMessages_MultiTurnHistory(t *testing.T) {
 	}
 
 	if current == nil || len(current.Parts) == 0 {
-		t.Fatal("expected current user content with parts")
+		t.Fatal("got no parts in current user content, want parts")
 	}
 	if current.Parts[0].Text != "What is 2+2?" {
 		t.Errorf("current text = %q, want 'What is 2+2?'", current.Parts[0].Text)
@@ -67,7 +67,7 @@ func TestConvertInboundMessages_RoleTool(t *testing.T) {
 	}
 
 	if len(prior) != 3 {
-		t.Fatalf("expected 3 prior events, got %d", len(prior))
+		t.Fatalf("got %d prior events, want 3", len(prior))
 	}
 
 	// The third prior event (index 2) should be the tool response.
@@ -77,7 +77,7 @@ func TestConvertInboundMessages_RoleTool(t *testing.T) {
 	}
 	fr := toolEv.Content.Parts[0].FunctionResponse
 	if fr == nil {
-		t.Fatal("expected FunctionResponse part")
+		t.Fatal("got no FunctionResponse part, want one")
 	}
 	if fr.ID != "call_1" {
 		t.Errorf("FunctionResponse ID = %q, want call_1", fr.ID)
@@ -87,7 +87,7 @@ func TestConvertInboundMessages_RoleTool(t *testing.T) {
 	}
 	temp, ok := fr.Response["temp"]
 	if !ok {
-		t.Errorf("expected 'temp' key in response, got %v", fr.Response)
+		t.Errorf("got %v, want 'temp' key in response", fr.Response)
 	}
 	if temp != float64(72) {
 		t.Errorf("temp = %v, want 72", temp)
@@ -113,15 +113,15 @@ func TestConvertInboundMessages_ToolResponseFallback(t *testing.T) {
 	}
 
 	if current == nil || len(current.Parts) == 0 {
-		t.Fatal("expected current content with parts")
+		t.Fatal("got no parts in current content, want parts")
 	}
 	fr := current.Parts[0].FunctionResponse
 	if fr == nil {
-		t.Fatal("expected FunctionResponse part")
+		t.Fatal("got no FunctionResponse part, want one")
 	}
 	result, ok := fr.Response["result"]
 	if !ok {
-		t.Errorf("expected 'result' fallback key, got %v", fr.Response)
+		t.Errorf("got %v, want 'result' fallback key", fr.Response)
 	}
 	if result != "plain text result" {
 		t.Errorf("result = %v, want 'plain text result'", result)
@@ -151,7 +151,7 @@ func TestConvertInboundMessages_AssistantWithToolCalls(t *testing.T) {
 	}
 
 	if len(prior) != 2 {
-		t.Fatalf("expected 2 prior events, got %d", len(prior))
+		t.Fatalf("got %d prior events, want 2", len(prior))
 	}
 
 	assistantEv := prior[1]
@@ -174,10 +174,10 @@ func TestConvertInboundMessages_AssistantWithToolCalls(t *testing.T) {
 		}
 	}
 	if !hasText {
-		t.Error("expected text part in assistant event")
+		t.Error("got no text part in assistant event, want one")
 	}
 	if !hasFunctionCall {
-		t.Error("expected FunctionCall part in assistant event")
+		t.Error("got no FunctionCall part in assistant event, want one")
 	}
 }
 
@@ -200,16 +200,16 @@ func TestConvertInboundMessages_NoUserMessage(t *testing.T) {
 	}
 
 	if current == nil {
-		t.Fatal("expected non-nil current content")
+		t.Fatal("got nil current content, want non-nil")
 	}
 	if current.Role != "user" {
 		t.Errorf("Role = %q, want user", current.Role)
 	}
 	if len(current.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(current.Parts))
+		t.Fatalf("got %d parts, want 1", len(current.Parts))
 	}
 	if current.Parts[0].FunctionResponse == nil {
-		t.Fatal("expected FunctionResponse part")
+		t.Fatal("got no FunctionResponse part, want one")
 	}
 }
 
@@ -220,10 +220,10 @@ func TestConvertInboundMessages_Empty(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(prior) != 0 {
-		t.Errorf("expected 0 prior events, got %d", len(prior))
+		t.Errorf("got %d prior events, want 0", len(prior))
 	}
 	if current == nil || len(current.Parts) == 0 {
-		t.Error("expected non-empty current content")
+		t.Error("got empty current content, want non-empty")
 	}
 }
 
@@ -232,26 +232,47 @@ func TestParseToolResponseContent(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		got := parseToolResponseContent(`{"key":"value"}`)
 		if got["key"] != "value" {
-			t.Errorf("expected key=value, got %v", got)
+			t.Errorf("got %v, want key=value", got)
 		}
 	})
 	t.Run("invalid JSON string", func(t *testing.T) {
 		got := parseToolResponseContent("not json")
 		if got["result"] != "not json" {
-			t.Errorf("expected result fallback, got %v", got)
+			t.Errorf("got %v, want result fallback", got)
 		}
 	})
 	t.Run("nil", func(t *testing.T) {
 		got := parseToolResponseContent(nil)
 		if got["result"] != "" {
-			t.Errorf("expected empty result, got %v", got)
+			t.Errorf("got %v, want empty result", got)
 		}
 	})
 	t.Run("map directly", func(t *testing.T) {
 		input := map[string]any{"k": "v"}
 		got := parseToolResponseContent(input)
 		if got["k"] != "v" {
-			t.Errorf("expected k=v, got %v", got)
+			t.Errorf("got %v, want k=v", got)
+		}
+	})
+}
+
+// FuzzParseToolResponseContent verifies that parseToolResponseContent never
+// panics on arbitrary string input. Valid JSON strings should parse into a
+// map; invalid JSON should fall back to a {"result": content} map (no panic).
+func FuzzParseToolResponseContent(f *testing.F) {
+	// Seed: valid JSON object.
+	f.Add(`{"key":"value"}`)
+	// Seed: malformed JSON.
+	f.Add(`invalid json`)
+	// Seed: empty string.
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		got := parseToolResponseContent(input)
+		// The function must not panic — reaching here is the primary assertion.
+		// It always returns a non-nil map.
+		if got == nil {
+			t.Error("parseToolResponseContent returned nil map")
 		}
 	})
 }

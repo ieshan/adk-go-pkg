@@ -88,7 +88,12 @@ func (f *FakeLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, st
 		f.mu.Unlock()
 
 		if stream {
-			for i, resp := range responses {
+			start := idx
+			if start >= len(responses) {
+				start = len(responses) - 1
+			}
+			streamResponses := responses[start:]
+			for i, resp := range streamResponses {
 				select {
 				case <-ctx.Done():
 					return
@@ -96,7 +101,7 @@ func (f *FakeLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, st
 				}
 
 				r := resp // copy
-				if i < len(responses)-1 {
+				if i < len(streamResponses)-1 {
 					r.Partial = true
 					r.TurnComplete = false
 				} else {

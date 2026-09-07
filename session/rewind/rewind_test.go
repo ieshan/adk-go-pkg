@@ -87,7 +87,7 @@ func TestRewind_ByID(t *testing.T) {
 
 	got := result.Events().Len()
 	if got != 3 {
-		t.Errorf("expected 3 events after rewind, got %d", got)
+		t.Errorf("got %d events after rewind, want 3", got)
 	}
 
 	// Verify the last retained event ID matches the target
@@ -125,7 +125,7 @@ func TestRewind_ByIndex(t *testing.T) {
 
 	got := result.Events().Len()
 	if got != 3 {
-		t.Errorf("expected 3 events after rewind, got %d", got)
+		t.Errorf("got %d events after rewind, want 3", got)
 	}
 
 	// Verify the last retained event matches index 2
@@ -152,7 +152,7 @@ func TestRewind_EventNotFound(t *testing.T) {
 
 	_, err := rewind.Rewind(ctx, svc, testApp, testUser, sessID, "nonexistent-event-id")
 	if err == nil {
-		t.Fatal("expected error for non-existent event ID, got nil")
+		t.Errorf("got nil error, want error for non-existent event ID")
 	}
 }
 
@@ -170,7 +170,7 @@ func TestRewind_IndexOutOfBounds(t *testing.T) {
 
 	_, err := rewind.RewindToIndex(ctx, svc, testApp, testUser, sessID, 10)
 	if err == nil {
-		t.Fatal("expected error for out-of-bounds index, got nil")
+		t.Errorf("got nil error, want error for out-of-bounds index")
 	}
 }
 
@@ -184,7 +184,7 @@ func TestRewind_EmptySession(t *testing.T) {
 
 	_, err := rewind.Rewind(ctx, svc, testApp, testUser, sessID, "any-event-id")
 	if err == nil {
-		t.Fatal("expected error for empty session, got nil")
+		t.Errorf("got nil error, want error for empty session")
 	}
 }
 
@@ -212,7 +212,7 @@ func TestRewind_LastEvent(t *testing.T) {
 
 	got := result.Events().Len()
 	if got != 5 {
-		t.Errorf("expected 5 events (no-op rewind to last event), got %d", got)
+		t.Errorf("got %d events (no-op rewind to last event), want 5", got)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestRewindToIndex_Zero(t *testing.T) {
 
 	got := result.Events().Len()
 	if got != 1 {
-		t.Errorf("expected 1 event after rewind to index 0, got %d", got)
+		t.Errorf("got %d events after rewind to index 0, want 1", got)
 	}
 
 	ev := result.Events().At(0)

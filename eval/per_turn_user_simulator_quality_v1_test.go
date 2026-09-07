@@ -35,10 +35,10 @@ func TestPerTurnUserSimulatorQualityV1Evaluator_FirstTurnExactMatch(t *testing.T
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallEvalStatus != EvalStatusPassed {
-		t.Errorf("first turn exact match should PASSED, got %v", result.OverallEvalStatus)
+		t.Errorf("got %v, want PASSED for first turn exact match", result.OverallEvalStatus)
 	}
 	if result.PerInvocationResults[0].Score == nil || *result.PerInvocationResults[0].Score != 1.0 {
-		t.Errorf("first turn exact match should score 1.0")
+		t.Errorf("got %v, want 1.0 for first turn exact match score", result.PerInvocationResults[0].Score)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestPerTurnUserSimulatorQualityV1Evaluator_FirstTurnMismatch(t *testing.T) 
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallEvalStatus != EvalStatusFailed {
-		t.Errorf("first turn mismatch should FAILED, got %v", result.OverallEvalStatus)
+		t.Errorf("got %v, want FAILED for first turn mismatch", result.OverallEvalStatus)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestPerTurnUserSimulatorQualityV1Evaluator_NilScenario(t *testing.T) {
 
 	_, err = e.EvaluateInvocations(context.Background(), actual, nil, nil)
 	if err == nil {
-		t.Error("expected error when conversation_scenario is nil")
+		t.Errorf("got nil error, want non-nil error when conversation_scenario is nil")
 	}
 }
 

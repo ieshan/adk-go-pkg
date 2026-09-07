@@ -72,6 +72,15 @@ func makeProxyTool(
 		Description:   t.Description,
 		IsLongRunning: true,
 	}
+	if t.Parameters != nil {
+		schema, err := toJSONSchema(t.Parameters)
+		if err != nil {
+			return nil, fmt.Errorf("aguiadk: tool %q parameters: %w", t.Name, err)
+		}
+		if schema != nil {
+			cfg.InputSchema = schema
+		}
+	}
 
 	handler := func(ctx agent.Context, args map[string]any) (map[string]any, error) {
 		return proxyToolHandler(ctx, args, t.Name, emitter, resultHandler, timeout)

@@ -12,13 +12,13 @@ import (
 func TestPresets_AgenticChat(t *testing.T) {
 	cfg := aguiadk.AgenticChatPreset(aguiadk.Config{})
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if cfg.SessionTimeout != 20*time.Minute {
 		t.Errorf("SessionTimeout = %v, want 20m", cfg.SessionTimeout)
 	}
 	if cfg.ClientTools == nil {
-		t.Fatal("expected non-nil ClientTools")
+		t.Fatal("got nil ClientTools, want non-nil")
 	}
 	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
 		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
@@ -36,10 +36,10 @@ func TestPresets_AgenticChatPreservesBase(t *testing.T) {
 func TestPresets_GenerativeUI(t *testing.T) {
 	cfg := aguiadk.GenerativeUIPreset(aguiadk.Config{})
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if cfg.ClientTools == nil {
-		t.Fatal("expected non-nil ClientTools")
+		t.Fatal("got nil ClientTools, want non-nil")
 	}
 	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
 		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
@@ -49,27 +49,42 @@ func TestPresets_GenerativeUI(t *testing.T) {
 func TestPresets_HumanInTheLoop(t *testing.T) {
 	cfg := aguiadk.HumanInTheLoopPreset(aguiadk.Config{}, false)
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if cfg.SessionTimeout != 30*time.Minute {
 		t.Errorf("SessionTimeout = %v, want 30m", cfg.SessionTimeout)
 	}
 	if cfg.ClientTools == nil {
-		t.Fatal("expected non-nil ClientTools")
+		t.Fatal("got nil ClientTools, want non-nil")
 	}
 	if cfg.ClientTools.Mode != aguiadk.ClientToolModeNextRun {
 		t.Errorf("ClientTools.Mode = %v, want NextRun", cfg.ClientTools.Mode)
 	}
 	if cfg.RunStore == nil {
-		t.Error("expected non-nil RunStore when autoApprove=false")
+		t.Error("got nil RunStore, want non-nil when autoApprove=false")
 	}
-	defer cfg.RunStore.Stop()
+	t.Cleanup(cfg.RunStore.Stop)
 }
 
 func TestPresets_HumanInTheLoopAutoApprove(t *testing.T) {
+	t.Parallel()
 	cfg := aguiadk.HumanInTheLoopPreset(aguiadk.Config{}, true)
 	if cfg.RunStore != nil {
-		t.Error("expected nil RunStore when autoApprove=true")
+		t.Errorf("RunStore = %v, want nil when autoApprove=true", cfg.RunStore)
+	}
+	if cfg.ApprovalModeFunc == nil {
+		t.Fatal("got nil ApprovalModeFunc, want non-nil when autoApprove=true")
+	}
+}
+
+func TestPresets_AutoApprove_FuncReturnsTrue(t *testing.T) {
+	t.Parallel()
+	cfg := aguiadk.HumanInTheLoopPreset(aguiadk.Config{}, true)
+	if cfg.ApprovalModeFunc == nil {
+		t.Fatal("got nil ApprovalModeFunc, want non-nil when autoApprove=true")
+	}
+	if got := cfg.ApprovalModeFunc(nil); !got {
+		t.Errorf("ApprovalModeFunc(nil) = %v, want true", got)
 	}
 }
 
@@ -81,13 +96,13 @@ func TestPresets_SharedState(t *testing.T) {
 	}
 	cfg := aguiadk.SharedStatePreset(aguiadk.Config{}, mapper)
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if !cfg.SuppressToolEvents {
-		t.Error("expected SuppressToolEvents=true")
+		t.Errorf("SuppressToolEvents = %v, want true", cfg.SuppressToolEvents)
 	}
 	if cfg.ToolToStateMapper == nil {
-		t.Fatal("expected non-nil ToolToStateMapper")
+		t.Fatal("got nil ToolToStateMapper, want non-nil")
 	}
 	ops, _ := cfg.ToolToStateMapper("search", map[string]any{"q": "hello"})
 	if len(ops) != 1 || ops[0].Path != "/tool/search" {
@@ -98,10 +113,10 @@ func TestPresets_SharedState(t *testing.T) {
 func TestPresets_InlineTools(t *testing.T) {
 	cfg := aguiadk.InlineToolsPreset(aguiadk.Config{})
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if cfg.ClientTools == nil {
-		t.Fatal("expected non-nil ClientTools")
+		t.Fatal("got nil ClientTools, want non-nil")
 	}
 	if cfg.ClientTools.Mode != aguiadk.ClientToolModeInline {
 		t.Errorf("ClientTools.Mode = %v, want Inline", cfg.ClientTools.Mode)
@@ -114,13 +129,13 @@ func TestPresets_InlineTools(t *testing.T) {
 func TestPresets_PredictiveState(t *testing.T) {
 	cfg := aguiadk.PredictiveStatePreset(aguiadk.Config{})
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if !cfg.EmitActivityDeltas {
-		t.Error("expected EmitActivityDeltas=true")
+		t.Errorf("EmitActivityDeltas = %v, want true", cfg.EmitActivityDeltas)
 	}
 	if cfg.EmitStepEvents == nil || !*cfg.EmitStepEvents {
-		t.Error("expected EmitStepEvents=true")
+		t.Errorf("EmitStepEvents = %v, want true", cfg.EmitStepEvents)
 	}
 	if cfg.SessionTimeout != 20*time.Minute {
 		t.Errorf("SessionTimeout = %v, want 20m", cfg.SessionTimeout)
@@ -143,19 +158,19 @@ func TestPresets_AgenticGenerativeUI(t *testing.T) {
 	}
 	cfg := aguiadk.AgenticGenerativeUIPreset(aguiadk.Config{}, mapper)
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 	if !cfg.EmitMessagesSnapshot {
-		t.Error("expected EmitMessagesSnapshot=true")
+		t.Errorf("EmitMessagesSnapshot = %v, want true", cfg.EmitMessagesSnapshot)
 	}
 	if cfg.EmitStepEvents == nil || !*cfg.EmitStepEvents {
-		t.Error("expected EmitStepEvents=true")
+		t.Errorf("EmitStepEvents = %v, want true", cfg.EmitStepEvents)
 	}
 	if !cfg.SuppressToolEvents {
-		t.Error("expected SuppressToolEvents=true")
+		t.Errorf("SuppressToolEvents = %v, want true", cfg.SuppressToolEvents)
 	}
 	if cfg.ToolToStateMapper == nil {
-		t.Fatal("expected non-nil ToolToStateMapper")
+		t.Fatal("got nil ToolToStateMapper, want non-nil")
 	}
 	ops, _ := cfg.ToolToStateMapper("render", map[string]any{"component": "card"})
 	if len(ops) != 1 || ops[0].Path != "/ui/render" {

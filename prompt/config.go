@@ -1,8 +1,13 @@
 package prompt
 
 import (
+	"errors"
 	"fmt"
 )
+
+// ErrTemplateRefInvalid is returned when a TemplateRef has zero or more than
+// one of Name, Inline, or Path set.
+var ErrTemplateRefInvalid = errors.New("TemplateRef: invalid configuration")
 
 // TemplateRef is a tagged union for referencing a template by name, inline text,
 // or file path.
@@ -30,10 +35,10 @@ func (r *TemplateRef) Validate() error {
 		count++
 	}
 	if count == 0 {
-		return fmt.Errorf("TemplateRef: exactly one of name, inline, or path must be set")
+		return fmt.Errorf("%w: exactly one of name, inline, or path must be set", ErrTemplateRefInvalid)
 	}
 	if count > 1 {
-		return fmt.Errorf("TemplateRef: only one of name, inline, or path may be set")
+		return fmt.Errorf("%w: only one of name, inline, or path may be set", ErrTemplateRefInvalid)
 	}
 	return nil
 }

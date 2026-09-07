@@ -39,8 +39,8 @@ type ClientAgent struct {
 	client *sse.Client
 }
 
-// NewClientAgent creates a ClientAgent that connects to the configured
-// remote AG-UI endpoint.
+// NewClientAgent creates a ClientAgent for the configured remote AG-UI
+// endpoint. The connection is established in Run.
 func NewClientAgent(cfg ClientConfig) *ClientAgent {
 	sseCfg := sse.Config{
 		Endpoint:   cfg.Endpoint,

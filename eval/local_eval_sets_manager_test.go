@@ -1,4 +1,4 @@
-package eval
+package eval_test
 
 import (
 	"context"
@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"google.golang.org/genai"
 )
 
-func newTestEvalSetsManager(t *testing.T) *LocalEvalSetsManager {
+func newTestEvalSetsManager(t *testing.T) *eval.LocalEvalSetsManager {
 	t.Helper()
-	mgr, err := NewLocalEvalSetsManager(t.TempDir())
+	mgr, err := eval.NewLocalEvalSetsManager(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalEvalSetsManager: %v", err)
 	}
@@ -28,9 +29,9 @@ func TestLocalEvalSetsManager_CRUD(t *testing.T) {
 		t.Fatalf("CreateEvalSet failed: %v", err)
 	}
 
-	err = mgr.AddEvalCase(ctx, "app", "test-set", EvalCase{
+	err = mgr.AddEvalCase(ctx, "app", "test-set", eval.EvalCase{
 		EvalID: "case-1",
-		Conversation: []Invocation{{
+		Conversation: []eval.Invocation{{
 			UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
 		}},
 	})
@@ -65,9 +66,9 @@ func TestLocalEvalSetsManager_CRUD(t *testing.T) {
 		t.Errorf("EvalID = %q, want case-1", case1.EvalID)
 	}
 
-	err = mgr.UpdateEvalCase(ctx, "app", "test-set", EvalCase{
+	err = mgr.UpdateEvalCase(ctx, "app", "test-set", eval.EvalCase{
 		EvalID: "case-1",
-		Conversation: []Invocation{{
+		Conversation: []eval.Invocation{{
 			UserContent: &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "updated"}}},
 		}},
 	})
@@ -79,7 +80,10 @@ func TestLocalEvalSetsManager_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEvalCase failed: %v", err)
 	}
-	got, _ = mgr.GetEvalSet(ctx, "app", "test-set")
+	got, err = mgr.GetEvalSet(ctx, "app", "test-set")
+	if err != nil {
+		t.Fatalf("GetEvalSet after delete: %v", err)
+	}
 	if got == nil {
 		t.Fatal("nil eval set")
 	}
@@ -99,7 +103,7 @@ func TestLocalEvalSetsManager_DuplicateCreate(t *testing.T) {
 
 	_, err = mgr.CreateEvalSet(ctx, "app", "dup-set")
 	if err == nil {
-		t.Error("expected error for duplicate creation")
+		t.Errorf("got nil error, want non-nil error for duplicate creation")
 	}
 }
 
@@ -109,7 +113,7 @@ func TestLocalEvalSetsManager_GetNotFound(t *testing.T) {
 
 	_, err := mgr.GetEvalSet(ctx, "app", "nonexistent")
 	if err == nil {
-		t.Error("expected error for non-existent eval set")
+		t.Errorf("got nil error, want non-nil error for non-existent eval set")
 	}
 }
 
@@ -119,7 +123,7 @@ func TestLocalEvalSetsManager_InvalidPath(t *testing.T) {
 
 	_, err := mgr.GetEvalSet(ctx, "../etc", "test")
 	if err == nil {
-		t.Error("expected error for path traversal in appName")
+		t.Errorf("got nil error, want non-nil error for path traversal in appName")
 	}
 }
 
@@ -153,7 +157,7 @@ func TestLocalEvalSetsManager_OldFormatMigration(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	mgr, err := NewLocalEvalSetsManager(dir)
+	mgr, err := eval.NewLocalEvalSetsManager(dir)
 	if err != nil {
 		t.Fatalf("NewLocalEvalSetsManager: %v", err)
 	}
@@ -165,7 +169,7 @@ func TestLocalEvalSetsManager_OldFormatMigration(t *testing.T) {
 	// Old format doesn't have evalSetId, so it will be empty.
 	// The migration creates eval cases from query/reference fields.
 	if len(got.EvalCases) != 1 {
-		t.Fatalf("len(EvalCases) = %d, want 1", len(got.EvalCases))
+		t.Errorf("len(EvalCases) = %d, want 1", len(got.EvalCases))
 	}
 	if got.EvalCases[0].EvalID != "eval_case_0" {
 		t.Errorf("EvalID = %q, want eval_case_0", got.EvalCases[0].EvalID)

@@ -14,16 +14,16 @@ out of the box.
 | Feature | Description |
 |---------|-------------|
 | **OpenAI Model Provider** | Drop-in `model.LLM` adapter for any OpenAI-compatible API (OpenAI, Ollama, LiteLLM, OpenRouter, vLLM, Together AI). |
-| **Anthropic Model Provider** | Drop-in `model.LLM` adapter for Anthropic's Messages API and compatible providers (Claude, Amazon Bedrock, Google Vertex AI). Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. |
+| **Anthropic Model Provider** | Drop-in `model.LLM` adapter for Anthropic's Messages API. Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. Bedrock and Vertex AI are only supported through gateways that expose the Anthropic `/v1/messages` endpoint. |
 | **Generic AG-UI Server** | Framework-agnostic AG-UI protocol server (`agui/`) with event emitter, state management (RFC 6902 JSON Patch via `evanphx/json-patch`), predictive state tracker, tool orchestration, middleware, encrypted-value scrubbing, and SSE handler. Zero ADK dependency. |
 | **ADK-Go AG-UI Bridge** | Translates ADK-Go session events to AG-UI events (`aguiadk/`). Thread-to-session mapping, state/message snapshots, streaming tool calls, client tool hand-back (NextRun, Inline, and HandBack modes), HITL runstore & resume, tool call validation, activity snapshots, suppressed tool mode, and preset configurations. |
-| **Prompt Templating** | `text/template`-based prompt rendering engine with agent context data (state, user, session, artifacts, memory), 13 built-in functions, template registry, loader (files/embed.FS), and `llmagent.InstructionProvider` integration. |
+| **Prompt Templating** | `text/template`-based prompt rendering engine with agent context data (state, user, session, artifacts, memory), 12 built-in functions, template registry, loader (files/embed.FS), and `llmagent.InstructionProvider` integration. |
 | **Planners** | Structured plan generation (ReAct JSON and free-form Thinking) that separates reasoning from execution. |
 | **File Artifact Service** | Filesystem-backed `artifact.Service` with automatic versioning and metadata sidecars. |
 | **Session Rewind** | Roll a session back to any prior event, recalculating state from replayed deltas. |
 | **Config Agent Loader** | Declare entire agent trees in YAML/JSON and build them at runtime via a factory registry. Now includes Agent Skills support. |
 | **Agent Skills Config** | Declarative skill integration via YAML/JSON. Supports filesystem sources with preload optimization and specific skill loading (wildcard or filtered by name). |
-| **Test Utilities** | Complete fake implementations of all ADK-Go interfaces for deterministic testing without external LLM providers. Includes FakeLLM, FakeAgent, FakeSession, and RunnerBuilder. |
+| **Test Utilities** | Complete fake implementations of all ADK-Go interfaces for deterministic testing without external LLM providers. Includes FakeLLM, FakeAgent, FakeSession, FakeArtifactService, FakeMemoryService, FakeSessionService, and RunnerBuilder. |
 | **Evaluation Framework** | Evaluate agent performance with eval sets, built-in metrics (trajectory, response match, rubrics, safety, hallucinations), LLM-as-judge auto-raters, user simulation, and a local eval service. Mirrors ADK Python's eval package. |
 | **AG-UI MCP Support** | Inject MCP (Model Context Protocol) server tools into AG-UI agents. Two integration paths: `MCPMiddleware` for generic tool injection + server-side execution, and `MCPAppsMiddleware` for UI-enabled tools + proxied MCP requests. Bridge wiring via `aguiadk.BuildMCPServerToolsets` using ADK-Go's `mcptoolset`. |
 
@@ -310,6 +310,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer svc.Close()
 
 	resp, err := svc.Save(context.Background(), &artifact.SaveRequest{
 		AppName:   "myapp",
@@ -378,6 +379,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/ieshan/adk-go-pkg/config"
 	"google.golang.org/adk/v2/model"
@@ -396,7 +398,13 @@ func main() {
 		return nil, nil
 	})
 
-	agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(context.Background(), "agents/root.yaml", reg)
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer root.Close()
+
+	agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(context.Background(), root, "agents/root.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -417,6 +425,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/ieshan/adk-go-pkg/config"
 )
@@ -425,8 +434,14 @@ func main() {
 	reg := config.NewRegistry()
 	// Filesystem skill factory is built-in, no registration needed
 
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer root.Close()
+
 	// Load agent with skills from YAML
-	agent, _, _, _, err := config.LoadAndBuild(context.Background(), "agents/skills-agent.yaml", reg)
+	agent, _, _, _, err := config.LoadAndBuild(context.Background(), root, "agents/skills-agent.yaml", reg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -439,10 +454,10 @@ func main() {
 
 ```yaml
 name: skills-agent
-type: llm
-model: gemini/gemini-2.5-flash
+agent_class: LlmAgent
+model: openai/gpt-4o
 instruction: "You are a helpful assistant with access to specialized skills."
-skillsets:
+skill_sets:
   - name: filesystem
     config:
       path: "./skills"
@@ -459,6 +474,7 @@ skillsets:
 package main
 
 import (
+    "context"
     "testing"
 
     "github.com/ieshan/adk-go-pkg/testutil"
@@ -469,6 +485,8 @@ import (
 )
 
 func TestMyAgent(t *testing.T) {
+    ctx := context.Background()
+
     // Create fake LLM with preconfigured responses
     llm := testutil.NewFakeLLM(
         testutil.NewTextResponse("I'll help you!"),
@@ -523,13 +541,17 @@ func main() {
 
 	// Create an in-memory eval sets manager and add a case.
 	setsMgr := eval.NewInMemoryEvalSetsManager()
-	setsMgr.CreateEvalSet(ctx, "my-app", "basic-eval")
-	setsMgr.AddEvalCase(ctx, "my-app", "basic-eval", eval.EvalCase{
+	if _, err := setsMgr.CreateEvalSet(ctx, "my-app", "basic-eval"); err != nil {
+		log.Fatal(err)
+	}
+	if err := setsMgr.AddEvalCase(ctx, "my-app", "basic-eval", eval.EvalCase{
 		EvalID: "case-1",
 		Conversation: []eval.Invocation{
 			{UserContent: genai.NewContentFromText("Hello", "user")},
 		},
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
 	// Create an agent evaluator with your agent runner and LLM.
 	var agentRunner eval.AgentRunner // your agent runner
@@ -580,7 +602,7 @@ import (
 func main() {
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		// your agent logic
-		return nil
+		return func(yield func(events.Event, error) bool) {}
 	})
 
 	mcpMW := agui.NewMCPMiddleware([]agui.MCPClientConfig{
@@ -599,13 +621,13 @@ For ADK-Go native integration, use `aguiadk.BuildMCPServerToolsets` to create `m
 
 ## Compatibility
 
-- **Go 1.26+** — Uses `iter.Seq2` and range-over-func.
-- **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`) — Required for Agent Skills support
-- **GenAI v1.65.0** (`google.golang.org/genai`)
+- **Go 1.27+** — Uses `iter.Seq2` and range-over-func.
+- **ADK-Go v2.3.0+** (`google.golang.org/adk/v2`) — Required for Agent Skills support
+- **GenAI v1.71.0** (`google.golang.org/genai`)
 
 ## Recent Changes
 
-- **Prompt Templating**: New `prompt` package with `text/template`-based rendering engine, agent context data (state, user, session, artifacts, memory), 13 built-in functions, thread-safe `TemplateRegistry`, `TemplateLoader` (files/embed.FS), `TemplateRef` tagged union, and `llmagent.InstructionProvider` integration. Config loader supports `InstructionTemplate` field for declarative templated instructions. See [docs/prompt.md](docs/prompt.md).
+- **Prompt Templating**: New `prompt` package with `text/template`-based rendering engine, agent context data (state, user, session, artifacts, memory), 12 built-in functions, thread-safe `TemplateRegistry`, `TemplateLoader` (files/embed.FS), `TemplateRef` tagged union, and `llmagent.InstructionProvider` integration. Config loader supports `InstructionTemplate` field for declarative templated instructions. See [docs/prompt.md](docs/prompt.md).
 - **AG-UI ADK Bridge Gap Fix**: Closed all 10 AG-UI protocol feature gaps between the `agui`/`aguiadk` packages and the AG-UI example server. New features: disconnect cancellation, client tool hand-back (NextRun, Inline, and HandBack modes via `ClientToolset`), streaming tool calls (progressive `TOOL_CALL_*` from partial `FunctionCall` parts), HITL runstore & resume (`RunStore` with TTL, atomic claim, approval interrupts), tool call validation (synthetic IDs, error `TOOL_CALL_RESULT` for malformed calls), suppressed tool mode (`Config.SuppressToolEvents` + `Config.ToolToStateMapper` emits `STATE_DELTA` instead of `TOOL_CALL_*`), predictive state tracker (`agui.PredictiveStateTracker` for ghosted `/_predictive` deltas), activity snapshots (`tool_use` and `approval_request`), encrypted value scrubbing in `MessagesSnapshot`, and preset configurations (`AgenticChatPreset`, `HumanInTheLoopPreset`, `GenerativeUIPreset`, `SharedStatePreset`, `InlineToolsPreset`, `HandBackPreset`, `PredictiveStatePreset`, `AgenticGenerativeUIPreset`). `StateManager.Apply` now uses `evanphx/json-patch/v5` for RFC 6902 compliance. See [docs/aguiadk-bridge.md](docs/aguiadk-bridge.md).
 - **Evaluation Framework**: New `eval` package with eval sets, 13 built-in metrics, LLM-as-judge evaluators, user simulation, and local eval service. Mirrors ADK Python eval package. See [docs/eval.md](docs/eval.md).
 - **Anthropic Model Provider**: Drop-in `model.LLM` adapter for Anthropic's Messages API. Supports streaming, tool calling, images, structured output, thinking blocks, and prompt caching. See [docs/anthropic-model.md](docs/anthropic-model.md).

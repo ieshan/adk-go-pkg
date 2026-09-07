@@ -1,16 +1,18 @@
-package eval
+package eval_test
 
 import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestCreateEvalSetResult(t *testing.T) {
-	results := []EvalCaseResult{
-		{EvalID: "case-1", FinalEvalStatus: EvalStatusPassed},
+	results := []eval.EvalCaseResult{
+		{EvalID: "case-1", FinalEvalStatus: eval.EvalStatusPassed},
 	}
-	result := CreateEvalSetResult("app", "test-set", results)
+	result := eval.CreateEvalSetResult("app", "test-set", results)
 
 	if result.EvalSetID != "test-set" {
 		t.Errorf("EvalSetID = %q, want test-set", result.EvalSetID)
@@ -44,7 +46,7 @@ func TestSanitizeEvalSetResultName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := SanitizeEvalSetResultName(tt.input)
+			got := eval.SanitizeEvalSetResultName(tt.input)
 			if got != tt.want {
 				t.Errorf("SanitizeEvalSetResultName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
@@ -62,7 +64,7 @@ func TestParseEvalSetResultJSON_Valid(t *testing.T) {
 		"creationTimestamp": 1234567890
 	}`)
 
-	result, err := ParseEvalSetResultJSON(data)
+	result, err := eval.ParseEvalSetResultJSON(data)
 	if err != nil {
 		t.Fatalf("ParseEvalSetResultJSON failed: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestParseEvalSetResultJSON_DoubleEncoded(t *testing.T) {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
 
-	result, err := ParseEvalSetResultJSON(encoded)
+	result, err := eval.ParseEvalSetResultJSON(encoded)
 	if err != nil {
 		t.Fatalf("ParseEvalSetResultJSON failed: %v", err)
 	}
@@ -91,8 +93,8 @@ func TestParseEvalSetResultJSON_DoubleEncoded(t *testing.T) {
 }
 
 func TestParseEvalSetResultJSON_Invalid(t *testing.T) {
-	_, err := ParseEvalSetResultJSON([]byte("not json at all"))
+	_, err := eval.ParseEvalSetResultJSON([]byte("not json at all"))
 	if err == nil {
-		t.Error("expected error for invalid JSON")
+		t.Error("got nil error, want error for invalid JSON")
 	}
 }

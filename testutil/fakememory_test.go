@@ -1,17 +1,21 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/session"
 )
 
+var errSearchFailed = errors.New("search failed")
+var errAddFailed = errors.New("add failed")
+
 func TestFakeMemoryService_AddSession(t *testing.T) {
-	svc := NewFakeMemoryService()
-	sess := NewFakeSession().WithAppName("app").WithUserID("user")
+	svc := testutil.NewFakeMemoryService()
+	sess := testutil.NewFakeSession().WithAppName("app").WithUserID("user")
 
 	err := svc.AddSessionToMemory(context.Background(), sess)
 	if err != nil {
@@ -23,10 +27,10 @@ func TestFakeMemoryService_AddSession(t *testing.T) {
 }
 
 func TestFakeMemoryService_SearchPreloaded(t *testing.T) {
-	svc := NewFakeMemoryService()
+	svc := testutil.NewFakeMemoryService()
 	svc.PreloadMemory("user1", "app1",
-		NewMemoryEntry("e1", "hello world", "model"),
-		NewMemoryEntry("e2", "goodbye world", "model"),
+		testutil.NewMemoryEntry("e1", "hello world", "model"),
+		testutil.NewMemoryEntry("e2", "goodbye world", "model"),
 	)
 
 	resp, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
@@ -43,7 +47,7 @@ func TestFakeMemoryService_SearchPreloaded(t *testing.T) {
 }
 
 func TestFakeMemoryService_SearchEmpty(t *testing.T) {
-	svc := NewFakeMemoryService()
+	svc := testutil.NewFakeMemoryService()
 	resp, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
 		Query:   "hello",
 		UserID:  "user1",
@@ -53,41 +57,41 @@ func TestFakeMemoryService_SearchEmpty(t *testing.T) {
 		t.Fatalf("SearchMemory() error = %v", err)
 	}
 	if len(resp.Memories) != 0 {
-		t.Errorf("SearchMemory() empty should return 0 entries, got %d", len(resp.Memories))
+		t.Errorf("got %d entries, want 0", len(resp.Memories))
 	}
 }
 
 func TestFakeMemoryService_WithSearchFunc(t *testing.T) {
-	svc := NewFakeMemoryService().WithSearchFunc(
+	svc := testutil.NewFakeMemoryService().WithSearchFunc(
 		func(ctx context.Context, req *memory.SearchRequest) (*memory.SearchResponse, error) {
-			return nil, errors.New("search failed")
+			return nil, errSearchFailed
 		},
 	)
 
 	_, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
 		Query: "test", UserID: "u", AppName: "a",
 	})
-	if err == nil || err.Error() != "search failed" {
-		t.Errorf("SearchMemory() error = %v, want 'search failed'", err)
+	if !errors.Is(err, errSearchFailed) {
+		t.Errorf("SearchMemory() error = %v, want errSearchFailed", err)
 	}
 }
 
 func TestFakeMemoryService_WithAddSessionFunc(t *testing.T) {
-	svc := NewFakeMemoryService().WithAddSessionFunc(
+	svc := testutil.NewFakeMemoryService().WithAddSessionFunc(
 		func(ctx context.Context, s session.Session) error {
-			return errors.New("add failed")
+			return errAddFailed
 		},
 	)
 
-	sess := NewFakeSession()
+	sess := testutil.NewFakeSession()
 	err := svc.AddSessionToMemory(context.Background(), sess)
-	if err == nil || err.Error() != "add failed" {
-		t.Errorf("AddSessionToMemory() error = %v, want 'add failed'", err)
+	if !errors.Is(err, errAddFailed) {
+		t.Errorf("AddSessionToMemory() error = %v, want errAddFailed", err)
 	}
 }
 
 func TestFakeMemoryService_CallTracking(t *testing.T) {
-	svc := NewFakeMemoryService()
+	svc := testutil.NewFakeMemoryService()
 	if _, err := svc.SearchMemory(context.Background(), &memory.SearchRequest{
 		Query: "q1", UserID: "u", AppName: "a",
 	}); err != nil {

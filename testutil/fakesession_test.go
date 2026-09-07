@@ -1,14 +1,15 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/session"
 )
 
 func TestFakeSession_Builder(t *testing.T) {
-	s := NewFakeSession().
+	s := testutil.NewFakeSession().
 		WithID("s-1").
 		WithAppName("my-app").
 		WithUserID("u-1")
@@ -25,7 +26,7 @@ func TestFakeSession_Builder(t *testing.T) {
 }
 
 func TestFakeSession_State(t *testing.T) {
-	s := NewFakeSession().WithState(map[string]any{"key1": "val1"})
+	s := testutil.NewFakeSession().WithState(map[string]any{"key1": "val1"})
 
 	val, err := s.State().Get("key1")
 	if err != nil || val != "val1" {
@@ -37,19 +38,22 @@ func TestFakeSession_State(t *testing.T) {
 		t.Errorf("Get(nonexistent) error = %v, want ErrStateKeyNotExist", err)
 	}
 
-	if err := s.State().Set("key2", 42); err != nil {
+	if err = s.State().Set("key2", 42); err != nil {
 		t.Errorf("Set(key2, 42) error = %v", err)
 	}
-	val, _ = s.State().Get("key2")
+	val, err = s.State().Get("key2")
+	if err != nil {
+		t.Fatalf("Get(key2): %v", err)
+	}
 	if val != 42 {
 		t.Errorf("Get(key2) = %v, want 42", val)
 	}
 }
 
 func TestFakeSession_Events(t *testing.T) {
-	e1 := NewTextEvent(context.Background(), "user", "hello")
-	e2 := NewTextEvent(context.Background(), "model", "hi there")
-	s := NewFakeSession().WithEvents(e1, e2)
+	e1 := testutil.NewTextEvent(context.Background(), "user", "hello")
+	e2 := testutil.NewTextEvent(context.Background(), "model", "hi there")
+	s := testutil.NewFakeSession().WithEvents(e1, e2)
 
 	if s.Events().Len() != 2 {
 		t.Errorf("Len() = %d, want 2", s.Events().Len())
@@ -66,7 +70,7 @@ func TestFakeSession_Events(t *testing.T) {
 	}
 
 	// AddEvent
-	e3 := NewTextEvent(context.Background(), "user", "more")
+	e3 := testutil.NewTextEvent(context.Background(), "user", "more")
 	s.AddEvent(e3)
 	if s.Events().Len() != 3 {
 		t.Errorf("after AddEvent, Len() = %d, want 3", s.Events().Len())
@@ -74,7 +78,7 @@ func TestFakeSession_Events(t *testing.T) {
 }
 
 func TestFakeState_All(t *testing.T) {
-	s := NewFakeStateWithData(map[string]any{"a": 1, "b": 2})
+	s := testutil.NewFakeStateWithData(map[string]any{"a": 1, "b": 2})
 	count := 0
 	for k, v := range s.All() {
 		count++
@@ -91,9 +95,9 @@ func TestFakeState_All(t *testing.T) {
 }
 
 func TestFakeEvents_All(t *testing.T) {
-	e1 := NewTextEvent(context.Background(), "user", "a")
-	e2 := NewTextEvent(context.Background(), "model", "b")
-	fe := NewFakeEvents([]*session.Event{e1, e2})
+	e1 := testutil.NewTextEvent(context.Background(), "user", "a")
+	e2 := testutil.NewTextEvent(context.Background(), "model", "b")
+	fe := testutil.NewFakeEvents([]*session.Event{e1, e2})
 
 	count := 0
 	for e := range fe.All() {

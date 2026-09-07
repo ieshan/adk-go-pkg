@@ -100,6 +100,7 @@ func startHTTPMCPServerWithUI(t *testing.T) agui.MCPClientConfig {
 }
 
 func TestExtractTextContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		result *mcp.CallToolResult
@@ -144,6 +145,7 @@ func TestExtractTextContent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := agui.ExtractTextContent(tt.result)
 			if got != tt.want {
 				t.Errorf("ExtractTextContent() = %q, want %q", got, tt.want)
@@ -153,7 +155,9 @@ func TestExtractTextContent(t *testing.T) {
 }
 
 func TestBuildMCPTransport(t *testing.T) {
+	t.Parallel()
 	t.Run("http type", func(t *testing.T) {
+		t.Parallel()
 		tr, err := agui.BuildMCPTransport(agui.MCPClientConfig{
 			Type: "http",
 			URL:  "https://example.com/mcp",
@@ -167,6 +171,7 @@ func TestBuildMCPTransport(t *testing.T) {
 	})
 
 	t.Run("sse type", func(t *testing.T) {
+		t.Parallel()
 		tr, err := agui.BuildMCPTransport(agui.MCPClientConfig{
 			Type: "sse",
 			URL:  "https://example.com/sse",
@@ -180,25 +185,28 @@ func TestBuildMCPTransport(t *testing.T) {
 	})
 
 	t.Run("empty URL", func(t *testing.T) {
+		t.Parallel()
 		_, err := agui.BuildMCPTransport(agui.MCPClientConfig{
 			Type: "http",
 		})
 		if err == nil {
-			t.Fatal("expected error for empty URL")
+			t.Fatal("got nil error, want error for empty URL")
 		}
 	})
 
 	t.Run("invalid type", func(t *testing.T) {
+		t.Parallel()
 		_, err := agui.BuildMCPTransport(agui.MCPClientConfig{
 			Type: "invalid",
 			URL:  "https://example.com",
 		})
 		if err == nil {
-			t.Fatal("expected error for invalid type")
+			t.Fatal("got nil error, want error for invalid type")
 		}
 	})
 
 	t.Run("with headers", func(t *testing.T) {
+		t.Parallel()
 		tr, err := agui.BuildMCPTransport(agui.MCPClientConfig{
 			Type:    "http",
 			URL:     "https://example.com/mcp",
@@ -214,13 +222,14 @@ func TestBuildMCPTransport(t *testing.T) {
 }
 
 func TestListMCPTools(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	tools, err := agui.ListMCPTools(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("ListMCPTools: %v", err)
 	}
 	if len(tools) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(tools))
+		t.Fatalf("got %d tools, want 1", len(tools))
 	}
 	if tools[0].Name != "echo" {
 		t.Errorf("tool name = %q, want %q", tools[0].Name, "echo")
@@ -228,6 +237,7 @@ func TestListMCPTools(t *testing.T) {
 }
 
 func TestCallMCPTool(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	result, err := agui.CallMCPTool(context.Background(), cfg, "echo", map[string]any{"message": "hello"})
 	if err != nil {
@@ -240,6 +250,7 @@ func TestCallMCPTool(t *testing.T) {
 }
 
 func TestExecuteMCPRequest_Ping(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	result, err := agui.ExecuteMCPRequest(context.Background(), cfg, "ping", nil)
 	if err != nil {
@@ -252,6 +263,7 @@ func TestExecuteMCPRequest_Ping(t *testing.T) {
 }
 
 func TestExecuteMCPRequest_ToolsCall(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	result, err := agui.ExecuteMCPRequest(context.Background(), cfg, "tools/call", map[string]any{
 		"name":      "echo",
@@ -271,27 +283,49 @@ func TestExecuteMCPRequest_ToolsCall(t *testing.T) {
 }
 
 func TestExecuteMCPRequest_ResourcesRead(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	_, err := agui.ExecuteMCPRequest(context.Background(), cfg, "resources/read", map[string]any{
 		"uri": "test://resource",
 	})
 	if err == nil {
-		t.Fatal("expected error for resources/read on server without resources")
+		t.Fatal("got nil error, want error for resources/read on server without resources")
 	}
 }
 
 func TestExecuteMCPRequest_UnknownMethod(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	_, err := agui.ExecuteMCPRequest(context.Background(), cfg, "unknown/method", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown method")
+		t.Fatal("got nil error, want error for unknown method")
 	}
 }
 
 func TestExecuteMCPRequest_NotificationsMessage(t *testing.T) {
+	t.Parallel()
 	cfg := startHTTPMCPServer(t)
 	_, err := agui.ExecuteMCPRequest(context.Background(), cfg, "notifications/message", nil)
 	if err == nil {
-		t.Fatal("expected error for notifications/message")
+		t.Fatal("got nil error, want error for notifications/message")
 	}
+}
+
+// FuzzExtractTextContent verifies that ExtractTextContent never panics and
+// returns a string for any text content input.
+func FuzzExtractTextContent(f *testing.F) {
+	f.Add("hello world")
+	f.Add("")
+	f.Add("unicode-段")
+
+	f.Fuzz(func(t *testing.T, text string) {
+		result := &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		}
+		got := agui.ExtractTextContent(result)
+		// When the content is a single text block, the output must equal the input text.
+		if got != text {
+			t.Errorf("ExtractTextContent with single text %q = %q, want %q", text, got, text)
+		}
+	})
 }

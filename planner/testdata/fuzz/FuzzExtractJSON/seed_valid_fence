@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Let me think...\n```json\n{\"steps\":[{\"description\":\"search\",\"toolName\":\"search\",\"args\":{},\"dependsOn\":[]}],\"reasoning\":\"because\"}\n```")

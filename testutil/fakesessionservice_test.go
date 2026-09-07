@@ -1,14 +1,15 @@
-package testutil
+package testutil_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/testutil"
 	"google.golang.org/adk/v2/session"
 )
 
 func TestFakeSessionService_CreateAndGet(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	// Create
@@ -37,7 +38,7 @@ func TestFakeSessionService_CreateAndGet(t *testing.T) {
 }
 
 func TestFakeSessionService_CreateDuplicate(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, &session.CreateRequest{
@@ -54,7 +55,7 @@ func TestFakeSessionService_CreateDuplicate(t *testing.T) {
 }
 
 func TestFakeSessionService_GetNotFound(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	_, err := svc.Get(context.Background(), &session.GetRequest{
 		AppName: "app", UserID: "user1", SessionID: "missing",
 	})
@@ -64,7 +65,7 @@ func TestFakeSessionService_GetNotFound(t *testing.T) {
 }
 
 func TestFakeSessionService_Delete(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, &session.CreateRequest{
@@ -89,7 +90,7 @@ func TestFakeSessionService_Delete(t *testing.T) {
 }
 
 func TestFakeSessionService_List(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"}); err != nil {
@@ -114,7 +115,7 @@ func TestFakeSessionService_List(t *testing.T) {
 }
 
 func TestFakeSessionService_AppendEvent(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	createResp, _ := svc.Create(ctx, &session.CreateRequest{
@@ -124,7 +125,7 @@ func TestFakeSessionService_AppendEvent(t *testing.T) {
 		t.Fatal("nil response")
 	}
 
-	event := NewTextEvent(context.Background(), "model", "hello")
+	event := testutil.NewTextEvent(context.Background(), "model", "hello")
 	err := svc.AppendEvent(ctx, createResp.Session, event)
 	if err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
@@ -144,7 +145,7 @@ func TestFakeSessionService_AppendEvent(t *testing.T) {
 }
 
 func TestFakeSessionService_AppendEventTempKeyRemoval(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	createResp, _ := svc.Create(ctx, &session.CreateRequest{
@@ -154,7 +155,7 @@ func TestFakeSessionService_AppendEventTempKeyRemoval(t *testing.T) {
 		t.Fatal("nil response")
 	}
 
-	event := NewTextEvent(context.Background(), "model", "hello")
+	event := testutil.NewTextEvent(context.Background(), "model", "hello")
 	event.Actions.StateDelta = map[string]any{
 		"temp:cache": "will be removed",
 		"persistent": "kept",
@@ -174,7 +175,7 @@ func TestFakeSessionService_AppendEventTempKeyRemoval(t *testing.T) {
 }
 
 func TestFakeSessionService_CallTracking(t *testing.T) {
-	svc := NewFakeSessionService()
+	svc := testutil.NewFakeSessionService()
 	ctx := context.Background()
 
 	if _, err := svc.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user1", SessionID: "s1"}); err != nil {
@@ -187,8 +188,8 @@ func TestFakeSessionService_CallTracking(t *testing.T) {
 }
 
 func TestFakeSessionService_PreloadSession(t *testing.T) {
-	svc := NewFakeSessionService()
-	fs := NewFakeSession().WithID("pre-seed").WithAppName("app").WithUserID("user1")
+	svc := testutil.NewFakeSessionService()
+	fs := testutil.NewFakeSession().WithID("pre-seed").WithAppName("app").WithUserID("user1")
 	svc.PreloadSession(fs)
 
 	getResp, err := svc.Get(context.Background(), &session.GetRequest{

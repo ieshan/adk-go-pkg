@@ -58,6 +58,16 @@ import (
 
 const defaultBaseURL = "https://api.openai.com/v1"
 
+// HTTPError represents a non-2xx HTTP response from the OpenAI API.
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("openai: HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 // Config holds the parameters needed to create an OpenAI-compatible LLM client.
 //
 // Only Model is required. All other fields have sensible defaults:
@@ -203,20 +213,16 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			yield(nil, fmt.Errorf("openai: HTTP request: %w", err))
 			return
 		}
+		defer func() { _ = resp.Body.Close() }()
 
 		// 6. Check status code.
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			errBody, readErr := io.ReadAll(resp.Body)
-			bodyStr := string(errBody)
 			if readErr != nil {
-				yield(nil, fmt.Errorf("openai: HTTP %d (body read failed: %v): %s", resp.StatusCode, readErr, bodyStr))
+				yield(nil, &HTTPError{StatusCode: resp.StatusCode, Body: fmt.Sprintf("body read failed: %v: %s", readErr, errBody)})
 				return
 			}
-			if cErr := resp.Body.Close(); cErr != nil {
-				yield(nil, fmt.Errorf("openai: HTTP %d (close body: %v): %s", resp.StatusCode, cErr, bodyStr))
-				return
-			}
-			yield(nil, fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, bodyStr))
+			yield(nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(errBody)})
 			return
 		}
 
@@ -224,12 +230,8 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		if stream {
 			for r, e := range parseStream(ctx, resp.Body) {
 				if !yield(r, e) {
-					_ = resp.Body.Close()
 					return
 				}
-			}
-			if cErr := resp.Body.Close(); cErr != nil {
-				yield(nil, fmt.Errorf("openai: close streaming body: %w", cErr))
 			}
 			return
 		}
@@ -237,24 +239,18 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		// 8. Non-streaming path — read body, unmarshal, translate, yield once.
 		rawBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			_ = resp.Body.Close()
 			yield(nil, fmt.Errorf("openai: read response body: %w", err))
 			return
 		}
 
 		var chatResp chatResponse
 		if err = json.Unmarshal(rawBody, &chatResp); err != nil {
-			_ = resp.Body.Close()
 			yield(nil, fmt.Errorf("openai: unmarshal response: %w", err))
 			return
 		}
 
 		llmResp := translateResponse(&chatResp)
 		llmResp.TurnComplete = true
-		if cErr := resp.Body.Close(); cErr != nil {
-			yield(nil, fmt.Errorf("openai: close body: %w", cErr))
-			return
-		}
 		yield(llmResp, nil)
 	}
 }

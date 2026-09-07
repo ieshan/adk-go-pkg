@@ -69,7 +69,8 @@ func (f *FakeSession) WithState(data map[string]any) *FakeSession {
 	return f
 }
 
-// WithEvents adds events (builder pattern).
+// WithEvents sets the events list, replacing any previously configured events
+// (builder pattern).
 func (f *FakeSession) WithEvents(events ...*session.Event) *FakeSession {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -22,7 +22,7 @@ func TestRougeEvaluator_IdenticalStrings(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallScore == nil || *result.OverallScore != 1.0 {
-		t.Errorf("identical strings should score 1.0, got %v", result.OverallScore)
+		t.Errorf("got %v, want 1.0 for identical strings", result.OverallScore)
 	}
 }
 
@@ -43,7 +43,7 @@ func TestRougeEvaluator_NoOverlap(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallScore == nil || *result.OverallScore != 0.0 {
-		t.Errorf("no overlap should score 0.0, got %v", result.OverallScore)
+		t.Errorf("got %v, want 0.0 for no overlap", result.OverallScore)
 	}
 }
 
@@ -64,11 +64,11 @@ func TestRougeEvaluator_PartialOverlap(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallScore == nil {
-		t.Fatal("expected non-nil score")
+		t.Fatalf("got nil score, want non-nil")
 	}
 	score := *result.OverallScore
 	if score <= 0.0 || score >= 1.0 {
-		t.Errorf("partial overlap should be between 0 and 1, got %f", score)
+		t.Errorf("got %f, want between 0 and 1 for partial overlap", score)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestRougeEvaluator_CaseInsensitivity(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallScore == nil || *result.OverallScore != 1.0 {
-		t.Errorf("case-insensitive match should score 1.0, got %v", result.OverallScore)
+		t.Errorf("got %v, want 1.0 for case-insensitive match", result.OverallScore)
 	}
 }
 

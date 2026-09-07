@@ -1,9 +1,12 @@
 package agui
 
 import (
-	"fmt"
+	"errors"
 	"time"
 )
+
+// ErrAgentRequired is returned when Config.Agent is nil.
+var ErrAgentRequired = errors.New("agui: Agent is required")
 
 // Config for the AG-UI HTTP handler.
 type Config struct {
@@ -43,7 +46,7 @@ type Config struct {
 
 func (c *Config) validate() error {
 	if c.Agent == nil {
-		return fmt.Errorf("agui: Agent is required")
+		return ErrAgentRequired
 	}
 	return nil
 }

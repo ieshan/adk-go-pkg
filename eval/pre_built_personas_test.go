@@ -1,11 +1,15 @@
-package eval
+package eval_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
+)
 
 func TestPreBuiltPersonas_AllPresent(t *testing.T) {
 	expected := []string{"EXPERT", "NOVICE", "EVALUATOR"}
 	for _, id := range expected {
-		p, ok := PreBuiltPersonas[id]
+		p, ok := eval.PreBuiltPersonas[id]
 		if !ok {
 			t.Errorf("pre-built persona %q not found", id)
 			continue
@@ -23,7 +27,7 @@ func TestPreBuiltPersonas_AllPresent(t *testing.T) {
 }
 
 func TestGetDefaultPersonaRegistry(t *testing.T) {
-	registry := GetDefaultPersonaRegistry()
+	registry := eval.GetDefaultPersonaRegistry()
 
 	for _, id := range []string{"EXPERT", "NOVICE", "EVALUATOR"} {
 		persona, err := registry.GetPersona(id)
@@ -38,14 +42,14 @@ func TestGetDefaultPersonaRegistry(t *testing.T) {
 
 	personas := registry.GetRegisteredPersonas()
 	if len(personas) != 3 {
-		t.Errorf("expected 3 registered personas, got %d", len(personas))
+		t.Errorf("got %d registered personas, want 3", len(personas))
 	}
 }
 
 func TestGetDefaultPersonaRegistry_NotFound(t *testing.T) {
-	registry := GetDefaultPersonaRegistry()
+	registry := eval.GetDefaultPersonaRegistry()
 	_, err := registry.GetPersona("NONEXISTENT")
 	if err == nil {
-		t.Error("expected error for nonexistent persona")
+		t.Errorf("got nil error, want non-nil error for nonexistent persona")
 	}
 }

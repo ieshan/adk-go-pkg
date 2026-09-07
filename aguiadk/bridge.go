@@ -112,10 +112,12 @@ type Config struct {
 	CustomEventEmitter func(emitter *agui.EventEmitter, toolCallCount int) error
 
 	// ApprovalModeFunc derives the approval mode from the HTTP request.
-	// When set, the bridge calls it per-request. If it returns true,
-	// long-running tools auto-execute (no interrupt); if false, they
-	// interrupt for human approval. Requires the HTTP request to be stored
-	// in context via WithHTTPRequest (done automatically by Handler).
+	// When set, the bridge calls it per-request. If it returns true, the
+	// bridge skips the approval interrupt and finishes the run normally —
+	// the client executes the tool and starts a new run with the result
+	// (same as HandBack mode). If false, long-running tools interrupt for
+	// human approval. Requires the HTTP request to be stored in context
+	// via WithHTTPRequest (done automatically by Handler).
 	ApprovalModeFunc func(r *http.Request) bool
 
 	// EmitStateStatus controls whether the bridge emits STATE_DELTA events
@@ -697,8 +699,23 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 
 			autoApprove := b.resolveApprovalMode(ctx)
 			if autoApprove {
-				// Auto-approve: skip interrupt, let the runner continue.
-				continue
+				// Auto-approve: skip the approval interrupt and finish the
+				// run. The ADK runner has parked on LongRunningToolIDs and
+				// the iterator ends here. The client executes the tool and
+				// starts a new run with the result (same as HandBack mode).
+				translator.closeOpenMessage()
+				translator.closeOpenStep()
+				translator.closeStreamedToolCalls()
+				if b.cfg.EmitMessagesSnapshot {
+					refreshed, rerr := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
+					if rerr == nil {
+						msgs := sessionEventsToMessages(refreshed.Events())
+						_ = emitter.MessagesSnapshot(msgs)
+					}
+				}
+				b.emitStatusDelta(emitter, "done")
+				_ = emitter.RunFinishedWithUsage(input.ThreadID, input.RunID, translator.collectedUsage())
+				return
 			}
 
 			translator.closeOpenMessage()

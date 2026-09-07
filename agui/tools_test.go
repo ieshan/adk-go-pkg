@@ -2,8 +2,10 @@ package agui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -26,8 +28,11 @@ func TestToolResultHandler_SubmitThenWait(t *testing.T) {
 		close(done)
 	}()
 
-	// Brief pause so Wait registers before Submit.
-	time.Sleep(50 * time.Millisecond)
+	// Deterministically wait for Wait to register its pending entry before
+	// calling SubmitResult, instead of relying on a fixed sleep.
+	for !h.HasPendingToolCall("call-1") {
+		runtime.Gosched()
+	}
 
 	if submitErr := h.SubmitResult("call-1", "hello"); submitErr != nil {
 		t.Fatalf("SubmitResult: %v", submitErr)
@@ -55,8 +60,10 @@ func TestToolResultHandler_WaitThenSubmit(t *testing.T) {
 		close(done)
 	}()
 
-	// Submit after a short delay.
-	time.Sleep(100 * time.Millisecond)
+	// Deterministically wait for Wait to register before submitting.
+	for !h.HasPendingToolCall("call-2") {
+		runtime.Gosched()
+	}
 	if submitErr := h.SubmitResult("call-2", "world"); submitErr != nil {
 		t.Fatalf("SubmitResult: %v", submitErr)
 	}
@@ -76,10 +83,10 @@ func TestToolResultHandler_Timeout(t *testing.T) {
 
 	result, err := h.Wait(ctx, "call-timeout", 50*time.Millisecond)
 	if err == nil {
-		t.Fatalf("expected timeout error, got result %q", result)
+		t.Fatalf("got result %q, want timeout error", result)
 	}
-	if !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("expected timeout error, got: %v", err)
+	if !errors.Is(err, agui.ErrToolCallTimeout) {
+		t.Fatalf("got %v, want timeout error", err)
 	}
 }
 
@@ -88,13 +95,18 @@ func TestToolResultHandler_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		// Deterministically wait for Wait to register before cancelling,
+		// so we test the "cancel while blocked" path rather than
+		// "cancel before Wait runs".
+		for !h.HasPendingToolCall("call-cancel") {
+			runtime.Gosched()
+		}
 		cancel()
 	}()
 
 	_, err := h.Wait(ctx, "call-cancel", 5*time.Second)
 	if err != context.Canceled {
-		t.Fatalf("expected context.Canceled, got: %v", err)
+		t.Fatalf("got %v, want context.Canceled", err)
 	}
 }
 
@@ -116,8 +128,14 @@ func TestToolResultHandler_ConcurrentCalls(t *testing.T) {
 		}(i)
 	}
 
-	// Let all goroutines register.
-	time.Sleep(100 * time.Millisecond)
+	// Deterministically wait for all goroutines to register their pending
+	// entries before submitting results.
+	for i := 0; i < n; i++ {
+		id := strings.Repeat("x", i+1)
+		for !h.HasPendingToolCall(id) {
+			runtime.Gosched()
+		}
+	}
 
 	for i := 0; i < n; i++ {
 		id := strings.Repeat("x", i+1)
@@ -142,9 +160,9 @@ func TestToolResultHandler_SubmitNoWaiter(t *testing.T) {
 	h := agui.NewToolResultHandler()
 	err := h.SubmitResult("nonexistent", "data")
 	if err == nil {
-		t.Fatal("expected error for non-pending tool call")
+		t.Fatal("got nil error, want error for non-pending tool call")
 	}
-	if !strings.Contains(err.Error(), "no pending tool call") {
+	if !errors.Is(err, agui.ErrNoPendingToolCall) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -159,7 +177,10 @@ func TestToolResultEndpoint_Success(t *testing.T) {
 		_, _ = h.Wait(context.Background(), "tc-1", 2*time.Second)
 		close(done)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// Deterministically wait for Wait to register before serving the request.
+	for !h.HasPendingToolCall("tc-1") {
+		runtime.Gosched()
+	}
 
 	body := `{"toolCallId":"tc-1","content":"result-data"}`
 	req := httptest.NewRequest(http.MethodPost, "/tool-result", strings.NewReader(body))
@@ -169,7 +190,7 @@ func TestToolResultEndpoint_Success(t *testing.T) {
 	endpoint.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("got %d: %s, want 200", rec.Code, rec.Body.String())
 	}
 	<-done
 }
@@ -184,7 +205,7 @@ func TestToolResultEndpoint_InvalidJSON(t *testing.T) {
 	endpoint.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+		t.Fatalf("got %d, want 400", rec.Code)
 	}
 }
 
@@ -198,7 +219,7 @@ func TestToolResultEndpoint_MethodNotAllowed(t *testing.T) {
 	endpoint.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405, got %d", rec.Code)
+		t.Fatalf("got %d, want 405", rec.Code)
 	}
 }
 
@@ -213,6 +234,6 @@ func TestToolResultEndpoint_MissingToolCallId(t *testing.T) {
 	endpoint.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+		t.Fatalf("got %d, want 400", rec.Code)
 	}
 }

@@ -508,7 +508,8 @@ instances. When the ADK agent invokes one of these tools, the proxy:
 3. Returns the result to the ADK agent as a function response
 
 Each proxied tool is created with `IsLongRunning: true` in the ADK
-`functiontool.Config`.
+`functiontool.Config`. The tool's `InputSchema` is set from the AG-UI tool's
+`Parameters` field via JSON schema conversion.
 
 ### Methods
 
@@ -796,7 +797,7 @@ func AgenticGenerativeUIPreset(base Config, mapper ToolToStateMapper) Config
 |--------|-------------|----------|--------------------|-------|
 | `AgenticChatPreset` | NextRun | — | — | State snapshots on; 20m session timeout |
 | `GenerativeUIPreset` | NextRun | — | — | Currently an alias for `AgenticChatPreset` — serves as a semantic marker for generative-UI agents (no extra configuration). `AgenticGenerativeUIPreset` is the one that maps tool calls to `STATE_DELTA` events. |
-| `HumanInTheLoopPreset` | NextRun | auto (if `!autoApprove`) | — | 30m session timeout; approval interrupts for consequential actions |
+| `HumanInTheLoopPreset` | NextRun | auto (if `!autoApprove`); `ApprovalModeFunc` set if `autoApprove` | — | 30m session timeout; approval interrupts for consequential actions; `autoApprove=true` sets `ApprovalModeFunc` to always return `true` |
 | `SharedStatePreset` | — | — | yes (with `mapper`) | Tool calls become `STATE_DELTA` via mapper; collaborative document editing |
 | `InlineToolsPreset` | Inline (5m timeout) | — | — | Keeps SSE connection open for inline tool results; `Handler` mounts `/tool-result` automatically |
 | `HandBackPreset` | HandBack | — | — | Ends run with plain `RUN_FINISHED` on client tool invocation; messages snapshot enabled |
@@ -815,6 +816,11 @@ cfg := aguiadk.HumanInTheLoopPreset(base, false) // autoApprove=false
 handler, err := aguiadk.Handler(cfg, agui.Config{})
 ```
 
+```go
+cfg := aguiadk.HumanInTheLoopPreset(base, true) // autoApprove=true — tools execute without interrupt
+handler, err := aguiadk.Handler(cfg, agui.Config{})
+```
+
 ## Convenience Handler
 
 ```go
@@ -830,7 +836,7 @@ func Handler(cfg Config, agCfg agui.Config) (http.Handler, error)
 3. Calls `New(cfg)` to create the bridge agent
 4. Sets `agCfg.Agent` to the bridge agent
 5. Calls `agui.Handler(agCfg)` to create the HTTP handler
-6. If inline tool mode is in use, wraps the handler in a `ServeMux` that also
+6. If inline tool mode is in use, wraps the handler in an `http.HandlerFunc` that also
    mounts `POST /tool-result` (via `agui.ToolResultEndpoint`)
 
 This is the recommended entry point for most applications.
@@ -944,7 +950,7 @@ func InferCapabilities(a agent.Agent, cfg Config) *agui.AgentCapabilities
 
 `InferCapabilities` inspects an ADK agent and bridge configuration to produce
 an `AgentCapabilities` descriptor for AG-UI discovery. It checks the agent's
-sub-agent tree, the bridge's client-tool configuration, and the HITL/interrupt
+immediate sub-agents, the bridge's client-tool configuration, and the HITL/interrupt
 configuration to produce an accurate capabilities snapshot. Pass the result to
 `agui.Config.Capabilities` so `GET /capabilities` serves it.
 
@@ -956,21 +962,12 @@ configuration to produce an accurate capabilities snapshot. Pass the result to
 | `Transport` | yes — `Streaming: true` | — |
 | `State` | yes — `Snapshots: true`, `Deltas: true` | — |
 | `Messages` | yes — `Snapshots` mirrors `EmitMessagesSnapshot`, `StreamingText: true` | — |
-| `Tools` | yes — `Supported: true`, `ServerTools: true` | `ClientTools: true` when `Config.ClientTools` is set |
-| `Reasoning` | yes — `Supported: true`, `Streaming: true` | — |
-| `HumanInTheLoop` | no | `Interrupts: true` when `ClientTools.Mode == ClientToolModeHandBack` **or** `ApprovalModeFunc` is set |
+| `Tools` | yes — `Supported: true`, `ServerTools: true`, `Streaming: true` | `ClientTools: true` when `Config.ClientTools` is set |
+| `Reasoning` | yes — `Supported: true`, `Streaming: true`, `Encrypted: true` | — |
+| `HumanInTheLoop` | no | `Interrupts: true` when `ClientTools.Mode == ClientToolModeNextRun` |
 | `Activities` | no | `Snapshots: true`, `Deltas: EmitActivityDeltas` when the agent has sub-agents (`len(a.SubAgents()) > 0`) |
 
-Override the returned descriptor if you need finer control (e.g., to advertise
-`Encrypted: true` for reasoning or to suppress a capability you don't want
-exposed).
-
-> **Note (`HandBack` + `Interrupts`):** `HandBack` mode produces a plain
-> `RUN_FINISHED` with no interrupt outcome, so advertising
-> `HumanInTheLoop.Interrupts: true` for `HandBack` is semantically misleading.
-> The capability is set because `HandBack` hands control back to the client,
-> but no AG-UI interrupt schema is emitted. Override the descriptor if you
-> want to suppress `Interrupts` for `HandBack`-only configurations.
+Override the returned descriptor if you need finer control (e.g., to suppress a capability you don't want exposed).
 
 ```go
 caps := aguiadk.InferCapabilities(myAgent, bridgeCfg)
@@ -999,6 +996,11 @@ attaches the envelope to the context passed to `runner.Run` and also persists
 it into the ADK session state under well-known keys so downstream agents,
 tools, and callbacks can read it via `RunEnvelopeFrom` or the typed helpers
 `ContextFrom` and `ForwardedPropsFrom`.
+
+**Lookup semantics:** `RunEnvelopeFrom` reads **only** from the Go
+`context.Context`. `ContextFrom` and `ForwardedPropsFrom` first check the
+context envelope; if none is present, they fall back to ADK session state
+entries persisted by the bridge under well-known keys (see below).
 
 ### Well-Known State Keys
 

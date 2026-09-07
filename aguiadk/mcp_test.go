@@ -18,7 +18,7 @@ func TestBuildMCPServerToolsets_Empty(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(toolsets) != 0 {
-		t.Errorf("expected 0 toolsets, got %d", len(toolsets))
+		t.Errorf("got %d toolsets, want 0", len(toolsets))
 	}
 }
 
@@ -28,7 +28,7 @@ func TestBuildMCPServerToolsets_InvalidTransport(t *testing.T) {
 		{Type: "http", URL: "", ServerID: "srv1"},
 	})
 	if err == nil {
-		t.Fatal("expected error for empty URL")
+		t.Fatal("got nil error, want error for empty URL")
 	}
 }
 
@@ -42,7 +42,7 @@ func TestBuildMCPServerToolsets_HTTPConfig(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(toolsets) != 1 {
-		t.Fatalf("expected 1 toolset, got %d", len(toolsets))
+		t.Fatalf("got %d toolsets, want 1", len(toolsets))
 	}
 	// Toolset should have a name
 	if toolsets[0].Name() == "" {
@@ -59,7 +59,7 @@ func TestBuildMCPServerToolsets_MultipleServers(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(toolsets) != 2 {
-		t.Fatalf("expected 2 toolsets, got %d", len(toolsets))
+		t.Fatalf("got %d toolsets, want 2", len(toolsets))
 	}
 }
 
@@ -68,13 +68,16 @@ func TestBuildMCPServerToolsets_InvalidType(t *testing.T) {
 		{Type: "invalid", URL: "https://example.com", ServerID: "srv1"},
 	})
 	if err == nil {
-		t.Fatal("expected error for invalid transport type")
+		t.Fatal("got nil error, want error for invalid transport type")
 	}
 }
 
 // TestBuildMCPServerToolsets_Integration verifies that toolsets created from
 // a real HTTP MCP server can actually list tools.
 func TestBuildMCPServerToolsets_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0"}, nil)
 	server.AddTool(&mcp.Tool{
 		Name:        "echo",
@@ -116,7 +119,7 @@ func TestBuildMCPServerToolsets_Integration(t *testing.T) {
 		t.Fatalf("BuildMCPServerToolsets: %v", err)
 	}
 	if len(toolsets) != 1 {
-		t.Fatalf("expected 1 toolset, got %d", len(toolsets))
+		t.Fatalf("got %d toolsets, want 1", len(toolsets))
 	}
 
 	// Verify the toolset has a non-empty name

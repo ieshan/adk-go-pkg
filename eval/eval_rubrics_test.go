@@ -1,11 +1,13 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestRubricContent_Basic(t *testing.T) {
-	rc := RubricContent{
+	rc := eval.RubricContent{
 		TextProperty: "response is concise",
 	}
 
@@ -15,9 +17,9 @@ func TestRubricContent_Basic(t *testing.T) {
 }
 
 func TestRubric_Basic(t *testing.T) {
-	r := Rubric{
+	r := eval.Rubric{
 		RubricID:      "rubric1",
-		RubricContent: RubricContent{TextProperty: "test rubric"},
+		RubricContent: eval.RubricContent{TextProperty: "test rubric"},
 	}
 
 	if r.RubricID != "rubric1" {
@@ -27,7 +29,7 @@ func TestRubric_Basic(t *testing.T) {
 
 func TestRubricScore_Basic(t *testing.T) {
 	score := 0.85
-	rs := RubricScore{
+	rs := eval.RubricScore{
 		RubricID: "rubric1",
 		Score:    &score,
 	}
@@ -36,6 +38,6 @@ func TestRubricScore_Basic(t *testing.T) {
 		t.Errorf("got %s, want rubric1", rs.RubricID)
 	}
 	if rs.Score == nil || *rs.Score != 0.85 {
-		t.Error("expected score 0.85")
+		t.Errorf("got %v, want 0.85", rs.Score)
 	}
 }

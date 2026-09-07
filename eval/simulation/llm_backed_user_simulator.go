@@ -177,6 +177,7 @@ func (s *LlmBackedUserSimulator) GetNextUserMessage(ctx context.Context, events 
 }
 
 // GetSimulationEvaluator returns an evaluator for the simulator's output.
+// Currently unimplemented; always returns ErrSimulationEvaluatorNotImplemented.
 func (s *LlmBackedUserSimulator) GetSimulationEvaluator() (eval.Evaluator, error) {
 	return nil, ErrSimulationEvaluatorNotImplemented
 }

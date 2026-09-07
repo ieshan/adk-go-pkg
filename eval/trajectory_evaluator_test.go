@@ -119,7 +119,7 @@ func TestTrajectoryEvaluator_InOrder(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallEvalStatus != EvalStatusPassed {
-		t.Errorf("InOrder with extras should pass, got %v", result.OverallEvalStatus)
+		t.Errorf("got %v, want PASSED for InOrder with extras", result.OverallEvalStatus)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestTrajectoryEvaluator_AnyOrder(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallEvalStatus != EvalStatusPassed {
-		t.Errorf("AnyOrder with reordered calls should pass, got %v", result.OverallEvalStatus)
+		t.Errorf("got %v, want PASSED for AnyOrder with reordered calls", result.OverallEvalStatus)
 	}
 }
 
@@ -169,6 +169,6 @@ func TestTrajectoryEvaluator_EmptyToolCalls(t *testing.T) {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
 	if result.OverallEvalStatus != EvalStatusPassed {
-		t.Errorf("Empty tool calls should pass, got %v", result.OverallEvalStatus)
+		t.Errorf("got %v, want PASSED for empty tool calls", result.OverallEvalStatus)
 	}
 }

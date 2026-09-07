@@ -1,7 +1,9 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestValidatePathSegment(t *testing.T) {
@@ -23,7 +25,7 @@ func TestValidatePathSegment(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidatePathSegment(tt.input, "testField")
+			err := eval.ValidatePathSegment(tt.input, "testField")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidatePathSegment(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}

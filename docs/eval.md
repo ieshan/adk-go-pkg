@@ -18,7 +18,7 @@ Eval Sets (JSON) → Inference (run agent) → Evaluation (score metrics) → Re
 ### Static vs Dynamic Conversations
 
 - **Static conversations**: The eval case contains a fixed list of invocations with predefined user messages. The agent is run for each user message and the output is compared against expected results.
-- **Dynamic conversations**: The eval case contains a `ConversationScenario` with a starting prompt and conversation plan. An LLM-backed user simulator generates user messages. (Dynamic conversation inference is not yet implemented in the local eval service.)
+- **Dynamic conversations**: The eval case contains a `ConversationScenario` with a starting prompt and conversation plan. An LLM-backed user simulator generates user messages. Dynamic conversation inference is implemented via `UserSimulatorProvider` — wire one into `AgentEvaluator` (via `WithUserSimulatorProvider`) or `LocalEvalService` (via `WithUserSimulatorProvider`) to enable it.
 
 ## Core Data Models
 
@@ -95,7 +95,11 @@ type SessionInput struct {
 
 ## EvalConfig
 
-`EvalConfig` configures how evaluation is performed. It is passed to `AgentEvaluator.Evaluate` or `LocalEvalService.Evaluate`.
+`EvalConfig` configures how evaluation is performed. It is passed to
+`AgentEvaluator.Evaluate`. `LocalEvalService.Evaluate` does not take
+`EvalConfig` directly — it accepts an `*EvaluateRequest` whose
+`EvaluateConfig` field carries the parsed `EvalMetric` slice (via
+`GetEvalMetricsFromConfig`).
 
 ```go
 type EvalConfig struct {
@@ -435,6 +439,35 @@ The `Evaluate` method:
 4. Evaluates each metric using registered evaluators (with or without LLM).
 5. Aggregates results and saves if a results manager is configured.
 
+### UserSimulator and UserSimulatorProvider (package `eval`)
+
+The `UserSimulator` and `UserSimulatorProvider` interfaces are defined in the
+`eval` package (not `eval/simulation`). Concrete implementations live in
+`eval/simulation`.
+
+```go
+type UserSimulator interface {
+    GetNextUserMessage(ctx context.Context, events []*session.Event) (*NextUserMessage, error)
+}
+
+type UserSimulatorProvider interface {
+    Provide(evalCase EvalCase) (UserSimulator, error)
+}
+```
+
+`NextUserMessage` is the response from a user simulator:
+
+```go
+type NextUserMessage struct {
+    Status      UserSimulatorStatus // success, no_message_generated, turn_limit_reached, stop_signal_detected
+    UserMessage *genai.Content
+}
+```
+
+> **Note:** Concrete simulators (e.g. `LlmBackedUserSimulator`) may also
+> implement `GetSimulationEvaluator() (eval.Evaluator, error)`, but it is
+> not part of the `UserSimulator` interface.
+
 ## LocalEvalService
 
 `LocalEvalService` implements `BaseEvalService` with parallel inference and evaluation:
@@ -504,26 +537,19 @@ type EvaluateConfig struct {
 
 The simulation subpackage provides user simulator implementations for dynamic conversations.
 
-### UserSimulator Interface
+### UserSimulatorProvider
+
+`UserSimulatorProvider` (defined in the `eval` package, implemented by
+`simulation.UserSimulatorProvider`) dispatches to the correct simulator based
+on eval case data:
 
 ```go
-type UserSimulator interface {
-    GetNextUserMessage(ctx context.Context, events []*session.Event) (*NextUserMessage, error)
-}
+provider := simulation.NewUserSimulatorProvider(llm, simulation.DefaultLlmBackedUserSimulatorConfig())
+simulator, err := provider.Provide(evalCase)
 ```
 
-> **Note:** Concrete simulators (e.g. `LlmBackedUserSimulator`) may also
-> implement `GetSimulationEvaluator() (eval.Evaluator, error)`, but it is
-> not part of the `UserSimulator` interface.
-
-### NextUserMessage
-
-```go
-type NextUserMessage struct {
-    Status      UserSimulatorStatus // success, no_message_generated, turn_limit_reached, stop_signal_detected
-    UserMessage *genai.Content
-}
-```
+- If `evalCase.Conversation` is set → returns `StaticUserSimulator`.
+- If `evalCase.ConversationScenario` is set → returns `LlmBackedUserSimulator`.
 
 ### Implementations
 
@@ -540,18 +566,6 @@ type LlmBackedUserSimulatorConfig struct {
     IncludeFunctionCalls  bool
 }
 ```
-
-### UserSimulatorProvider
-
-`UserSimulatorProvider` dispatches to the correct simulator based on eval case data:
-
-```go
-provider := simulation.NewUserSimulatorProvider(llm, simulation.DefaultLlmBackedUserSimulatorConfig())
-simulator, err := provider.Provide(evalCase)
-```
-
-- If `evalCase.Conversation` is set → returns `StaticUserSimulator`.
-- If `evalCase.ConversationScenario` is set → returns `LlmBackedUserSimulator`.
 
 ## User Personas
 
@@ -627,7 +641,9 @@ type ConversationGenerationConfig struct {
 }
 ```
 
-Scenario generation requires a Vertex AI backend; when GCP is not configured the generator returns an error indicating GCP is required.
+Scenario generation is **not yet implemented** — the `ConversationGenerationConfig`
+type exists for configuration, but no generator function is provided. The Python ADK
+requires a Vertex AI backend for generation; the Go port will follow suit when implemented.
 
 ## Vertex AI Stubs
 
@@ -649,7 +665,7 @@ To enable these metrics, configure GCP credentials (`GOOGLE_CLOUD_PROJECT` and `
 | `ConvertEventsToEvalInvocations(events, appDetails)` | Groups events by `InvocationID` and converts each group into an `Invocation`. |
 | `GetAllToolCalls(invocation)` | Extracts all `FunctionCall` from intermediate data (legacy + events format). |
 | `GetAllToolResponses(invocation)` | Extracts all `FunctionResponse` from intermediate data. |
-| `GetAllToolCallsWithResponses(invocation)` | Pairs tool calls with their responses. |
+| `GetAllToolCallsWithResponses(invocation)` | Pairs tool calls with their responses by function call ID (or by index when IDs are absent). |
 | `GetTextFromContent(content)` | Extracts text from a `genai.Content`. |
 | `GetEvalStatus(score, threshold)` | Returns `NOT_EVALUATED` if either `*float64` argument is nil, `PASSED` if score >= threshold, else `FAILED`. |
 | `GetSessionID()` | Generates a unique eval session ID (`___eval___session___<uuid>`). |
@@ -836,6 +852,6 @@ defer resultsMgr.Close()
 
 ## Compatibility
 
-- **Go 1.26+** — Uses `iter.Seq2` and range-over-func
-- **ADK-Go v2.0.0+** (`google.golang.org/adk/v2`)
-- **GenAI v1.65.0** (`google.golang.org/genai`)
+- **Go 1.27+** — Uses `iter.Seq2` and range-over-func
+- **ADK-Go v2.3.0+** (`google.golang.org/adk/v2`)
+- **GenAI v1.71.0** (`google.golang.org/genai`)

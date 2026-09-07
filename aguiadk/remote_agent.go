@@ -38,8 +38,9 @@ type RemoteAgentConfig struct {
 // NewRemoteAgent creates an ADK agent that streams events from a remote AG-UI
 // endpoint. It maps ADK invocation context (user content + session history)
 // into AG-UI RunAgentInput.Messages, streams AG-UI events from the remote
-// endpoint, and maps TEXT_MESSAGE_*, TOOL_CALL_*, and STATE_* events back
-// into ADK *session.Event instances.
+// endpoint, and maps TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END, TOOL_CALL_START,
+// TOOL_CALL_ARGS, STATE_SNAPSHOT, and RUN_ERROR events back into ADK
+// *session.Event instances.
 func NewRemoteAgent(cfg RemoteAgentConfig) (agent.Agent, error) {
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("aguiadk: RemoteAgentConfig.Name is required")

@@ -134,11 +134,12 @@ func (c *ClientToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 }
 
 // makeClientProxyTool creates a single ADK FunctionTool from an AG-UI client
-// tool definition. For NextRun mode, IsLongRunning=true causes ADK to pause
-// the run after the handler returns nil, emitting
-// LongRunningToolIDs so the bridge can finish with an interrupt. For Inline
-// mode, IsLongRunning=false and the handler blocks on the ToolResultHandler
-// until the client submits a result via /tool-result.
+// tool definition. For NextRun and HandBack modes, IsLongRunning=true causes
+// ADK to pause the run after the handler returns nil, emitting
+// LongRunningToolIDs so the bridge can finish with an interrupt (NextRun) or
+// a plain RUN_FINISHED (HandBack). For Inline mode, IsLongRunning=false and
+// the handler blocks on the ToolResultHandler until the client submits a
+// result via /tool-result.
 func makeClientProxyTool(t types.Tool, ctc clientToolsCtx) (tool.Tool, error) {
 	cfg := functiontool.Config{
 		Name:          t.Name,
@@ -171,8 +172,9 @@ func makeClientProxyTool(t types.Tool, ctc clientToolsCtx) (tool.Tool, error) {
 // ADK calls the tool handler *before* checking IsLongRunning: a nil result
 // with IsLongRunning=true causes ADK to pause the run and emit
 // LongRunningToolIDs, which the bridge's interrupt path turns into a
-// RUN_FINISHED with Interrupts. This is the NextRun hand-back — the client
-// fulfills the tool call and starts a new run with the result.
+// RUN_FINISHED with Interrupts (NextRun) or a plain RUN_FINISHED (HandBack).
+// In both cases the client fulfills the tool call and starts a new run with
+// the result.
 //
 // For Inline mode, the handler waits for the client to submit a result via the
 // /tool-result endpoint (ToolResultHandler.Wait).

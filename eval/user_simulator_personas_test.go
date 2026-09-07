@@ -1,15 +1,17 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestUserPersonaRegistry_RegisterAndGet(t *testing.T) {
-	registry := NewUserPersonaRegistry()
-	persona := UserPersona{
+	registry := eval.NewUserPersonaRegistry()
+	persona := eval.UserPersona{
 		ID:          "test_persona",
 		Description: "A test persona",
-		Behaviors: []UserBehavior{
+		Behaviors: []eval.UserBehavior{
 			{Name: "behavior1", Description: "test behavior"},
 		},
 	}
@@ -20,31 +22,31 @@ func TestUserPersonaRegistry_RegisterAndGet(t *testing.T) {
 		t.Fatalf("GetPersona failed: %v", err)
 	}
 	if got.ID != "test_persona" {
-		t.Errorf("got %s, want test_persona", got.ID)
+		t.Errorf("GetPersona got %s, want test_persona", got.ID)
 	}
 }
 
 func TestUserPersonaRegistry_GetNotFound(t *testing.T) {
-	registry := NewUserPersonaRegistry()
+	registry := eval.NewUserPersonaRegistry()
 	_, err := registry.GetPersona("nonexistent")
 	if err == nil {
-		t.Error("expected error for nonexistent persona")
+		t.Errorf("got nil error, want non-nil error for nonexistent persona")
 	}
 }
 
 func TestUserPersonaRegistry_GetRegisteredPersonas(t *testing.T) {
-	registry := NewUserPersonaRegistry()
-	registry.RegisterPersona("p1", UserPersona{ID: "p1"})
-	registry.RegisterPersona("p2", UserPersona{ID: "p2"})
+	registry := eval.NewUserPersonaRegistry()
+	registry.RegisterPersona("p1", eval.UserPersona{ID: "p1"})
+	registry.RegisterPersona("p2", eval.UserPersona{ID: "p2"})
 
 	personas := registry.GetRegisteredPersonas()
 	if len(personas) != 2 {
-		t.Errorf("expected 2 personas, got %d", len(personas))
+		t.Errorf("got %d personas, want 2", len(personas))
 	}
 }
 
 func TestUserBehavior_GetBehaviorInstructionsStr(t *testing.T) {
-	b := UserBehavior{
+	b := eval.UserBehavior{
 		BehaviorInstructions: []string{"line1", "line2"},
 	}
 	s := b.GetBehaviorInstructionsStr()
@@ -54,7 +56,7 @@ func TestUserBehavior_GetBehaviorInstructionsStr(t *testing.T) {
 }
 
 func TestUserBehavior_GetViolationRubricsStr(t *testing.T) {
-	b := UserBehavior{
+	b := eval.UserBehavior{
 		ViolationRubrics: []string{"rubric1", "rubric2"},
 	}
 	s := b.GetViolationRubricsStr()

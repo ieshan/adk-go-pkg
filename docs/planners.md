@@ -38,9 +38,11 @@ type PlanRequest struct {
     ToolDescriptions []ToolDescription
 
     // Prior conversation events (oldest first). May be nil.
+    // NOTE: Currently ignored by both PlanReActPlanner and ThinkingPlanner.
     History []*session.Event
 
-    // Optional system-level directive for the planning prompt.
+    // Optional directive injected into the user prompt (under
+    // "## Additional Instruction"), not the system prompt.
     Instruction string
 }
 ```
@@ -78,17 +80,32 @@ type PlanStep struct {
 ## PlanReAct Planner
 
 The `PlanReActPlanner` sends a structured planning prompt to an LLM and parses
-the JSON response. Steps are truncated to `MaxSteps`.
+the JSON response. Steps are truncated to `MaxSteps` via a simple slice
+operation (`plan.Steps[:MaxSteps]`); no `DependsOn` indices are adjusted, so
+truncation may leave steps referencing indices that no longer exist.
 
 ### Config
 
 ```go
 type PlanReActConfig struct {
-    Model           model.LLM // Required.
-    PlanInstruction string    // Custom system prompt (optional).
-    MaxSteps        int       // Step cap. Default: 10.
+    Model                   model.LLM      // Required.
+    PlanInstruction         string         // Custom system prompt (optional).
+    PlanInstructionTemplate *prompt.Template // Overrides default instruction; takes precedence over PlanInstruction.
+    MaxSteps                int            // Step cap. Default: 10.
 }
 ```
+
+#### PlanInstructionTemplate
+
+When set, `PlanInstructionTemplate` overrides the default planning system
+prompt (and takes precedence over the plain `PlanInstruction` string). The
+template is rendered with the following data, accessible via `{{.Input.*}}`:
+
+| Field          | Description                                              |
+|----------------|----------------------------------------------------------|
+| `tools`        | Formatted list of available tool descriptions.           |
+| `userMessage`  | The raw user message from `PlanRequest.UserMessage`.     |
+| `instruction`  | The caller-supplied instruction from `PlanRequest.Instruction`. |
 
 ### Constructor
 
@@ -145,7 +162,10 @@ The LLM is expected to return:
 }
 ```
 
-Markdown code fences around the JSON are automatically stripped.
+Markdown code fences around the JSON are automatically stripped. This stripping
+applies only to the whole response (via `TrimPrefix`/`TrimSuffix` on the entire
+string); it does not remove fences embedded around individual JSON objects
+within a larger response.
 
 ## Thinking Planner
 
@@ -154,14 +174,52 @@ extract structured JSON from the response, but gracefully falls back to a
 single free-text step when no parseable JSON is found. The full model response
 is always available in `Plan.Reasoning`.
 
+### JSON Extraction Heuristics
+
+The planner searches the response text for a JSON candidate in two stages,
+returning the first match:
+
+1. **```json code fence** — looks for a ```` ```json ```` opening fence and
+   extracts the text up to the next ```` ``` ```` closing fence. The extracted
+   content is trimmed and treated as the candidate.
+2. **Raw `{"steps":` prefix** — if no fence is found, it scans for the exact
+   substring `{"steps":` and returns everything from that index to the end of
+   the response.
+
+Both checks are heuristic and intentionally simple:
+
+- The raw-marker match requires the exact prefix `{"steps":` with no
+  whitespace variation (e.g. `{ "steps":` will not match) and no alternative
+  field ordering (e.g. `{"reasoning":...,"steps":...}` will not match).
+- The candidate is then passed to `parsePlanJSON`, which strips leading/
+  trailing code fences from the whole candidate and unmarshals it. If parsing
+  fails, the planner falls back to a single free-text step rather than
+  returning an error.
+
+This keeps extraction predictable; the fallback path is always safe.
+
 ### Config
 
 ```go
 type ThinkingConfig struct {
-    Model          model.LLM // Required.
-    ThinkingBudget int       // Optional token budget hint. 0 = no hint.
+    Model                      model.LLM       // Required.
+    ThinkingBudget             int             // Optional token budget hint. 0 = no hint.
+    ThinkingInstructionTemplate *prompt.Template // Overrides default thinking system prompt.
 }
 ```
+
+#### ThinkingInstructionTemplate
+
+When set, `ThinkingInstructionTemplate` overrides the default thinking system
+prompt. The template is rendered with the following data, accessible via
+`{{.Input.*}}`:
+
+| Field          | Description                                              |
+|----------------|----------------------------------------------------------|
+| `tools`        | Formatted list of available tool descriptions.           |
+| `userMessage`  | The raw user message from `PlanRequest.UserMessage`.     |
+| `instruction`  | The caller-supplied instruction from `PlanRequest.Instruction`. |
+| `budget`       | The configured `ThinkingBudget` (0 when unset).          |
 
 ### Constructor
 

@@ -1,13 +1,15 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
-func newTestEvalSetResultsManager(t *testing.T) *LocalEvalSetResultsManager {
+func newTestEvalSetResultsManager(t *testing.T) *eval.LocalEvalSetResultsManager {
 	t.Helper()
-	mgr, err := NewLocalEvalSetResultsManager(t.TempDir())
+	mgr, err := eval.NewLocalEvalSetResultsManager(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalEvalSetResultsManager: %v", err)
 	}
@@ -19,9 +21,9 @@ func TestLocalEvalSetResultsManager_SaveAndGet(t *testing.T) {
 	ctx := context.Background()
 	mgr := newTestEvalSetResultsManager(t)
 
-	results := []EvalCaseResult{
-		{EvalID: "case-1", FinalEvalStatus: EvalStatusPassed},
-		{EvalID: "case-2", FinalEvalStatus: EvalStatusFailed},
+	results := []eval.EvalCaseResult{
+		{EvalID: "case-1", FinalEvalStatus: eval.EvalStatusPassed},
+		{EvalID: "case-2", FinalEvalStatus: eval.EvalStatusFailed},
 	}
 
 	err := mgr.SaveEvalSetResult(ctx, "app", "test-set", results)
@@ -55,7 +57,7 @@ func TestLocalEvalSetResultsManager_GetNotFound(t *testing.T) {
 
 	_, err := mgr.GetEvalSetResult(ctx, "app", "nonexistent")
 	if err == nil {
-		t.Error("expected error for non-existent result")
+		t.Errorf("got nil error, want non-nil error for non-existent result")
 	}
 }
 
@@ -78,6 +80,6 @@ func TestLocalEvalSetResultsManager_InvalidPath(t *testing.T) {
 
 	err := mgr.SaveEvalSetResult(ctx, "../etc", "test", nil)
 	if err == nil {
-		t.Error("expected error for path traversal in appName")
+		t.Errorf("got nil error, want non-nil error for path traversal in appName")
 	}
 }

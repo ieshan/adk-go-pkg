@@ -21,7 +21,7 @@ func TestContentsToMessages_RoleMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 2", len(msgs))
 	}
 	if msgs[0].Role != "user" {
 		t.Errorf("msg[0].role: got %q, want %q", msgs[0].Role, "user")
@@ -61,7 +61,7 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	msg := msgs[0]
 	if msg.Role != "user" {
@@ -70,10 +70,10 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 
 	blocks, ok := msg.Content.([]map[string]any)
 	if !ok {
-		t.Fatalf("content: expected []map[string]any, got %T", msg.Content)
+		t.Fatalf("content: got %T, want []map[string]any", msg.Content)
 	}
 	if len(blocks) != 1 {
-		t.Fatalf("expected 1 block, got %d", len(blocks))
+		t.Fatalf("got %d blocks, want 1", len(blocks))
 	}
 	if blocks[0]["type"] != "tool_result" {
 		t.Errorf("type: got %v, want %q", blocks[0]["type"], "tool_result")
@@ -106,7 +106,7 @@ func TestContentsToMessages_FunctionCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	msg := msgs[0]
 	if msg.Role != "assistant" {
@@ -115,10 +115,10 @@ func TestContentsToMessages_FunctionCall(t *testing.T) {
 
 	blocks, ok := msg.Content.([]map[string]any)
 	if !ok {
-		t.Fatalf("content: expected []map[string]any, got %T", msg.Content)
+		t.Fatalf("content: got %T, want []map[string]any", msg.Content)
 	}
 	if len(blocks) != 1 {
-		t.Fatalf("expected 1 block, got %d", len(blocks))
+		t.Fatalf("got %d blocks, want 1", len(blocks))
 	}
 	if blocks[0]["type"] != "tool_use" {
 		t.Errorf("type: got %v, want %q", blocks[0]["type"], "tool_use")
@@ -157,17 +157,22 @@ func TestBuildMessageRequest_NoTemperature(t *testing.T) {
 	}
 
 	// Marshal and verify temperature/top_p/top_k are absent.
-	b, _ := json.Marshal(msgReq)
+	b, err := json.Marshal(msgReq)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
 	var raw map[string]any
-	_ = json.Unmarshal(b, &raw)
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if _, ok := raw["temperature"]; ok {
-		t.Error("expected temperature to be omitted")
+		t.Errorf("got temperature key, want it omitted")
 	}
 	if _, ok := raw["top_p"]; ok {
-		t.Error("expected top_p to be omitted")
+		t.Errorf("got top_p key, want it omitted")
 	}
 	if _, ok := raw["top_k"]; ok {
-		t.Error("expected top_k to be omitted")
+		t.Errorf("got top_k key, want it omitted")
 	}
 }
 
@@ -214,25 +219,25 @@ func TestBuildMessageRequest_CacheControl(t *testing.T) {
 	// First message: text block should have cache_control.
 	firstBlocks, ok := msgReq.Messages[0].Content.([]map[string]any)
 	if !ok {
-		t.Fatalf("expected []map[string]any for first message content")
+		t.Fatalf("got wrong type for first message content, want []map[string]any")
 	}
 	if len(firstBlocks) != 1 {
-		t.Fatalf("expected 1 block, got %d", len(firstBlocks))
+		t.Fatalf("got %d blocks, want 1", len(firstBlocks))
 	}
 	if _, hasCC := firstBlocks[0]["cache_control"]; !hasCC {
-		t.Error("expected cache_control on text block")
+		t.Errorf("got no cache_control on text block, want it present")
 	}
 
 	// Second message: tool_use block should NOT have cache_control.
 	secondBlocks, ok := msgReq.Messages[1].Content.([]map[string]any)
 	if !ok {
-		t.Fatalf("expected []map[string]any for second message content")
+		t.Fatalf("got wrong type for second message content, want []map[string]any")
 	}
 	if len(secondBlocks) != 1 {
-		t.Fatalf("expected 1 block, got %d", len(secondBlocks))
+		t.Fatalf("got %d blocks, want 1", len(secondBlocks))
 	}
 	if _, hasCC := secondBlocks[0]["cache_control"]; hasCC {
-		t.Error("expected cache_control to be stripped from tool_use block")
+		t.Errorf("got cache_control on tool_use block, want it stripped")
 	}
 }
 
@@ -273,7 +278,7 @@ func TestContentsToMessages_FileDataError(t *testing.T) {
 	}
 	_, err := contentsToMessages(contents)
 	if err == nil {
-		t.Fatal("expected error for non-HTTP FileData URI, got nil")
+		t.Fatal("got nil error for non-HTTP FileData URI, want error")
 	}
 }
 
@@ -293,11 +298,11 @@ func TestContentsToMessages_ThinkingBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	blocks, ok := msgs[0].Content.([]map[string]any)
 	if !ok || len(blocks) != 1 {
-		t.Fatalf("expected 1 thinking block, got %v", msgs[0].Content)
+		t.Fatalf("got %v thinking blocks, want 1", msgs[0].Content)
 	}
 	if blocks[0]["type"] != "thinking" {
 		t.Errorf("type: got %v, want %q", blocks[0]["type"], "thinking")
@@ -325,13 +330,13 @@ func TestBuildMessageRequest_ResponseJsonSchema(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if msgReq.OutputConfig == nil {
-		t.Fatal("expected OutputConfig")
+		t.Fatal("got nil OutputConfig, want non-nil")
 	}
 	if msgReq.OutputConfig.Format != "json" {
 		t.Errorf("format: got %q, want %q", msgReq.OutputConfig.Format, "json")
 	}
 	if msgReq.OutputConfig.JSONSchema == nil {
-		t.Error("expected JSONSchema")
+		t.Errorf("got nil JSONSchema, want non-nil")
 	}
 }
 
@@ -355,13 +360,93 @@ func TestBuildMessageRequest_ThinkingConfig(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if msgReq.Thinking == nil {
-		t.Fatal("expected Thinking config")
+		t.Fatal("got nil Thinking config, want non-nil")
 	}
 	if msgReq.Thinking.Type != "enabled" {
 		t.Errorf("type: got %q, want %q", msgReq.Thinking.Type, "enabled")
 	}
 	if msgReq.Thinking.BudgetTokens != 1000 {
 		t.Errorf("budget_tokens: got %d, want 1000", msgReq.Thinking.BudgetTokens)
+	}
+}
+
+// TestBuildMessageRequest_AllowedFunctionNames_FiltersTools verifies that when
+// multiple AllowedFunctionNames are specified, the tools list is filtered to
+// only include those tools (since Anthropic's tool_choice cannot name multiple
+// tools).
+func TestBuildMessageRequest_AllowedFunctionNames_FiltersTools(t *testing.T) {
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{
+				{FunctionDeclarations: []*genai.FunctionDeclaration{
+					{Name: "get_weather"},
+					{Name: "get_time"},
+					{Name: "send_email"},
+				}},
+			},
+			ToolConfig: &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode:                 genai.FunctionCallingConfigModeAuto,
+					AllowedFunctionNames: []string{"get_weather", "get_time"},
+				},
+			},
+		},
+	}
+	msgReq, err := buildMessageRequest(req, "claude-opus-4", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(msgReq.Tools) != 2 {
+		t.Fatalf("len(Tools) = %d, want 2 (filtered)", len(msgReq.Tools))
+	}
+	names := map[string]bool{}
+	for _, tool := range msgReq.Tools {
+		if n, ok := tool["name"].(string); ok {
+			names[n] = true
+		}
+	}
+	if !names["get_weather"] || !names["get_time"] {
+		t.Errorf("filtered tools = %v, want get_weather and get_time", names)
+	}
+	if names["send_email"] {
+		t.Errorf("send_email should have been filtered out")
+	}
+}
+
+// TestBuildMessageRequest_AllowedFunctionNames_SingleDoesNotFilter verifies
+// that a single AllowedFunctionNames does not filter the tools list (it uses
+// tool_choice with type=tool instead).
+func TestBuildMessageRequest_AllowedFunctionNames_SingleDoesNotFilter(t *testing.T) {
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Hi"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{
+				{FunctionDeclarations: []*genai.FunctionDeclaration{
+					{Name: "get_weather"},
+					{Name: "get_time"},
+				}},
+			},
+			ToolConfig: &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode:                 genai.FunctionCallingConfigModeAuto,
+					AllowedFunctionNames: []string{"get_weather"},
+				},
+			},
+		},
+	}
+	msgReq, err := buildMessageRequest(req, "claude-opus-4", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(msgReq.Tools) != 2 {
+		t.Fatalf("len(Tools) = %d, want 2 (not filtered for single name)", len(msgReq.Tools))
 	}
 }
 
@@ -387,15 +472,15 @@ func TestContentsToMessages_FunctionResponseWithResponseMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	blocks, ok := msgs[0].Content.([]map[string]any)
 	if !ok || len(blocks) != 1 {
-		t.Fatalf("expected 1 block, got %v", msgs[0].Content)
+		t.Fatalf("got %v blocks, want 1", msgs[0].Content)
 	}
 	contentStr, ok := blocks[0]["content"].(string)
 	if !ok {
-		t.Fatalf("expected string content, got %T", blocks[0]["content"])
+		t.Fatalf("got %T, want string content", blocks[0]["content"])
 	}
 	var result map[string]any
 	if err := json.Unmarshal([]byte(contentStr), &result); err != nil {
@@ -430,10 +515,10 @@ func TestTranslateResponse_Mixed(t *testing.T) {
 		t.Errorf("finish_reason: got %v, want %v", llmResp.FinishReason, genai.FinishReasonStop)
 	}
 	if llmResp.Content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 	if len(llmResp.Content.Parts) != 3 {
-		t.Fatalf("expected 3 parts, got %d", len(llmResp.Content.Parts))
+		t.Fatalf("got %d parts, want 3", len(llmResp.Content.Parts))
 	}
 
 	// Text part.
@@ -443,7 +528,7 @@ func TestTranslateResponse_Mixed(t *testing.T) {
 
 	// Thinking part.
 	if !llmResp.Content.Parts[1].Thought {
-		t.Error("expected Thought=true on thinking part")
+		t.Errorf("got Thought=false on thinking part, want true")
 	}
 	if llmResp.Content.Parts[1].Text != "I need to use a tool" {
 		t.Errorf("thinking text: got %q, want %q", llmResp.Content.Parts[1].Text, "I need to use a tool")
@@ -455,7 +540,7 @@ func TestTranslateResponse_Mixed(t *testing.T) {
 	// Tool use part.
 	fc := llmResp.Content.Parts[2].FunctionCall
 	if fc == nil {
-		t.Fatal("expected FunctionCall on third part")
+		t.Fatal("got no FunctionCall on third part, want one")
 	}
 	if fc.ID != "toolu_01D" {
 		t.Errorf("ID: got %q, want %q", fc.ID, "toolu_01D")
@@ -469,7 +554,7 @@ func TestTranslateResponse_Mixed(t *testing.T) {
 
 	// Usage metadata.
 	if llmResp.UsageMetadata == nil {
-		t.Fatal("expected non-nil UsageMetadata")
+		t.Fatal("got nil UsageMetadata, want non-nil")
 	}
 	if llmResp.UsageMetadata.PromptTokenCount != 20 {
 		t.Errorf("prompt_tokens: got %d, want 20", llmResp.UsageMetadata.PromptTokenCount)
@@ -480,4 +565,32 @@ func TestTranslateResponse_Mixed(t *testing.T) {
 	if llmResp.UsageMetadata.TotalTokenCount != 35 {
 		t.Errorf("total_tokens: got %d, want 35", llmResp.UsageMetadata.TotalTokenCount)
 	}
+}
+
+// FuzzContentsToMessages verifies that contentsToMessages never panics on
+// arbitrary JSON input. Valid JSON arrays of genai.Content should parse and
+// translate without error; invalid input should return an error (no panic).
+func FuzzContentsToMessages(f *testing.F) {
+	// Seed: valid JSON array of contents.
+	f.Add([]byte(`[{"role":"user","parts":[{"text":"Hello"}]}]`))
+	// Seed: malformed JSON.
+	f.Add([]byte(`invalid json`))
+	// Seed: empty array.
+	f.Add([]byte(`[]`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var contents []*genai.Content
+		if err := json.Unmarshal(data, &contents); err != nil {
+			// Skip unmarshal failures — expected for random bytes.
+			return
+		}
+		msgs, err := contentsToMessages(contents)
+		// The function must not panic — reaching here is the primary assertion.
+		// Both error and non-error outcomes are acceptable as long as no panic
+		// occurred.
+		if err != nil {
+			return
+		}
+		_ = msgs
+	})
 }

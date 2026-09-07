@@ -142,6 +142,28 @@ func validateFileName(name string) error {
 	return nil
 }
 
+// validatePathSegment checks that a user ID or session ID is safe to use as a
+// path component. It rejects empty strings, absolute paths, ".." traversal,
+// and path separators. This is a defence-in-depth guard; the ADK-Go Validate
+// methods also check for empty fields, but callers may skip Validate. The
+// [os.Root] provides an additional kernel-level boundary, but does not prevent
+// logical cross-user/session access within the root (e.g. "alice/../bob").
+func validatePathSegment(name, kind string) error {
+	if name == "" {
+		return fmt.Errorf("invalid %s: must not be empty", kind)
+	}
+	if filepath.IsAbs(name) {
+		return fmt.Errorf("invalid %s %q: absolute paths are not allowed", kind, name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid %s %q: path traversal is not allowed", kind, name)
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("invalid %s %q: path separators are not allowed", kind, name)
+	}
+	return nil
+}
+
 // listVersions returns all version numbers present in the versions/ directory,
 // sorted ascending.  An empty slice (no error) is returned when the directory
 // does not exist yet.
@@ -193,17 +215,23 @@ func (s *Service) latestVersion(versDir string) (int64, bool, error) {
 // FileName.
 func (s *Service) Save(_ context.Context, req *artifact.SaveRequest) (*artifact.SaveResponse, error) {
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("Save: %w", err)
+		return nil, fmt.Errorf("save: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return nil, fmt.Errorf("save: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return nil, fmt.Errorf("save: %w", err)
 	}
 	if err := validateFileName(req.FileName); err != nil {
-		return nil, fmt.Errorf("Save: %w", err)
+		return nil, fmt.Errorf("save: %w", err)
 	}
 
 	versDir := s.versionsDir(req.UserID, req.SessionID, req.FileName)
 
 	versions, err := s.listVersions(versDir)
 	if err != nil {
-		return nil, fmt.Errorf("Save: %w", err)
+		return nil, fmt.Errorf("save: %w", err)
 	}
 
 	var nextVersion int64
@@ -213,7 +241,7 @@ func (s *Service) Save(_ context.Context, req *artifact.SaveRequest) (*artifact.
 
 	vDir := filepath.Join(versDir, strconv.FormatInt(nextVersion, 10))
 	if err := s.root.MkdirAll(vDir, 0750); err != nil {
-		return nil, fmt.Errorf("Save: create version dir: %w", err)
+		return nil, fmt.Errorf("save: create version dir: %w", err)
 	}
 
 	// Determine content filename and payload.
@@ -234,7 +262,7 @@ func (s *Service) Save(_ context.Context, req *artifact.SaveRequest) (*artifact.
 	}
 
 	if err := s.root.WriteFile(filepath.Join(vDir, contentName), payload, 0600); err != nil {
-		return nil, fmt.Errorf("Save: write content: %w", err)
+		return nil, fmt.Errorf("save: write content: %w", err)
 	}
 
 	meta := &VersionMetadata{
@@ -245,7 +273,7 @@ func (s *Service) Save(_ context.Context, req *artifact.SaveRequest) (*artifact.
 		CanonicalURI: canonicalURI(req.AppName, req.UserID, req.SessionID, req.FileName, nextVersion),
 	}
 	if err := s.writeMetadata(vDir, meta); err != nil {
-		return nil, fmt.Errorf("Save: %w", err)
+		return nil, fmt.Errorf("save: %w", err)
 	}
 
 	return &artifact.SaveResponse{Version: nextVersion}, nil
@@ -264,10 +292,16 @@ func canonicalURI(appName, userID, sessionID, fileName string, version int64) st
 // not exist.
 func (s *Service) Load(_ context.Context, req *artifact.LoadRequest) (*artifact.LoadResponse, error) {
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("Load: %w", err)
+		return nil, fmt.Errorf("load: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return nil, fmt.Errorf("load: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return nil, fmt.Errorf("load: %w", err)
 	}
 	if err := validateFileName(req.FileName); err != nil {
-		return nil, fmt.Errorf("Load: %w", err)
+		return nil, fmt.Errorf("load: %w", err)
 	}
 
 	versDir := s.versionsDir(req.UserID, req.SessionID, req.FileName)
@@ -277,10 +311,10 @@ func (s *Service) Load(_ context.Context, req *artifact.LoadRequest) (*artifact.
 		// 0 means "latest"
 		latest, ok, err := s.latestVersion(versDir)
 		if err != nil {
-			return nil, fmt.Errorf("Load: %w", err)
+			return nil, fmt.Errorf("load: %w", err)
 		}
 		if !ok {
-			return nil, fmt.Errorf("Load: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
+			return nil, fmt.Errorf("load: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
 		}
 		targetVersion = latest
 	} else {
@@ -291,15 +325,15 @@ func (s *Service) Load(_ context.Context, req *artifact.LoadRequest) (*artifact.
 	meta, err := s.readMetadata(vDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("Load: artifact %q version %d not found: %w", req.FileName, targetVersion, fs.ErrNotExist)
+			return nil, fmt.Errorf("load: artifact %q version %d not found: %w", req.FileName, targetVersion, fs.ErrNotExist)
 		}
-		return nil, fmt.Errorf("Load: %w", err)
+		return nil, fmt.Errorf("load: %w", err)
 	}
 
 	// Find the content file (everything that is not metadata.json).
 	entries, err := fs.ReadDir(s.root.FS(), vDir)
 	if err != nil {
-		return nil, fmt.Errorf("Load: read version dir: %w", err)
+		return nil, fmt.Errorf("load: read version dir: %w", err)
 	}
 
 	var contentFile string
@@ -310,12 +344,12 @@ func (s *Service) Load(_ context.Context, req *artifact.LoadRequest) (*artifact.
 		}
 	}
 	if contentFile == "" {
-		return nil, fmt.Errorf("Load: content file missing for %q version %d", req.FileName, targetVersion)
+		return nil, fmt.Errorf("load: content file missing for %q version %d", req.FileName, targetVersion)
 	}
 
 	data, err := s.root.ReadFile(contentFile)
 	if err != nil {
-		return nil, fmt.Errorf("Load: read content: %w", err)
+		return nil, fmt.Errorf("load: read content: %w", err)
 	}
 
 	var part *genai.Part
@@ -337,15 +371,21 @@ func (s *Service) Load(_ context.Context, req *artifact.LoadRequest) (*artifact.
 // Deleting a non-existent artifact is not an error.
 func (s *Service) Delete(_ context.Context, req *artifact.DeleteRequest) error {
 	if err := req.Validate(); err != nil {
-		return fmt.Errorf("Delete: %w", err)
+		return fmt.Errorf("delete: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return fmt.Errorf("delete: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return fmt.Errorf("delete: %w", err)
 	}
 	if err := validateFileName(req.FileName); err != nil {
-		return fmt.Errorf("Delete: %w", err)
+		return fmt.Errorf("delete: %w", err)
 	}
 
 	dir := s.artifactDir(req.UserID, req.SessionID, req.FileName)
 	if err := s.root.RemoveAll(dir); err != nil {
-		return fmt.Errorf("Delete: remove artifact dir: %w", err)
+		return fmt.Errorf("delete: remove artifact dir: %w", err)
 	}
 	return nil
 }
@@ -359,7 +399,13 @@ func (s *Service) Delete(_ context.Context, req *artifact.DeleteRequest) error {
 // contract.
 func (s *Service) List(_ context.Context, req *artifact.ListRequest) (*artifact.ListResponse, error) {
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("List: %w", err)
+		return nil, fmt.Errorf("list: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return nil, fmt.Errorf("list: %w", err)
 	}
 
 	names := map[string]struct{}{}
@@ -367,13 +413,13 @@ func (s *Service) List(_ context.Context, req *artifact.ListRequest) (*artifact.
 	// Session-scoped artifacts.
 	sessionArtifactsDir := filepath.Join("users", req.UserID, "sessions", req.SessionID, "artifacts")
 	if err := s.collectArtifactNames(sessionArtifactsDir, names); err != nil {
-		return nil, fmt.Errorf("List: session artifacts: %w", err)
+		return nil, fmt.Errorf("list: session artifacts: %w", err)
 	}
 
 	// User-scoped artifacts.
 	userArtifactsDir := filepath.Join("users", req.UserID, "artifacts")
 	if err := s.collectArtifactNames(userArtifactsDir, names); err != nil {
-		return nil, fmt.Errorf("List: user artifacts: %w", err)
+		return nil, fmt.Errorf("list: user artifacts: %w", err)
 	}
 
 	fileNames := make([]string, 0, len(names))
@@ -410,19 +456,25 @@ func (s *Service) collectArtifactNames(dir string, names map[string]struct{}) er
 // wrapping fs.ErrNotExist is returned when no versions exist.
 func (s *Service) Versions(_ context.Context, req *artifact.VersionsRequest) (*artifact.VersionsResponse, error) {
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("Versions: %w", err)
+		return nil, fmt.Errorf("versions: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return nil, fmt.Errorf("versions: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return nil, fmt.Errorf("versions: %w", err)
 	}
 	if err := validateFileName(req.FileName); err != nil {
-		return nil, fmt.Errorf("Versions: %w", err)
+		return nil, fmt.Errorf("versions: %w", err)
 	}
 
 	versDir := s.versionsDir(req.UserID, req.SessionID, req.FileName)
 	versions, err := s.listVersions(versDir)
 	if err != nil {
-		return nil, fmt.Errorf("Versions: %w", err)
+		return nil, fmt.Errorf("versions: %w", err)
 	}
 	if len(versions) == 0 {
-		return nil, fmt.Errorf("Versions: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
+		return nil, fmt.Errorf("versions: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
 	}
 	return &artifact.VersionsResponse{Versions: versions}, nil
 }
@@ -434,10 +486,16 @@ func (s *Service) Versions(_ context.Context, req *artifact.VersionsRequest) (*a
 // when the artifact or requested version does not exist.
 func (s *Service) GetArtifactVersion(_ context.Context, req *artifact.GetArtifactVersionRequest) (*artifact.GetArtifactVersionResponse, error) {
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+		return nil, fmt.Errorf("getArtifactVersion: %w", err)
+	}
+	if err := validatePathSegment(req.UserID, "user_id"); err != nil {
+		return nil, fmt.Errorf("getArtifactVersion: %w", err)
+	}
+	if err := validatePathSegment(req.SessionID, "session_id"); err != nil {
+		return nil, fmt.Errorf("getArtifactVersion: %w", err)
 	}
 	if err := validateFileName(req.FileName); err != nil {
-		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+		return nil, fmt.Errorf("getArtifactVersion: %w", err)
 	}
 
 	versDir := s.versionsDir(req.UserID, req.SessionID, req.FileName)
@@ -447,10 +505,10 @@ func (s *Service) GetArtifactVersion(_ context.Context, req *artifact.GetArtifac
 		// 0 means "latest"
 		latest, ok, err := s.latestVersion(versDir)
 		if err != nil {
-			return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+			return nil, fmt.Errorf("getArtifactVersion: %w", err)
 		}
 		if !ok {
-			return nil, fmt.Errorf("GetArtifactVersion: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
+			return nil, fmt.Errorf("getArtifactVersion: artifact %q not found: %w", req.FileName, fs.ErrNotExist)
 		}
 		targetVersion = latest
 	} else {
@@ -461,9 +519,9 @@ func (s *Service) GetArtifactVersion(_ context.Context, req *artifact.GetArtifac
 	meta, err := s.readMetadata(vDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("GetArtifactVersion: artifact %q version %d not found: %w", req.FileName, targetVersion, fs.ErrNotExist)
+			return nil, fmt.Errorf("getArtifactVersion: artifact %q version %d not found: %w", req.FileName, targetVersion, fs.ErrNotExist)
 		}
-		return nil, fmt.Errorf("GetArtifactVersion: %w", err)
+		return nil, fmt.Errorf("getArtifactVersion: %w", err)
 	}
 
 	return &artifact.GetArtifactVersionResponse{

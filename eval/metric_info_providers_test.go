@@ -33,7 +33,7 @@ func TestDefaultRegistry_AllMetricsHaveInfo(t *testing.T) {
 	r := DefaultMetricEvaluatorRegistry()
 	metrics := r.GetRegisteredMetrics()
 	if len(metrics) == 0 {
-		t.Error("expected non-empty registered metrics")
+		t.Error("got empty registered metrics, want non-empty")
 	}
 	for _, m := range metrics {
 		if m.MetricName == "" {

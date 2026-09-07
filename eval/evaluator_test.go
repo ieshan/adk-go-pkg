@@ -1,50 +1,52 @@
-package eval
+package eval_test
 
 import (
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestEvaluationResult_Aggregation(t *testing.T) {
 	tests := []struct {
 		name          string
-		perInvocation []PerInvocationResult
-		wantOverall   EvalStatus
+		perInvocation []eval.PerInvocationResult
+		wantOverall   eval.EvalStatus
 	}{
 		{
 			name: "all passed",
-			perInvocation: []PerInvocationResult{
-				{EvalStatus: EvalStatusPassed, Score: Float64Ptr(1.0)},
-				{EvalStatus: EvalStatusPassed, Score: Float64Ptr(1.0)},
+			perInvocation: []eval.PerInvocationResult{
+				{EvalStatus: eval.EvalStatusPassed, Score: eval.Float64Ptr(1.0)},
+				{EvalStatus: eval.EvalStatusPassed, Score: eval.Float64Ptr(1.0)},
 			},
-			wantOverall: EvalStatusPassed,
+			wantOverall: eval.EvalStatusPassed,
 		},
 		{
 			name: "one failed",
-			perInvocation: []PerInvocationResult{
-				{EvalStatus: EvalStatusPassed, Score: Float64Ptr(1.0)},
-				{EvalStatus: EvalStatusFailed, Score: Float64Ptr(0.0)},
+			perInvocation: []eval.PerInvocationResult{
+				{EvalStatus: eval.EvalStatusPassed, Score: eval.Float64Ptr(1.0)},
+				{EvalStatus: eval.EvalStatusFailed, Score: eval.Float64Ptr(0.0)},
 			},
-			wantOverall: EvalStatusFailed,
+			wantOverall: eval.EvalStatusFailed,
 		},
 		{
 			name:          "empty results",
 			perInvocation: nil,
-			wantOverall:   EvalStatusNotEvaluated,
+			wantOverall:   eval.EvalStatusNotEvaluated,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := &EvaluationResult{
+			result := &eval.EvaluationResult{
 				PerInvocationResults: tt.perInvocation,
 			}
 			// Simple aggregation: if any failed, overall is failed.
-			overall := EvalStatusPassed
+			overall := eval.EvalStatusPassed
 			if len(tt.perInvocation) == 0 {
-				overall = EvalStatusNotEvaluated
+				overall = eval.EvalStatusNotEvaluated
 			}
 			for _, pir := range tt.perInvocation {
-				if pir.EvalStatus != EvalStatusPassed {
-					overall = EvalStatusFailed
+				if pir.EvalStatus != eval.EvalStatusPassed {
+					overall = eval.EvalStatusFailed
 				}
 			}
 			result.OverallEvalStatus = overall
@@ -56,12 +58,12 @@ func TestEvaluationResult_Aggregation(t *testing.T) {
 }
 
 func TestPerInvocationResult(t *testing.T) {
-	pir := PerInvocationResult{
-		EvalStatus: EvalStatusPassed,
-		Score:      Float64Ptr(0.95),
+	pir := eval.PerInvocationResult{
+		EvalStatus: eval.EvalStatusPassed,
+		Score:      eval.Float64Ptr(0.95),
 	}
-	if pir.EvalStatus != EvalStatusPassed {
-		t.Errorf("EvalStatus = %v, want %v", pir.EvalStatus, EvalStatusPassed)
+	if pir.EvalStatus != eval.EvalStatusPassed {
+		t.Errorf("EvalStatus = %v, want %v", pir.EvalStatus, eval.EvalStatusPassed)
 	}
 	if pir.Score == nil || *pir.Score != 0.95 {
 		t.Error("Score not set correctly")

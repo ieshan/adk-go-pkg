@@ -9,11 +9,11 @@
 //
 // # Agent Skills
 //
-// Agents can be configured with skillsets—specialized instruction sets stored in
+// Agents can be configured with skill sets—specialized instruction sets stored in
 // SKILL.md files with YAML frontmatter. Skills extend agent capabilities without
 // requiring code changes.
 //
-// To configure skills, add a skillsets section to your agent config:
+// To configure skills, add a skill_sets section to your agent config:
 //
 //	name: my-agent
 //	agent_class: LlmAgent
@@ -62,6 +62,9 @@ import (
 	"go.yaml.in/yaml/v4"
 	"google.golang.org/genai"
 )
+
+// ErrMaxLLMCallsInvalid is returned when LiveRunConfig.MaxLLMCalls is not positive.
+var ErrMaxLLMCallsInvalid = errors.New("live_run_config.max_llm_calls must be > 0")
 
 // AgentConfig is the sealed interface for all declarative agent configurations.
 // Only types defined in this package can implement it.
@@ -239,7 +242,7 @@ type ToolRef struct {
 //
 // Wildcard loading (all skills from source):
 //
-//	skillsets:
+//	skill_sets:
 //	  - name: filesystem
 //	    config:
 //	      path: "./skills"
@@ -249,11 +252,11 @@ type ToolRef struct {
 //	      bucket: "my-org-skills"
 //	      prefix: "production/"
 //	    preload: frontmatters
-//	    systemInstruction: "Custom skill guidance for this agent."
+//	    system_instruction: "Custom skill guidance for this agent."
 //
 // Specific skill loading (only selected skills):
 //
-//	skillsets:
+//	skill_sets:
 //	  - name: filesystem
 //	    config:
 //	      path: "./skills"
@@ -307,7 +310,7 @@ type SkillsetRef struct {
 	//
 	// Example:
 	//
-	//	skillsets:
+	//	skill_sets:
 	//	  - name: filesystem
 	//	    config:
 	//	      path: "./skills"
@@ -344,10 +347,10 @@ func (r *AgentRefConfig) Validate() error {
 	hasPath := r.ConfigPath != ""
 	hasCode := r.Code != ""
 	if hasPath && hasCode {
-		return fmt.Errorf("AgentRefConfig: only one of config_path or code may be set")
+		return fmt.Errorf("agentRefConfig: only one of config_path or code may be set")
 	}
 	if !hasPath && !hasCode {
-		return fmt.Errorf("AgentRefConfig: exactly one of config_path or code must be set")
+		return fmt.Errorf("agentRefConfig: exactly one of config_path or code must be set")
 	}
 	return nil
 }
@@ -496,7 +499,7 @@ func (r *LiveRunConfig) SetDefaults() {
 // Validate enforces Python-equivalent constraints.
 func (r *LiveRunConfig) Validate() error {
 	if r.MaxLLMCalls <= 0 {
-		return fmt.Errorf("live_run_config.max_llm_calls must be > 0")
+		return ErrMaxLLMCallsInvalid
 	}
 	return nil
 }
@@ -701,7 +704,10 @@ func parseSubAgentEntries(maps []map[string]any) ([]SubAgentEntry, error) {
 		// Check for reference keys
 		if _, hasPath := m["config_path"]; hasPath {
 			var ref AgentRefConfig
-			b, _ := json.Marshal(m)
+			b, err := json.Marshal(m)
+			if err != nil {
+				return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
+			}
 			if err := json.Unmarshal(b, &ref); err != nil {
 				return nil, fmt.Errorf("sub-agent %d: invalid AgentRefConfig: %w", i, err)
 			}
@@ -713,7 +719,10 @@ func parseSubAgentEntries(maps []map[string]any) ([]SubAgentEntry, error) {
 		}
 		if _, hasCode := m["code"]; hasCode {
 			var ref AgentRefConfig
-			b, _ := json.Marshal(m)
+			b, err := json.Marshal(m)
+			if err != nil {
+				return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
+			}
 			if err := json.Unmarshal(b, &ref); err != nil {
 				return nil, fmt.Errorf("sub-agent %d: invalid AgentRefConfig: %w", i, err)
 			}
@@ -724,9 +733,12 @@ func parseSubAgentEntries(maps []map[string]any) ([]SubAgentEntry, error) {
 			continue
 		}
 		// Inline agent
-		b, _ := json.Marshal(m)
+		b, err := json.Marshal(m)
+		if err != nil {
+			return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
+		}
 		var raw rawAgentConfig
-		if err := json.Unmarshal(b, &raw); err != nil {
+		if err = json.Unmarshal(b, &raw); err != nil {
 			return nil, fmt.Errorf("sub-agent %d: invalid inline agent: %w", i, err)
 		}
 		agent, err := toAgentConfig(raw)
@@ -800,12 +812,9 @@ func validateNoLLMFields(raw rawAgentConfig, typ string) error {
 	if len(raw.OnToolErrorCallbacks) > 0 {
 		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "on_tool_error_callbacks")
 	}
-	if len(raw.BeforeAgentCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "before_agent_callbacks")
-	}
-	if len(raw.AfterAgentCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "after_agent_callbacks")
-	}
+	// BeforeAgentCallbacks and AfterAgentCallbacks are BaseAgentConfig fields
+	// supported by all agent types (LLM, Sequential, Parallel, Loop) via
+	// agent.Config and workflowagent.Config. They are not LLM-only.
 	return nil
 }
 

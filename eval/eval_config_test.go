@@ -9,7 +9,7 @@ import (
 func TestGetEvaluationCriteriaOrDefault_EmptyPath(t *testing.T) {
 	config := GetEvaluationCriteriaOrDefault(nil, "")
 	if len(config.Criteria) == 0 {
-		t.Error("expected default criteria to be non-empty")
+		t.Errorf("got %d criteria, want non-empty", len(config.Criteria))
 	}
 }
 
@@ -18,21 +18,21 @@ func TestGetEvaluationCriteriaOrDefault_NonExistentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
 	config := GetEvaluationCriteriaOrDefault(root, "nonexistent/path.json")
 	if len(config.Criteria) == 0 {
-		t.Error("expected default criteria to be non-empty")
+		t.Errorf("got %d criteria, want non-empty", len(config.Criteria))
 	}
 }
 
 func TestGetEvaluationCriteriaOrDefault_DefaultValues(t *testing.T) {
 	config := GetEvaluationCriteriaOrDefault(nil, "")
 	if _, ok := config.Criteria["tool_trajectory_avg_score"]; !ok {
-		t.Error("expected tool_trajectory_avg_score in default config")
+		t.Errorf("got key not found, want tool_trajectory_avg_score in default config")
 	}
 	if _, ok := config.Criteria["response_match_score"]; !ok {
-		t.Error("expected response_match_score in default config")
+		t.Errorf("got key not found, want response_match_score in default config")
 	}
 }
 
@@ -103,7 +103,7 @@ func TestInjectDefaultUserSimulatorType(t *testing.T) {
 			t.Fatalf("Unmarshal failed: %v", err)
 		}
 		if _, ok := m["type"]; !ok {
-			t.Error("expected type field to be added")
+			t.Errorf("got no type field, want type field to be added")
 		}
 	})
 

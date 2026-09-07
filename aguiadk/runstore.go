@@ -108,8 +108,8 @@ func RunKey(threadID, runID string) string {
 
 // Save records a paused run. It purges expired entries first, then evicts the
 // oldest entry if the store is still at capacity. The caller's Pending slice
-// and State map are copied so later mutation by the caller cannot reach the
-// stored run.
+// and State map are shallow-copied: top-level containers are new, but nested
+// mutable values (e.g. Args maps, State map values) are shared with the caller.
 func (s *RunStore) Save(key string, run *PausedRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

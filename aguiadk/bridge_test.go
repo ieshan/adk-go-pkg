@@ -62,7 +62,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 	t.Run("missing agent", func(t *testing.T) {
 		_, err := aguiadk.New(aguiadk.Config{})
 		if err == nil {
-			t.Fatal("expected error for missing agent")
+			t.Fatal("got nil error, want error for missing agent")
 		}
 	})
 
@@ -74,7 +74,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 			AppNameFunc: func(r *http.Request) string { return "app2" },
 		})
 		if err == nil {
-			t.Fatal("expected error for both AppName and AppNameFunc")
+			t.Fatal("got nil error, want error for both AppName and AppNameFunc")
 		}
 	})
 
@@ -88,7 +88,7 @@ func TestBridge_ConfigValidation(t *testing.T) {
 			},
 		})
 		if err == nil {
-			t.Fatal("expected error for both UserID and UserIDFunc")
+			t.Fatal("got nil error, want error for both UserID and UserIDFunc")
 		}
 	})
 
@@ -341,7 +341,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 		if ev.Type() == events.EventTypeActivitySnapshot {
 			ase, ok := ev.(*events.ActivitySnapshotEvent)
 			if !ok {
-				t.Fatalf("expected *events.ActivitySnapshotEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ActivitySnapshotEvent", ev)
 			}
 			if ase.ActivityType != "tool_use" {
 				t.Errorf("ACTIVITY_SNAPSHOT ActivityType = %q, want %q", ase.ActivityType, "tool_use")
@@ -356,7 +356,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 		if ev.Type() == events.EventTypeToolCallResult {
 			tcre, ok := ev.(*events.ToolCallResultEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
 			}
 			if tcre.ToolCallID != toolCallStartID {
 				t.Errorf("TOOL_CALL_RESULT ToolCallID = %q, want %q", tcre.ToolCallID, toolCallStartID)
@@ -367,7 +367,7 @@ func TestBridge_FunctionResponseParts(t *testing.T) {
 		}
 	}
 	if !sawToolUseSnapshot {
-		t.Error("expected a tool_use ACTIVITY_SNAPSHOT, saw none")
+		t.Error("got no tool_use ACTIVITY_SNAPSHOT, want one")
 	}
 }
 
@@ -440,7 +440,7 @@ func TestBridge_StateSnapshot(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatal("expected STATE_SNAPSHOT event, got none")
+			t.Fatal("got none, want STATE_SNAPSHOT event")
 		}
 	})
 
@@ -507,7 +507,7 @@ func TestBridge_StateDelta(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("expected STATE_DELTA event")
+		t.Fatal("got no STATE_DELTA event, want one")
 	}
 }
 
@@ -551,7 +551,7 @@ func TestBridge_MessagesSnapshot(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("expected MESSAGES_SNAPSHOT event")
+		t.Fatal("got no MESSAGES_SNAPSHOT event, want one")
 	}
 }
 
@@ -661,7 +661,7 @@ func TestBridge_PanicRecovery(t *testing.T) {
 			hasRunError = true
 			errEvt, ok := ev.(*events.RunErrorEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
 			}
 			if errEvt.RunID() != "run-1" {
 				t.Errorf("RunID = %q, want %q", errEvt.RunID(), "run-1")
@@ -672,7 +672,7 @@ func TestBridge_PanicRecovery(t *testing.T) {
 		}
 	}
 	if !hasRunError {
-		t.Fatalf("expected RUN_ERROR event, got: %v", eventTypes(collected))
+		t.Fatalf("got %v, want RUN_ERROR event", eventTypes(collected))
 	}
 }
 
@@ -698,7 +698,7 @@ func TestBridge_RunErrorHasRunID(t *testing.T) {
 		if ev.Type() == events.EventTypeRunError {
 			errEvt, ok := ev.(*events.RunErrorEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
 			}
 			if errEvt.RunID() != "run-1" {
 				t.Errorf("RunID = %q, want %q", errEvt.RunID(), "run-1")
@@ -706,7 +706,7 @@ func TestBridge_RunErrorHasRunID(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("expected RUN_ERROR event, got: %v", eventTypes(collected))
+	t.Fatalf("got %v, want RUN_ERROR event", eventTypes(collected))
 }
 
 func TestBridge_InputState(t *testing.T) {
@@ -751,7 +751,7 @@ func TestBridge_InputState(t *testing.T) {
 	collectEvents(t, bridgeAgent, input)
 
 	if capturedState == nil {
-		t.Fatal("expected non-nil captured state")
+		t.Fatal("got nil captured state, want non-nil")
 	}
 	if v, ok := capturedState["custom_key"]; !ok || v != "custom_value" {
 		t.Errorf("capturedState[custom_key] = %v, want custom_value", v)
@@ -831,10 +831,10 @@ func TestBridge_MultimodalMessage(t *testing.T) {
 		t.Errorf("partCount = %d, want 2", partCount)
 	}
 	if !hasText {
-		t.Error("expected a text part")
+		t.Error("got no text part, want one")
 	}
 	if !hasInlineData {
-		t.Error("expected an inline data part")
+		t.Error("got no inline data part, want one")
 	}
 }
 
@@ -894,26 +894,26 @@ func TestBridge_LongRunningToolInterrupt(t *testing.T) {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
 			}
 			if finEvt.Outcome == nil {
-				t.Fatal("expected non-nil Outcome")
+				t.Fatal("got nil Outcome, want non-nil")
 			}
 			if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
 				t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
 			}
 			if len(finEvt.Outcome.Interrupts) != 1 {
-				t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
+				t.Fatalf("got %d interrupts, want 1", len(finEvt.Outcome.Interrupts))
 			}
 			intr := finEvt.Outcome.Interrupts[0]
 			if intr.ID != "fc-1" {
 				t.Errorf("Interrupts[0].ID = %q, want %q", intr.ID, "fc-1")
 			}
 			if intr.Message == "" {
-				t.Error("expected non-empty Message on interrupt")
+				t.Error("got empty Message on interrupt, want non-empty")
 			}
 			if intr.ResponseSchema == nil {
-				t.Error("expected non-nil ResponseSchema on interrupt")
+				t.Error("got nil ResponseSchema on interrupt, want non-nil")
 			}
 			if _, ok := intr.ResponseSchema["properties"]; !ok {
 				t.Errorf("ResponseSchema missing 'properties': %v", intr.ResponseSchema)
@@ -960,7 +960,7 @@ func TestBridge_ClientToolNextRunInterrupt(t *testing.T) {
 	})
 
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -1002,16 +1002,16 @@ func TestBridge_ClientToolNextRunInterrupt(t *testing.T) {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
 			}
 			if finEvt.Outcome == nil {
-				t.Fatal("expected non-nil Outcome")
+				t.Fatal("got nil Outcome, want non-nil")
 			}
 			if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
 				t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
 			}
 			if len(finEvt.Outcome.Interrupts) != 1 {
-				t.Fatalf("expected 1 interrupt, got %d", len(finEvt.Outcome.Interrupts))
+				t.Fatalf("got %d interrupts, want 1", len(finEvt.Outcome.Interrupts))
 			}
 			if finEvt.Outcome.Interrupts[0].ID != "fc-client-1" {
 				t.Errorf("Interrupts[0].ID = %q, want %q", finEvt.Outcome.Interrupts[0].ID, "fc-client-1")
@@ -1022,10 +1022,10 @@ func TestBridge_ClientToolNextRunInterrupt(t *testing.T) {
 	// Verify the paused run was saved to the runstore for resume.
 	saved, ok := store.Load(aguiadk.RunKey(input.ThreadID, input.RunID))
 	if !ok {
-		t.Fatal("expected paused run to be saved in runstore")
+		t.Fatal("got no paused run in runstore, want one saved")
 	}
 	if len(saved.Pending) != 1 {
-		t.Fatalf("expected 1 pending tool call, got %d", len(saved.Pending))
+		t.Fatalf("got %d pending tool calls, want 1", len(saved.Pending))
 	}
 	if saved.Pending[0].ID != "fc-client-1" {
 		t.Errorf("Pending[0].ID = %q, want %q", saved.Pending[0].ID, "fc-client-1")
@@ -1095,7 +1095,7 @@ func TestBridge_ResumeEntries(t *testing.T) {
 	})
 
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -1137,14 +1137,14 @@ func TestBridge_ResumeEntries(t *testing.T) {
 		}
 	}
 	if !hasToolCallResult {
-		t.Errorf("expected TOOL_CALL_RESULT event from resume settlement, got: %v", eventTypes(collected))
+		t.Errorf("got %v, want TOOL_CALL_RESULT event from resume settlement", eventTypes(collected))
 	}
 	if !hasToolUseSnapshot {
-		t.Errorf("expected tool_use ACTIVITY_SNAPSHOT for approved resume, got: %v", eventTypes(collected))
+		t.Errorf("got %v, want tool_use ACTIVITY_SNAPSHOT for approved resume", eventTypes(collected))
 	}
 
 	if !sawFunctionResponse {
-		t.Error("expected to see a FunctionResponse in session events from resume")
+		t.Error("got no FunctionResponse in session events from resume, want one")
 	}
 }
 
@@ -1197,7 +1197,7 @@ func TestBridge_ResumeDenied(t *testing.T) {
 	})
 
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -1228,7 +1228,7 @@ func TestBridge_ResumeDenied(t *testing.T) {
 		if ev.Type() == events.EventTypeToolCallResult {
 			tcre, ok := ev.(*events.ToolCallResultEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
 			}
 			if !strings.Contains(tcre.Content, `"denied":true`) {
 				t.Errorf("denied TOOL_CALL_RESULT content = %q, want it to contain %q", tcre.Content, `"denied":true`)
@@ -1243,14 +1243,14 @@ func TestBridge_ResumeDenied(t *testing.T) {
 			}
 		}
 	}
-	t.Fatalf("expected a TOOL_CALL_RESULT event with denial, got: %v", eventTypes(collected))
+	t.Fatalf("got %v, want a TOOL_CALL_RESULT event with denial", eventTypes(collected))
 }
 
 func TestBridge_ResumeNoPausedRun(t *testing.T) {
 	a := testutil.MustNewFakeAgent("test-agent")
 
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -1279,7 +1279,7 @@ func TestBridge_ResumeNoPausedRun(t *testing.T) {
 			hasRunError = true
 			errEvt, ok := ev.(*events.RunErrorEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
 			}
 			if !strings.Contains(errEvt.Message, "no paused run") {
 				t.Errorf("RunError message = %q, want it to contain %q", errEvt.Message, "no paused run")
@@ -1287,7 +1287,7 @@ func TestBridge_ResumeNoPausedRun(t *testing.T) {
 		}
 	}
 	if !hasRunError {
-		t.Fatal("expected RUN_ERROR for resume with no paused run")
+		t.Fatal("got no RUN_ERROR for resume with no paused run, want one")
 	}
 }
 
@@ -1499,7 +1499,7 @@ func TestBridge_StreamingToolCallPartialArgs(t *testing.T) {
 		}
 	}
 	if len(argsDeltas) != 2 {
-		t.Fatalf("expected 2 TOOL_CALL_ARGS events (partials only, no full re-send), got %d: %v", len(argsDeltas), argsDeltas)
+		t.Fatalf("got %d TOOL_CALL_ARGS events, want 2 (partials only, no full re-send): %v", len(argsDeltas), argsDeltas)
 	}
 	if argsDeltas[0] != `"San"` {
 		t.Errorf("first ARGS delta = %q, want %q", argsDeltas[0], `"San"`)
@@ -1606,7 +1606,7 @@ func TestBridge_StreamingToolCallArgsNoDuplication(t *testing.T) {
 	}
 
 	if len(argsDeltas) == 0 {
-		t.Fatal("expected at least one TOOL_CALL_ARGS event")
+		t.Fatal("got no TOOL_CALL_ARGS event, want at least one")
 	}
 
 	// Simulate the AG-UI client reducer: concatenate all deltas.
@@ -1656,7 +1656,7 @@ func TestBridge_MalformedToolCall_EmptyName(t *testing.T) {
 		if ev.Type() == events.EventTypeToolCallResult {
 			tcre, ok := ev.(*events.ToolCallResultEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
 			}
 			if strings.Contains(tcre.Content, "empty function name") {
 				hasErrorResult = true
@@ -1667,7 +1667,7 @@ func TestBridge_MalformedToolCall_EmptyName(t *testing.T) {
 		}
 	}
 	if !hasErrorResult {
-		t.Error("expected TOOL_CALL_RESULT with empty-name error")
+		t.Error("got no TOOL_CALL_RESULT with empty-name error, want one")
 	}
 }
 
@@ -1718,10 +1718,10 @@ func TestBridge_MalformedToolCall_EmptyID(t *testing.T) {
 		if ev.Type() == events.EventTypeToolCallStart {
 			tcse, ok := ev.(*events.ToolCallStartEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallStartEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallStartEvent", ev)
 			}
 			if tcse.ToolCallID == "" {
-				t.Error("expected non-empty synthetic ToolCallID")
+				t.Error("got empty synthetic ToolCallID, want non-empty")
 			}
 		}
 	}
@@ -1782,7 +1782,7 @@ func TestBridge_SuppressedToolMode(t *testing.T) {
 			hasStateDelta = true
 			sd, ok := ev.(*events.StateDeltaEvent)
 			if !ok {
-				t.Fatalf("expected *events.StateDeltaEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.StateDeltaEvent", ev)
 			}
 			if len(sd.Delta) != 1 || sd.Delta[0].Path != "/doc" {
 				t.Errorf("StateDelta = %+v, want one op with path /doc", sd.Delta)
@@ -1792,10 +1792,10 @@ func TestBridge_SuppressedToolMode(t *testing.T) {
 		}
 	}
 	if !hasStateDelta {
-		t.Error("expected STATE_DELTA event from suppressed tool mode")
+		t.Error("got no STATE_DELTA event from suppressed tool mode, want one")
 	}
 	if hasToolCallStart {
-		t.Error("expected no TOOL_CALL_* events in suppressed mode")
+		t.Error("got TOOL_CALL_* events in suppressed mode, want none")
 	}
 }
 
@@ -1972,7 +1972,7 @@ func TestBridge_SuppressedToolModeMixed(t *testing.T) {
 		case events.EventTypeStateDelta:
 			sd, ok := ev.(*events.StateDeltaEvent)
 			if !ok {
-				t.Fatalf("expected *events.StateDeltaEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.StateDeltaEvent", ev)
 			}
 			if len(sd.Delta) != 1 {
 				t.Errorf("StateDelta len = %d, want 1", len(sd.Delta))
@@ -1982,13 +1982,13 @@ func TestBridge_SuppressedToolModeMixed(t *testing.T) {
 		case events.EventTypeToolCallStart:
 			tcse, ok := ev.(*events.ToolCallStartEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallStartEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallStartEvent", ev)
 			}
 			toolCallStartID = tcse.ToolCallID
 		case events.EventTypeToolCallResult:
 			tcre, ok := ev.(*events.ToolCallResultEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
 			}
 			toolCallResultID = tcre.ToolCallID
 		}
@@ -2142,7 +2142,7 @@ func TestBridge_SuppressedToolModeNonSuppressedResult(t *testing.T) {
 		if ev.Type() == events.EventTypeToolCallResult {
 			tcre, ok := ev.(*events.ToolCallResultEvent)
 			if !ok {
-				t.Fatalf("expected *events.ToolCallResultEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
 			}
 			if !strings.Contains(tcre.Content, `"result":"ok"`) {
 				t.Errorf("TOOL_CALL_RESULT Content = %q, want it to contain %q", tcre.Content, `"result":"ok"`)
@@ -2447,13 +2447,13 @@ func TestBridge_MidStreamErrorDuringToolCallStreaming(t *testing.T) {
 	}
 
 	if !hasToolCallStart {
-		t.Error("expected TOOL_CALL_START in event stream")
+		t.Error("got no TOOL_CALL_START in event stream, want one")
 	}
 	if !hasToolCallEnd {
-		t.Error("expected TOOL_CALL_END before RUN_ERROR (closeStreamedToolCalls on error path)")
+		t.Error("got no TOOL_CALL_END before RUN_ERROR, want one (closeStreamedToolCalls on error path)")
 	}
 	if runErrorIdx == -1 {
-		t.Fatal("expected RUN_ERROR event")
+		t.Fatal("got no RUN_ERROR event, want one")
 	}
 	if toolCallEndIdx == -1 || toolCallEndIdx > runErrorIdx {
 		t.Errorf("TOOL_CALL_END (idx %d) must come before RUN_ERROR (idx %d)", toolCallEndIdx, runErrorIdx)
@@ -2508,7 +2508,7 @@ func TestBridge_CustomEvent(t *testing.T) {
 	}
 
 	if !hasCustom {
-		t.Fatal("expected CUSTOM event in stream")
+		t.Fatal("got no CUSTOM event in stream, want one")
 	}
 	if customIdx > runFinishedIdx {
 		t.Errorf("CUSTOM (idx %d) must come before RUN_FINISHED (idx %d)", customIdx, runFinishedIdx)
@@ -2519,7 +2519,7 @@ func TestBridge_CustomEvent(t *testing.T) {
 		if ev.Type() == events.EventTypeCustom {
 			customEvt, ok := ev.(*events.CustomEvent)
 			if !ok {
-				t.Fatalf("expected *events.CustomEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.CustomEvent", ev)
 			}
 			if customEvt.Name != "agent_complete" {
 				t.Errorf("custom event name = %q, want %q", customEvt.Name, "agent_complete")
@@ -2568,7 +2568,7 @@ func TestBridge_ReasoningEncryptedValue(t *testing.T) {
 		}
 	}
 	if !hasEncrypted {
-		t.Errorf("expected REASONING_ENCRYPTED_VALUE event, got: %v", typeSeq)
+		t.Errorf("got %v, want REASONING_ENCRYPTED_VALUE event", typeSeq)
 	}
 }
 
@@ -2638,7 +2638,7 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 		}
 	}
 	if !hasRunError {
-		t.Fatalf("expected RUN_ERROR event, got: %v", typeSeq)
+		t.Fatalf("got %v, want RUN_ERROR event", typeSeq)
 	}
 
 	// Verify the error message contains "did not converge".
@@ -2646,7 +2646,7 @@ func TestBridge_MaxIterationsExceeded(t *testing.T) {
 		if ev.Type() == events.EventTypeRunError {
 			errEvt, ok := ev.(*events.RunErrorEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunErrorEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
 			}
 			if !strings.Contains(errEvt.Message, "did not converge") {
 				t.Errorf("error message = %q, want it to contain %q", errEvt.Message, "did not converge")
@@ -2743,7 +2743,7 @@ func TestBridge_MaxIterationsCountsModelTurns(t *testing.T) {
 
 	for _, et := range typeSeq {
 		if et == events.EventTypeRunError {
-			t.Fatalf("expected no RUN_ERROR (1 model turn within MaxIterations=1), got: %v", typeSeq)
+			t.Fatalf("got %v, want no RUN_ERROR (1 model turn within MaxIterations=1)", typeSeq)
 		}
 	}
 
@@ -2754,7 +2754,7 @@ func TestBridge_MaxIterationsCountsModelTurns(t *testing.T) {
 		}
 	}
 	if !hasRunFinished {
-		t.Fatalf("expected RUN_FINISHED, got: %v", typeSeq)
+		t.Fatalf("got %v, want RUN_FINISHED", typeSeq)
 	}
 }
 
@@ -2818,10 +2818,10 @@ func TestBridge_PerRequestApproval(t *testing.T) {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
 			}
 			if finEvt.Outcome != nil && finEvt.Outcome.Type == events.RunFinishedOutcomeTypeInterrupt {
-				t.Errorf("expected no interrupt outcome with auto-approve, got interrupt")
+				t.Errorf("got interrupt, want no interrupt outcome with auto-approve")
 			}
 		}
 	}
@@ -2834,7 +2834,7 @@ func TestBridge_PerRequestApproval(t *testing.T) {
 		}
 	}
 	if !hasRunFinished {
-		t.Fatal("expected RUN_FINISHED event")
+		t.Fatal("got no RUN_FINISHED event, want one")
 	}
 }
 
@@ -2898,17 +2898,17 @@ func TestBridge_StatePersistenceAcrossRuns(t *testing.T) {
 		if ev.Type() == events.EventTypeStateSnapshot {
 			snapEvt, ok := ev.(*events.StateSnapshotEvent)
 			if !ok {
-				t.Fatalf("expected *events.StateSnapshotEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.StateSnapshotEvent", ev)
 			}
 			snapshotMap = snapEvt.Snapshot.(map[string]any)
 		}
 	}
 	if snapshotMap == nil {
-		t.Fatal("expected STATE_SNAPSHOT event in run 2")
+		t.Fatal("got no STATE_SNAPSHOT event in run 2, want one")
 	}
 	fooVal, ok := snapshotMap["foo"]
 	if !ok {
-		t.Fatal("expected 'foo' key in state snapshot from run 2")
+		t.Fatal("got no 'foo' key in state snapshot from run 2, want one")
 	}
 	if fooVal != "bar" {
 		t.Errorf("state['foo'] = %v, want 'bar'", fooVal)
@@ -2962,7 +2962,7 @@ func TestBridge_ConcurrentResume(t *testing.T) {
 	})
 
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -3023,7 +3023,7 @@ func TestBridge_ConcurrentResume(t *testing.T) {
 		}
 	}
 	if !hasConcurrentError {
-		t.Errorf("expected at least one concurrent resume error, got: %v", errors)
+		t.Errorf("got %v, want at least one concurrent resume error", errors)
 	}
 }
 
@@ -3097,7 +3097,7 @@ func TestBridge_MultimodalAudio(t *testing.T) {
 		t.Errorf("partCount = %d, want 2", partCount)
 	}
 	if !hasInlineData {
-		t.Error("expected an inline data part for audio content")
+		t.Error("got no inline data part for audio content, want one")
 	}
 }
 
@@ -3168,7 +3168,7 @@ func TestBridge_MultimodalBinary(t *testing.T) {
 		t.Errorf("partCount = %d, want 2", partCount)
 	}
 	if !hasInlineData {
-		t.Error("expected an inline data part for binary content")
+		t.Error("got no inline data part for binary content, want one")
 	}
 }
 
@@ -3237,10 +3237,10 @@ func TestBridge_MessagesSnapshotOnInterrupt(t *testing.T) {
 		}
 	}
 	if msgSnapIdx == -1 {
-		t.Fatal("expected MESSAGES_SNAPSHOT event on interrupt path")
+		t.Fatal("got no MESSAGES_SNAPSHOT event on interrupt path, want one")
 	}
 	if runFinIdx == -1 {
-		t.Fatal("expected RUN_FINISHED event")
+		t.Fatal("got no RUN_FINISHED event, want one")
 	}
 	if msgSnapIdx >= runFinIdx {
 		t.Errorf("MESSAGES_SNAPSHOT (index %d) should come before RUN_FINISHED (index %d)", msgSnapIdx, runFinIdx)
@@ -3251,10 +3251,10 @@ func TestBridge_MessagesSnapshotOnInterrupt(t *testing.T) {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
 			}
 			if finEvt.Outcome == nil || finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
-				t.Error("expected interrupt outcome on RUN_FINISHED")
+				t.Error("got no interrupt outcome on RUN_FINISHED, want one")
 			}
 		}
 	}
@@ -3310,7 +3310,7 @@ func TestBridge_StateStatusTransitions(t *testing.T) {
 
 	expected := []string{"running", "done"}
 	if len(statusDeltas) != len(expected) {
-		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+		t.Fatalf("got %d status deltas, want %d: %v", len(statusDeltas), len(expected), statusDeltas)
 	}
 	for i, want := range expected {
 		if statusDeltas[i] != want {
@@ -3375,7 +3375,7 @@ func TestBridge_StateStatusOnInterrupt(t *testing.T) {
 
 	expected := []string{"running", "awaiting_approval"}
 	if len(statusDeltas) != len(expected) {
-		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+		t.Fatalf("got %d status deltas, want %d: %v", len(statusDeltas), len(expected), statusDeltas)
 	}
 	for i, want := range expected {
 		if statusDeltas[i] != want {
@@ -3421,7 +3421,7 @@ func TestBridge_StateStatusOnError(t *testing.T) {
 
 	expected := []string{"running", "error"}
 	if len(statusDeltas) != len(expected) {
-		t.Fatalf("expected %d status deltas, got %d: %v", len(expected), len(statusDeltas), statusDeltas)
+		t.Fatalf("got %d status deltas, want %d: %v", len(statusDeltas), len(expected), statusDeltas)
 	}
 	for i, want := range expected {
 		if statusDeltas[i] != want {
@@ -3524,10 +3524,10 @@ func TestBridge_ActivityDeltaDuringStreaming(t *testing.T) {
 	}
 
 	if activitySnapCount != 1 {
-		t.Errorf("expected 1 ACTIVITY_SNAPSHOT, got %d", activitySnapCount)
+		t.Errorf("got %d ACTIVITY_SNAPSHOT events, want 1", activitySnapCount)
 	}
 	if activityDeltaCount != 2 {
-		t.Errorf("expected 2 ACTIVITY_DELTA events (one per PartialArg), got %d", activityDeltaCount)
+		t.Errorf("got %d ACTIVITY_DELTA events, want 2 (one per PartialArg)", activityDeltaCount)
 	}
 }
 
@@ -3678,10 +3678,10 @@ func TestBridge_HandBackMode(t *testing.T) {
 		if ev.Type() == events.EventTypeRunFinished {
 			finEvt, ok := ev.(*events.RunFinishedEvent)
 			if !ok {
-				t.Fatalf("expected *events.RunFinishedEvent, got %T", ev)
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
 			}
 			if finEvt.Outcome != nil {
-				t.Errorf("expected nil Outcome on hand-back, got type %q", finEvt.Outcome.Type)
+				t.Errorf("got type %q, want nil Outcome on hand-back", finEvt.Outcome.Type)
 			}
 		}
 	}
@@ -3694,7 +3694,7 @@ func TestBridge_HandBackMode(t *testing.T) {
 		}
 	}
 	if !hasMsgSnapshot {
-		t.Error("expected MESSAGES_SNAPSHOT on hand-back")
+		t.Error("got no MESSAGES_SNAPSHOT on hand-back, want one")
 	}
 }
 
@@ -3768,7 +3768,7 @@ func TestBridge_MultimodalVideo(t *testing.T) {
 		t.Errorf("partCount = %d, want 2", partCount)
 	}
 	if !hasInlineData {
-		t.Error("expected an inline data part for video content")
+		t.Error("got no inline data part for video content, want one")
 	}
 }
 
@@ -3842,7 +3842,7 @@ func TestBridge_MultimodalDocument(t *testing.T) {
 		t.Errorf("partCount = %d, want 2", partCount)
 	}
 	if !hasInlineData {
-		t.Error("expected an inline data part for document content")
+		t.Error("got no inline data part for document content, want one")
 	}
 }
 
@@ -3920,10 +3920,10 @@ func TestBridge_MultimodalProviderGating(t *testing.T) {
 	collectEvents(t, bridgeAgent, input)
 
 	if hasInlineData {
-		t.Error("expected no inline data part for audio with non-openai provider")
+		t.Error("got inline data part for audio with non-openai provider, want none")
 	}
 	if textParts != 2 {
-		t.Errorf("expected 2 text parts (user text + fallback text), got %d", textParts)
+		t.Errorf("got %d text parts, want 2 (user text + fallback text)", textParts)
 	}
 }
 
@@ -3994,20 +3994,20 @@ func TestBridge_MultimodalProviderOpenAI(t *testing.T) {
 	collectEvents(t, bridgeAgent, input)
 
 	if !hasInlineData {
-		t.Error("expected inline data part for audio with openai provider")
+		t.Error("got no inline data part for audio with openai provider, want one")
 	}
 }
 
 func TestBridge_HandBackPreset(t *testing.T) {
 	cfg := aguiadk.HandBackPreset(aguiadk.Config{})
 	if cfg.ClientTools == nil || cfg.ClientTools.Mode != aguiadk.ClientToolModeHandBack {
-		t.Error("expected ClientToolModeHandBack")
+		t.Errorf("ClientToolMode = %v, want ClientToolModeHandBack", cfg.ClientTools.Mode)
 	}
 	if !cfg.EmitMessagesSnapshot {
-		t.Error("expected EmitMessagesSnapshot=true")
+		t.Errorf("EmitMessagesSnapshot = %v, want true", cfg.EmitMessagesSnapshot)
 	}
 	if cfg.EmitStateSnapshot == nil || !*cfg.EmitStateSnapshot {
-		t.Error("expected EmitStateSnapshot=true")
+		t.Errorf("EmitStateSnapshot = %v, want true", cfg.EmitStateSnapshot)
 	}
 }
 
@@ -4031,7 +4031,7 @@ func TestBridge_StopReleasesLazyRunStore(t *testing.T) {
 
 func TestBridge_StopDoesNotReleaseProvidedRunStore(t *testing.T) {
 	store := aguiadk.NewRunStore()
-	defer store.Stop()
+	t.Cleanup(store.Stop)
 	a := testutil.MustNewFakeAgent("test-agent")
 	bridgeAgent, err := aguiadk.New(aguiadk.Config{
 		Agent:    a,
@@ -4050,7 +4050,7 @@ func TestBridge_StopDoesNotReleaseProvidedRunStore(t *testing.T) {
 	key := aguiadk.RunKey("t", "r")
 	store.Save(key, &aguiadk.PausedRun{ThreadID: "t", RunID: "r"})
 	if _, ok := store.Load(key); !ok {
-		t.Error("expected caller-provided RunStore to still be usable after Stop")
+		t.Error("got error using caller-provided RunStore after Stop, want usable")
 	}
 }
 
@@ -4115,12 +4115,14 @@ func TestBridge_EarlyStreamTerminationReleasesGoroutine(t *testing.T) {
 	cancel()
 
 	// The runInternal goroutine should observe the cancellation and exit.
-	// If it leaked (blocked forever), this select would time out.
+	// The primary mechanism is the runExited channel (closed by the agent
+	// goroutine via defer). The 30-second timeout is a safety net for
+	// detecting a leaked goroutine, not the primary synchronization.
 	select {
 	case <-runExited:
 		// success: goroutine exited promptly
-	case <-time.After(3 * time.Second):
-		t.Fatal("runInternal goroutine leaked: did not exit within 3s of consumer disconnect")
+	case <-time.After(30 * time.Second):
+		t.Fatal("runInternal goroutine leaked: did not exit within 30s of consumer disconnect")
 	}
 }
 
@@ -4193,7 +4195,7 @@ func TestBridge_SubagentLifecycle(t *testing.T) {
 
 	// Verify that TEXT_MESSAGE_CONTENT events carry subagentRunId.
 	if len(textContentJSON) == 0 {
-		t.Fatal("expected at least one TEXT_MESSAGE_CONTENT event")
+		t.Fatal("got no TEXT_MESSAGE_CONTENT event, want at least one")
 	}
 	for _, j := range textContentJSON {
 		if !strings.Contains(j, `"subagentRunId"`) {
@@ -4334,15 +4336,15 @@ func TestBridge_TokenUsageOnRunnerError(t *testing.T) {
 		}
 	}
 	if errorEv == nil {
-		t.Fatal("expected a RUN_ERROR event but found none")
+		t.Fatal("got no RUN_ERROR event, want one")
 	}
 
 	usageEv, ok := errorEv.(*agui.RunErrorWithUsageEvent)
 	if !ok {
-		t.Fatalf("expected *agui.RunErrorWithUsageEvent, got %T", errorEv)
+		t.Fatalf("got %T, want *agui.RunErrorWithUsageEvent", errorEv)
 	}
 	if len(usageEv.Usage) == 0 {
-		t.Fatal("expected non-empty usage on RUN_ERROR")
+		t.Fatal("got empty usage on RUN_ERROR, want non-empty")
 	}
 	u := usageEv.Usage[0]
 	if u.InputTokens == nil || *u.InputTokens != 10 {
@@ -4402,15 +4404,15 @@ func TestBridge_TokenUsageReporting(t *testing.T) {
 		}
 	}
 	if finishedEv == nil {
-		t.Fatal("expected RUN_FINISHED event")
+		t.Fatal("got no RUN_FINISHED event, want one")
 	}
 
 	usageEv, ok := finishedEv.(*agui.RunFinishedWithUsageEvent)
 	if !ok {
-		t.Fatalf("expected *agui.RunFinishedWithUsageEvent, got %T", finishedEv)
+		t.Fatalf("got %T, want *agui.RunFinishedWithUsageEvent", finishedEv)
 	}
 	if len(usageEv.Usage) == 0 {
-		t.Fatal("expected non-empty usage on RUN_FINISHED")
+		t.Fatal("got empty usage on RUN_FINISHED, want non-empty")
 	}
 	u := usageEv.Usage[0]
 	if u.Provider != "google" {

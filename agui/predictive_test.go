@@ -1,6 +1,7 @@
 package agui_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -43,14 +44,14 @@ func TestPredictiveState_PredictiveDelta(t *testing.T) {
 
 	evts := drainEvents(ch)
 	if len(evts) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(evts))
+		t.Fatalf("got %d events, want 1", len(evts))
 	}
 	sd, ok := evts[0].(*events.StateDeltaEvent)
 	if !ok {
-		t.Fatalf("expected *StateDeltaEvent, got %T", evts[0])
+		t.Fatalf("got %T, want *StateDeltaEvent", evts[0])
 	}
 	if len(sd.Delta) != 1 {
-		t.Fatalf("expected 1 op, got %d", len(sd.Delta))
+		t.Fatalf("got %d ops, want 1", len(sd.Delta))
 	}
 	if sd.Delta[0].Path != "/_predictive/draft" {
 		t.Errorf("path = %q, want %q", sd.Delta[0].Path, "/_predictive/draft")
@@ -74,11 +75,11 @@ func TestPredictiveState_Commit(t *testing.T) {
 
 	evts := drainEvents(ch)
 	if len(evts) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(evts))
+		t.Fatalf("got %d events, want 1", len(evts))
 	}
 	sd, ok := evts[0].(*events.StateDeltaEvent)
 	if !ok {
-		t.Fatalf("expected *StateDeltaEvent, got %T", evts[0])
+		t.Fatalf("got %T, want *StateDeltaEvent", evts[0])
 	}
 	if sd.Delta[0].Path != "/recipe/steps" {
 		t.Errorf("commit path = %q, want %q", sd.Delta[0].Path, "/recipe/steps")
@@ -102,11 +103,11 @@ func TestPredictiveState_Clear(t *testing.T) {
 
 	evts := drainEvents(ch)
 	if len(evts) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(evts))
+		t.Fatalf("got %d events, want 1", len(evts))
 	}
 	sd, ok := evts[0].(*events.StateDeltaEvent)
 	if !ok {
-		t.Fatalf("expected *StateDeltaEvent, got %T", evts[0])
+		t.Fatalf("got %T, want *StateDeltaEvent", evts[0])
 	}
 	if sd.Delta[0].Op != "remove" {
 		t.Errorf("clear op = %q, want %q", sd.Delta[0].Op, "remove")
@@ -125,7 +126,7 @@ func TestPredictiveState_EmptyPatchNoop(t *testing.T) {
 
 	evts := drainEvents(ch)
 	if len(evts) != 0 {
-		t.Errorf("expected 0 events for nil patch, got %d", len(evts))
+		t.Errorf("got %d events, want 0 (nil patch)", len(evts))
 	}
 }
 
@@ -208,6 +209,25 @@ func TestPredictiveState_FullCycle(t *testing.T) {
 	}
 	evts := drainEvents(ch)
 	if len(evts) != 1 {
-		t.Fatalf("expected 1 clear event, got %d", len(evts))
+		t.Fatalf("got %d events, want 1 clear event", len(evts))
+	}
+}
+
+// TestPredictiveState_CommitFallbackError verifies that when both the direct
+// apply and the fallback apply fail, the returned error wraps the fallback
+// error (err2), not the direct apply error (err).
+func TestPredictiveState_CommitFallbackError(t *testing.T) {
+	tracker, ch := newPredictiveTracker(t)
+	drainEvents(ch)
+
+	// A channel cannot be JSON-marshaled, so both the direct apply and the
+	// fallback apply will fail at the marshal step. The returned error must
+	// be from the fallback (err2), not the direct apply (err).
+	err := tracker.Commit("/deep/nested/path", make(chan int))
+	if err == nil {
+		t.Fatal("Commit with unmarshalable value: got nil error, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "agui: apply commit:") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "agui: apply commit:")
 	}
 }

@@ -10,9 +10,32 @@ import (
 	"github.com/ieshan/adk-go-pkg/aguiadk"
 )
 
+// fakeClock provides a controllable clock for RunStore tests, allowing
+// deterministic time advancement instead of time.Sleep.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Unix(1000, 0)}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
 func TestRunStore_SaveLoadDelete(t *testing.T) {
 	s := aguiadk.NewRunStore()
-	defer s.Stop()
+	t.Cleanup(s.Stop)
 
 	key := aguiadk.RunKey("thread-1", "run-1")
 	run := &aguiadk.PausedRun{
@@ -29,7 +52,7 @@ func TestRunStore_SaveLoadDelete(t *testing.T) {
 
 	loaded, ok := s.Load(key)
 	if !ok {
-		t.Fatal("expected Load to find the saved run")
+		t.Fatal("got miss on Load, want hit for saved run")
 	}
 	if loaded.SessionID != "sess-1" {
 		t.Errorf("SessionID = %q, want %q", loaded.SessionID, "sess-1")
@@ -43,28 +66,28 @@ func TestRunStore_SaveLoadDelete(t *testing.T) {
 
 	s.Delete(key)
 	if _, ok := s.Load(key); ok {
-		t.Fatal("expected Load to miss after Delete")
+		t.Fatal("got hit on Load after Delete, want miss")
 	}
 }
 
 func TestRunStore_LoadAndDelete(t *testing.T) {
 	s := aguiadk.NewRunStore()
-	defer s.Stop()
+	t.Cleanup(s.Stop)
 
 	key := aguiadk.RunKey("thread-1", "run-1")
 	s.Save(key, &aguiadk.PausedRun{ThreadID: "thread-1", RunID: "run-1"})
 
 	if _, ok := s.LoadAndDelete(key); !ok {
-		t.Fatal("expected LoadAndDelete to find the run")
+		t.Fatal("got miss on LoadAndDelete, want hit")
 	}
 	if _, ok := s.LoadAndDelete(key); ok {
-		t.Fatal("expected second LoadAndDelete to miss")
+		t.Fatal("got hit on second LoadAndDelete, want miss")
 	}
 }
 
 func TestRunStore_ConcurrentLoadAndDelete(t *testing.T) {
 	s := aguiadk.NewRunStore()
-	defer s.Stop()
+	t.Cleanup(s.Stop)
 
 	key := aguiadk.RunKey("thread-1", "run-1")
 	s.Save(key, &aguiadk.PausedRun{ThreadID: "thread-1", RunID: "run-1"})
@@ -83,31 +106,37 @@ func TestRunStore_ConcurrentLoadAndDelete(t *testing.T) {
 	wg.Wait()
 
 	if winners != 1 {
-		t.Errorf("expected exactly 1 concurrent winner, got %d", winners)
+		t.Errorf("got %d concurrent winners, want 1", winners)
 	}
 }
 
 func TestRunStore_TTLExpiry(t *testing.T) {
 	s := aguiadk.NewRunStoreWithTTL(50 * time.Millisecond)
-	defer s.Stop()
+	t.Cleanup(s.Stop)
+
+	// Inject a controllable clock so we can advance time deterministically
+	// instead of sleeping.
+	clock := newFakeClock()
+	aguiadk.SetRunStoreClockForTest(s, clock.Now)
 
 	key := aguiadk.RunKey("thread-1", "run-1")
 	s.Save(key, &aguiadk.PausedRun{ThreadID: "thread-1", RunID: "run-1"})
 
 	if _, ok := s.Load(key); !ok {
-		t.Fatal("expected Load to find the run before TTL expiry")
+		t.Fatal("got miss on Load before TTL expiry, want hit")
 	}
 
-	time.Sleep(60 * time.Millisecond)
+	// Advance the clock past the TTL.
+	clock.Advance(60 * time.Millisecond)
 
 	if _, ok := s.Load(key); ok {
-		t.Fatal("expected Load to miss after TTL expiry")
+		t.Fatal("got hit on Load after TTL expiry, want miss")
 	}
 }
 
 func TestRunStore_SaveCopiesCallerData(t *testing.T) {
 	s := aguiadk.NewRunStore()
-	defer s.Stop()
+	t.Cleanup(s.Stop)
 
 	key := aguiadk.RunKey("thread-1", "run-1")
 	pending := []aguiadk.PendingToolCall{{ID: "fc-1", Name: "approve", Args: map[string]any{"x": 1}}}
@@ -155,7 +184,7 @@ func TestRunKey(t *testing.T) {
 func TestRunStore_MaxEntriesEviction(t *testing.T) {
 	// Verifies that saving beyond maxEntries evicts the oldest entry.
 	s := aguiadk.NewRunStoreWithMaxEntries(time.Minute, 3)
-	defer s.Stop()
+	t.Cleanup(s.Stop)
 
 	for i := 0; i < 4; i++ {
 		key := aguiadk.RunKey("t", fmt.Sprintf("r%d", i))
@@ -164,39 +193,42 @@ func TestRunStore_MaxEntriesEviction(t *testing.T) {
 
 	// The oldest entry (r0) should have been evicted.
 	if _, ok := s.Load(aguiadk.RunKey("t", "r0")); ok {
-		t.Error("expected r0 to be evicted")
+		t.Error("got r0 present, want evicted")
 	}
 	// r1, r2, r3 should still be present.
 	for i := 1; i <= 3; i++ {
 		key := aguiadk.RunKey("t", fmt.Sprintf("r%d", i))
 		if _, ok := s.Load(key); !ok {
-			t.Errorf("expected r%d to be present", i)
+			t.Errorf("got r%d evicted, want present", i)
 		}
 	}
 }
 
 func TestRunStore_EvictionOrder(t *testing.T) {
 	// Verifies that eviction removes the oldest entry by save time,
-	// not by key order. Uses a small maxEntries and saves with delays
-	// to ensure distinct timestamps.
+	// not by key order. Uses a controllable clock to ensure distinct
+	// timestamps without sleeping.
 	s := aguiadk.NewRunStoreWithMaxEntries(time.Minute, 2)
-	defer s.Stop()
+	t.Cleanup(s.Stop)
+
+	clock := newFakeClock()
+	aguiadk.SetRunStoreClockForTest(s, clock.Now)
 
 	s.Save(aguiadk.RunKey("t", "r0"), &aguiadk.PausedRun{ThreadID: "t", RunID: "r0"})
-	time.Sleep(5 * time.Millisecond)
+	clock.Advance(1 * time.Millisecond)
 	s.Save(aguiadk.RunKey("t", "r1"), &aguiadk.PausedRun{ThreadID: "t", RunID: "r1"})
-	time.Sleep(5 * time.Millisecond)
+	clock.Advance(1 * time.Millisecond)
 	s.Save(aguiadk.RunKey("t", "r2"), &aguiadk.PausedRun{ThreadID: "t", RunID: "r2"})
 
 	// r0 (oldest) should be evicted.
 	if _, ok := s.Load(aguiadk.RunKey("t", "r0")); ok {
-		t.Error("expected r0 (oldest) to be evicted")
+		t.Error("got r0 present, want evicted (oldest)")
 	}
 	// r1 and r2 should be present.
 	if _, ok := s.Load(aguiadk.RunKey("t", "r1")); !ok {
-		t.Error("expected r1 to be present")
+		t.Error("got r1 evicted, want present")
 	}
 	if _, ok := s.Load(aguiadk.RunKey("t", "r2")); !ok {
-		t.Error("expected r2 to be present")
+		t.Error("got r2 evicted, want present")
 	}
 }

@@ -118,7 +118,7 @@ func TestAgentEvaluator_EvalSetNotFound(t *testing.T) {
 
 	_, err := agentEval.Evaluate(ctx, "app", "nonexistent", EvalConfig{})
 	if err == nil {
-		t.Error("expected error for non-existent eval set")
+		t.Error("got nil error, want error for non-existent eval set")
 	}
 }
 
@@ -129,6 +129,6 @@ func TestAgentEvaluator_GenerateInvocations_DynamicNotImplemented(t *testing.T) 
 
 	_, err := agentEval.generateInvocations(ctx, "app", EvalCase{})
 	if err == nil {
-		t.Error("expected error for dynamic conversation (not implemented)")
+		t.Error("got nil error, want error for dynamic conversation (not implemented)")
 	}
 }

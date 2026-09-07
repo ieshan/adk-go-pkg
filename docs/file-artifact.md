@@ -12,8 +12,12 @@ artifacts.
 
 All filesystem access is scoped beneath an `*os.Root` opened from
 `Config.RootDir` in the constructor, providing kernel-level path traversal
-protection. Callers must call `Close` to release the underlying file
-descriptor when the service is no longer needed.
+protection. Additionally, `UserID` and `SessionID` are validated as single
+path components — empty strings, absolute paths, `..` traversal, and path
+separators (`/`, `\`) are rejected. This prevents logical cross-user/session
+access within the root (e.g. `UserID: "alice/../bob"`). Callers must call
+`Close` to release the underlying file descriptor when the service is no
+longer needed.
 
 ### Storage Layout
 
@@ -36,6 +40,11 @@ User-scoped artifacts (filenames prefixed with `user:`):
 Version numbering starts at 0. Each `Save` assigns the next version as
 `max(existing) + 1`. `Delete` removes all versions of an artifact (it
 ignores the `Version` field in the request).
+
+> **Note:** `AppName` is not part of the on-disk path. It is only used when
+> constructing the `CanonicalURI` returned in version metadata. Two saves
+> with different `AppName` values but identical `UserID`, `SessionID`, and
+> `FileName` write to the same on-disk location.
 
 ## API Reference
 
@@ -107,6 +116,16 @@ if err != nil {
 }
 fmt.Println("saved version:", resp.Version) // 0
 ```
+
+> **Note:** `Save` ignores the caller-supplied `Version` field in the
+> `SaveRequest`. The service auto-increments the version number as
+> `max(existing) + 1`, starting at 0 for the first save. The `Version`
+> returned in the response reflects the actual assigned version.
+
+> **Note:** `CustomMetadata` is always `nil` via the public `Save` API. The
+> field exists in the request type for interface compatibility, but its value
+> is not stored on disk. The `metadata.json` sidecar's `customMetadata` key
+> is therefore always absent (`omitempty`).
 
 ### Save a Binary Artifact
 
@@ -253,3 +272,10 @@ resp, err := svc.Save(ctx, &artifact.SaveRequest{
 ```
 
 User-scoped artifacts are accessible from any session for the same user.
+
+> **Portability note:** The `user:` prefix mapping uses the literal string
+> `"user"` as a session-independent scoping marker. This prefix is
+> case-sensitive and matched as a plain string prefix. On Windows, the `:`
+> character in filenames is reserved for drive letters and alternate data
+> streams; the `user:` prefix may not work correctly on Windows filesystems.
+> It is primarily tested on Unix-like systems.

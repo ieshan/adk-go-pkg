@@ -2,6 +2,8 @@ package prompt
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +49,7 @@ func newFullContext(t *testing.T) *fullContext {
 	}
 }
 
-func TestEngineParseExecute(t *testing.T) {
+func TestEngine_ParseExecute(t *testing.T) {
 	e := New()
 
 	t.Run("substitution", func(t *testing.T) {
@@ -111,22 +113,22 @@ func TestEngineParseExecute(t *testing.T) {
 	})
 }
 
-func TestEngineParseError(t *testing.T) {
+func TestEngine_ParseError(t *testing.T) {
 	_, err := New().Parse("bad", "{{if}}")
-	if err == nil {
-		t.Error("expected parse error")
+	if !errors.Is(err, ErrTemplateParse) {
+		t.Errorf("got %v, want ErrTemplateParse", err)
 	}
 }
 
-func TestEngineExecuteError(t *testing.T) {
+func TestEngine_ExecuteError(t *testing.T) {
 	tmpl := New().MustParse("bad", "{{.Input.Value | tojson}}")
 	_, err := tmpl.Execute(BuildData(map[string]any{"Value": make(chan int)}))
-	if err == nil {
-		t.Error("expected execute error from json.Marshal")
+	if !errors.Is(err, ErrTemplateExecute) {
+		t.Errorf("got %v, want ErrTemplateExecute", err)
 	}
 }
 
-func TestEngineWithFuncs(t *testing.T) {
+func TestEngine_WithFuncs(t *testing.T) {
 	e := New(WithFuncs(template.FuncMap{
 		"shout": strings.ToUpper,
 	}))
@@ -143,7 +145,7 @@ func TestEngineWithFuncs(t *testing.T) {
 func TestBuildData(t *testing.T) {
 	d := BuildData(map[string]any{"x": "y"})
 	if d.Input["x"] != "y" {
-		t.Errorf("Input not set correctly")
+		t.Errorf("got Input[x] = %v, want %q", d.Input["x"], "y")
 	}
 	if d.State != nil || d.User != nil || d.Session != nil || d.Agent != nil || d.Memory != nil || d.App != nil {
 		t.Error("BuildData should only set Input")
@@ -161,13 +163,13 @@ func TestBuildDataFromReadonlyContext(t *testing.T) {
 
 	d := BuildDataFromReadonlyContext(ctx)
 	if d.State.Get("k") != "v" {
-		t.Errorf("state value missing")
+		t.Errorf("got state value %v, want %q", d.State.Get("k"), "v")
 	}
 	if d.User.Text != "hello" {
-		t.Errorf("user text = %q", d.User.Text)
+		t.Errorf("got user text %q, want %q", d.User.Text, "hello")
 	}
 	if d.Session.ID != "ro-session" || d.Session.AppName != "ro-app" || d.Session.UserID != "ro-user" {
-		t.Errorf("session fields wrong: %+v", d.Session)
+		t.Errorf("got session %+v, want ID=%q AppName=%q UserID=%q", d.Session, "ro-session", "ro-app", "ro-user")
 	}
 	if d.Agent.Name != "ro-agent" {
 		t.Errorf("agent name = %q", d.Agent.Name)
@@ -179,7 +181,7 @@ func TestBuildDataFromReadonlyContext(t *testing.T) {
 		t.Error("readonly context without extended methods should not populate Memory")
 	}
 	if _, err := d.Artifact("missing"); err == nil {
-		t.Error("expected artifact error when no artifact source available")
+		t.Error("got nil error, want artifact error when no artifact source available")
 	}
 }
 
@@ -270,10 +272,10 @@ func TestBuildDataFromInvocationContext(t *testing.T) {
 func TestBuildDataFromInvocationContext_Nil(t *testing.T) {
 	d := BuildDataFromInvocationContext(nil)
 	if d == nil {
-		t.Fatal("expected non-nil TemplateData")
+		t.Fatal("got nil TemplateData, want non-nil")
 	}
 	if d.State != nil || d.Session != nil || d.Agent != nil {
-		t.Error("expected nil fields for nil context")
+		t.Error("got non-nil fields, want nil for nil context")
 	}
 }
 
@@ -302,8 +304,8 @@ func TestStateData(t *testing.T) {
 
 func TestArtifactOptional(t *testing.T) {
 	d := &TemplateData{ctx: context.Background()}
-	if _, err := d.Artifact("missing"); err == nil {
-		t.Error("expected error for missing artifact with no source")
+	if _, err := d.Artifact("missing"); !errors.Is(err, ErrNoArtifactSource) {
+		t.Errorf("got %v, want ErrNoArtifactSource for missing artifact with no source", err)
 	}
 	text, err := d.Artifact("missing", true)
 	if err != nil {
@@ -314,7 +316,7 @@ func TestArtifactOptional(t *testing.T) {
 	}
 }
 
-func TestFunctions(t *testing.T) {
+func TestEngine_Functions(t *testing.T) {
 	e := New()
 	tests := []struct {
 		name string
@@ -347,6 +349,24 @@ func TestFunctions(t *testing.T) {
 			want: "short",
 		},
 		{
+			name: "truncate n=3 exact fit",
+			tmpl: "{{.Input.Text | truncate 3}}",
+			data: BuildData(map[string]any{"Text": "hello"}),
+			want: "...",
+		},
+		{
+			name: "truncate n=2 no ellipsis room",
+			tmpl: "{{.Input.Text | truncate 2}}",
+			data: BuildData(map[string]any{"Text": "hello"}),
+			want: "he",
+		},
+		{
+			name: "truncate n=1 no ellipsis room",
+			tmpl: "{{.Input.Text | truncate 1}}",
+			data: BuildData(map[string]any{"Text": "hello"}),
+			want: "h",
+		},
+		{
 			name: "indent",
 			tmpl: "{{.Input.Text | indent \"  \"}}",
 			data: BuildData(map[string]any{"Text": "a\nb"}),
@@ -363,6 +383,24 @@ func TestFunctions(t *testing.T) {
 			tmpl: "{{.Input.Val | default \"fallback\"}}",
 			data: BuildData(map[string]any{"Val": "set"}),
 			want: "set",
+		},
+		{
+			name: "default empty slice uses fallback",
+			tmpl: "{{.Input.Val | default \"fallback\"}}",
+			data: BuildData(map[string]any{"Val": []string{}}),
+			want: "fallback",
+		},
+		{
+			name: "default empty map uses fallback",
+			tmpl: "{{.Input.Val | default \"fallback\"}}",
+			data: BuildData(map[string]any{"Val": map[string]int{}}),
+			want: "fallback",
+		},
+		{
+			name: "default non-empty slice kept",
+			tmpl: "{{.Input.Val | default \"fallback\"}}",
+			data: BuildData(map[string]any{"Val": []string{"x"}}),
+			want: "[x]",
 		},
 		{
 			name: "join",
@@ -443,7 +481,7 @@ func TestProvider(t *testing.T) {
 	}
 
 	if _, err := NewInstructionProvider("{{if}"); err == nil {
-		t.Error("expected error for invalid template")
+		t.Error("got nil error, want error for invalid template")
 	}
 }
 
@@ -490,14 +528,14 @@ func TestLoader(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenRoot: %v", err)
 		}
-		defer func() { _ = root.Close() }()
+		t.Cleanup(func() { _ = root.Close() })
 		fileLoader := NewLoader(e, root)
 		tmpl, err := fileLoader.LoadFromFile("test.tmpl")
 		if err != nil {
 			t.Fatalf("load file: %v", err)
 		}
 		if tmpl.Name() != "test.tmpl" {
-			t.Errorf("template name = %q", tmpl.Name())
+			t.Errorf("got template name %q, want %q", tmpl.Name(), "test.tmpl")
 		}
 		got, err := tmpl.Execute(BuildData(map[string]any{"name": "file"}))
 		if err != nil || got != "name=file" {
@@ -510,18 +548,18 @@ func TestLoader(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenRoot: %v", err)
 		}
-		defer func() { _ = root.Close() }()
+		t.Cleanup(func() { _ = root.Close() })
 		fileLoader := NewLoader(e, root)
 		_, err = fileLoader.LoadFromFile("missing.tmpl")
-		if err == nil {
-			t.Error("expected error for missing file")
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("got %v, want fs.ErrNotExist for missing file", err)
 		}
 	})
 
 	t.Run("nil root", func(t *testing.T) {
 		_, err := loader.LoadFromFile("test.tmpl")
 		if err == nil {
-			t.Error("expected error for nil filesystem")
+			t.Error("got nil error, want error for nil filesystem")
 		}
 	})
 
@@ -561,7 +599,7 @@ func TestRegistry(t *testing.T) {
 
 	t.Run("duplicate", func(t *testing.T) {
 		if err := r.Register("hello", "x"); err == nil {
-			t.Error("expected duplicate registration error")
+			t.Error("got nil error, want duplicate registration error")
 		}
 	})
 
@@ -575,7 +613,7 @@ func TestRegistry(t *testing.T) {
 		names := r.Names()
 		want := []string{"a", "b", "hello"}
 		if len(names) != len(want) || names[0] != "a" || names[1] != "b" || names[2] != "hello" {
-			t.Errorf("names = %v", names)
+			t.Errorf("got names = %v, want %v", names, want)
 		}
 	})
 
@@ -593,7 +631,7 @@ func TestRegistry(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		_, err := r.Render("missing", testutil.NewFakeReadonlyContext())
 		if err == nil {
-			t.Error("expected error for missing template")
+			t.Error("got nil error, want error for missing template")
 		}
 	})
 
@@ -604,7 +642,10 @@ func TestRegistry(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				name := "tmpl" + string(rune('a'+i%26))
-				_ = r.Register(name, "{{.Input.i}}")
+				if err := r.Register(name, "{{.Input.i}}"); err != nil {
+					// Duplicate registration is expected for collisions; ignore.
+					return
+				}
 				if tmpl, ok := r.Get(name); ok {
 					if _, err := tmpl.Execute(BuildData(map[string]any{"i": i})); err != nil {
 						t.Errorf("execute template %q: %v", name, err)
@@ -643,8 +684,8 @@ func TestTemplateRef(t *testing.T) {
 			{Name: "x", Path: "/y", Inline: "z"},
 		}
 		for _, ref := range invalid {
-			if err := ref.Validate(); err == nil {
-				t.Errorf("expected error for %v", ref)
+			if err := ref.Validate(); !errors.Is(err, ErrTemplateRefInvalid) {
+				t.Errorf("got %v for %v, want ErrTemplateRefInvalid", err, ref)
 			}
 		}
 	})
@@ -655,7 +696,10 @@ func TestTemplateRef(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		got, _ := tmpl.Execute(BuildData(map[string]any{"i": 7}))
+		got, err := tmpl.Execute(BuildData(map[string]any{"i": 7}))
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
 		if got != "i=7" {
 			t.Errorf("got %q", got)
 		}
@@ -667,7 +711,10 @@ func TestTemplateRef(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		got, _ := tmpl.Execute(BuildData(map[string]any{"v": "ok"}))
+		got, err := tmpl.Execute(BuildData(map[string]any{"v": "ok"}))
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
 		if got != "ok" {
 			t.Errorf("got %q", got)
 		}
@@ -683,14 +730,17 @@ func TestTemplateRef(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenRoot: %v", err)
 		}
-		defer func() { _ = root.Close() }()
+		t.Cleanup(func() { _ = root.Close() })
 		fileLoader := NewLoader(e, root)
 		ref := &TemplateRef{Path: "file.tmpl"}
 		tmpl, err := ref.Resolve(r, fileLoader)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		got, _ := tmpl.Execute(BuildData(map[string]any{"p": "path"}))
+		got, err := tmpl.Execute(BuildData(map[string]any{"p": "path"}))
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
 		if got != "p=path" {
 			t.Errorf("got %q", got)
 		}
@@ -712,7 +762,7 @@ func TestRegistry_RegisterFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRoot: %v", err)
 	}
-	defer func() { _ = root.Close() }()
+	t.Cleanup(func() { _ = root.Close() })
 
 	if rerr := r.RegisterFile("greeting", root, "greeting.tmpl"); rerr != nil {
 		t.Fatalf("RegisterFile: %v", rerr)
@@ -730,7 +780,7 @@ func TestRegistry_RegisterFile(t *testing.T) {
 	}
 }
 
-func TestExampleFullFlow(t *testing.T) {
+func TestEngine_ExampleFullFlow(t *testing.T) {
 	ctx := newFullContext(t)
 
 	artifactSvc := testutil.NewFakeArtifactService()
@@ -752,7 +802,7 @@ func TestExampleFullFlow(t *testing.T) {
 		t.Fatalf("provider: %v", err)
 	}
 	if !strings.Contains(got, "Be concise.") || !strings.Contains(got, "Wonderland") {
-		t.Errorf("full output missing expected text: %q", got)
+		t.Errorf("got output %q, want it to contain 'Be concise.' and 'Wonderland'", got)
 	}
 
 	got, err = providerFn(ctx)
@@ -762,4 +812,119 @@ func TestExampleFullFlow(t *testing.T) {
 	if !strings.Contains(got, "Lang: fr") {
 		t.Errorf("input fn output missing: %q", got)
 	}
+}
+
+// FuzzTemplateParse verifies that New().Parse(name, text) never panics on
+// arbitrary template text. Valid templates should parse without error; invalid
+// templates should return an error (no panic).
+func FuzzTemplateParse(f *testing.F) {
+	// Seed: valid template.
+	f.Add("{{.Input}}")
+	// Seed: invalid template (unclosed action).
+	f.Add("{{if}}")
+	// Seed: empty string.
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, text string) {
+		e := New()
+		tmpl, err := e.Parse("fuzz", text)
+		// The function must not panic — reaching here is the primary assertion.
+		// If parsing succeeded, tmpl must be non-nil.
+		if err == nil && tmpl == nil {
+			t.Error("Parse returned nil template with nil error")
+		}
+		// If parsing failed, tmpl should be nil — both outcomes are acceptable
+		// as long as no panic occurred.
+	})
+}
+
+// TestEngine_ExecuteNilTemplateData verifies that Execute with a nil
+// *TemplateData does not panic — it must either return an error or produce
+// empty output. A template that references fields on nil data is expected to
+// error; a template with no field references should produce empty output.
+func TestEngine_ExecuteNilTemplateData(t *testing.T) {
+	t.Parallel()
+	e := New()
+
+	t.Run("field reference errors", func(t *testing.T) {
+		t.Parallel()
+		tmpl := e.MustParse("nil-data", "Hello {{.Input.name}}!")
+		// Reaching here without panicking is the primary assertion.
+		got, err := tmpl.Execute(nil)
+		if err == nil && got != "" {
+			t.Errorf("got %q with nil error, want either error or empty output", got)
+		}
+	})
+
+	t.Run("no field references produces empty", func(t *testing.T) {
+		t.Parallel()
+		tmpl := e.MustParse("nil-data-static", "static text")
+		got, err := tmpl.Execute(nil)
+		if err != nil {
+			t.Fatalf("Execute(nil) with static template returned error: %v", err)
+		}
+		if got != "static text" {
+			t.Errorf("got %q, want %q", got, "static text")
+		}
+	})
+}
+
+// TestEngine_ExecuteEmptyTemplate verifies that parsing and executing an empty
+// template string produces empty output without error.
+func TestEngine_ExecuteEmptyTemplate(t *testing.T) {
+	t.Parallel()
+	e := New()
+	tmpl, err := e.Parse("empty", "")
+	if err != nil {
+		t.Fatalf("Parse empty template: %v", err)
+	}
+	got, err := tmpl.Execute(BuildData(nil))
+	if err != nil {
+		t.Fatalf("Execute empty template: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
+
+// TestEngine_ExecuteUnicode verifies that unicode content in both the template
+// text and the input data is preserved through rendering.
+func TestEngine_ExecuteUnicode(t *testing.T) {
+	t.Parallel()
+	e := New()
+	tmpl, err := e.Parse("unicode", "Hello, 世界! {{.Input.name}}")
+	if err != nil {
+		t.Fatalf("Parse unicode template: %v", err)
+	}
+	got, err := tmpl.Execute(BuildData(map[string]any{"name": "こんにちは"}))
+	if err != nil {
+		t.Fatalf("Execute unicode template: %v", err)
+	}
+	want := "Hello, 世界! こんにちは"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// FuzzTemplateExecute verifies that tmpl.Execute(BuildData(...)) never panics
+// on arbitrary string data values. The template is fixed and valid; we fuzz
+// the data value to ensure execution handles any string gracefully.
+func FuzzTemplateExecute(f *testing.F) {
+	// Seed: valid string value.
+	f.Add("value")
+	// Seed: empty string.
+	f.Add("")
+	// Seed: string with special characters.
+	f.Add("{{not a template}}")
+
+	f.Fuzz(func(t *testing.T, value string) {
+		e := New()
+		tmpl := e.MustParse("fuzz-exec", "{{.Input.key}}")
+		_, err := tmpl.Execute(BuildData(map[string]any{"key": value}))
+		// The function must not panic — reaching here is the primary assertion.
+		// For a valid template with string data, execution should succeed.
+		if err != nil {
+			t.Errorf("Execute with string value %q returned error: %v", value, err)
+		}
+	})
 }

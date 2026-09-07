@@ -1,8 +1,8 @@
 // Package planner provides interfaces and types for generating structured
 // execution plans before an agent acts.
 //
-// A Planner inspects the user's message, the available tools, and the
-// conversation history, then produces an ordered sequence of [PlanStep] values
+// A Planner inspects the user's message and the available tools, then
+// produces an ordered sequence of [PlanStep] values
 // that the agent should execute. This separates the "thinking" phase (planning)
 // from the "doing" phase (execution), which can improve reliability and
 // observability in complex agentic workflows.
@@ -42,8 +42,9 @@ import (
 // Implementations should be safe for concurrent use.
 type Planner interface {
 	// GeneratePlan constructs a [Plan] from the provided [PlanRequest].
-	// It returns an error if the underlying model call fails or if the
-	// response cannot be parsed into a valid plan.
+	// It returns an error if the underlying model call fails. Implementations
+	// may return an error or fall back to a default plan if the response
+	// cannot be parsed.
 	GeneratePlan(ctx context.Context, input *PlanRequest) (*Plan, error)
 }
 

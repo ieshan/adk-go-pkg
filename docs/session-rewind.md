@@ -23,9 +23,21 @@ after a target and recalculating session state from the retained events'
 3. Collect events `[0..target]` (inclusive).
 4. Replay each retained event's `StateDelta` to rebuild session state (skipping
    `app:`, `user:`, and `temp:` prefixed keys, which are managed by the service).
-5. Persist the truncated session via a create-before-delete swap to minimise
-   data loss windows.
+5. Persist the truncated session via a temp-session swap:
+   1. Create a temporary session and append the kept events to it (safety copy).
+   2. Delete the original session.
+   3. Create a new session with the original ID and the recalculated state.
+   4. Append the kept events to the new session.
+   5. Delete the temporary session.
+   This minimises the window where data is missing — the temp session holds a
+   full copy until the new session with the original ID is ready.
 6. Return the new session.
+
+> **Implementation detail — double append:** The kept events are appended
+> twice: once to the temporary session (step 5.1) and again to the final
+> session with the original ID (step 5.4). This is intentional — the temp
+> session serves as a safety copy so that if session creation with the
+> original ID fails, the events are not lost.
 
 ## API Reference
 
@@ -40,7 +52,8 @@ func Rewind(
 ```
 
 Truncates the session to the event with the given ID. Returns an error if the
-event ID is not found.
+event ID is not found. If the session has no events, returns an error of the
+form `rewind: session %q has no events`.
 
 ### RewindToIndex
 
@@ -54,13 +67,16 @@ func RewindToIndex(
 ```
 
 Truncates the session to the event at the given 0-based index. `targetIndex`
-must be in `[0, eventCount-1]`.
+must be in `[0, eventCount-1]`. If the session has no events, returns an error
+of the form `rewind: session %q has no events`.
 
 ## Examples
 
 ### Rewind by Event ID
 
 ```go
+package main
+
 import (
     "context"
     "fmt"
@@ -70,28 +86,46 @@ import (
     "google.golang.org/adk/v2/session"
 )
 
-ctx := context.Background()
-svc := session.InMemoryService()
+func main() {
+    ctx := context.Background()
+    svc := session.InMemoryService()
 
-// Assume session "sess-1" has events with IDs: "e0", "e1", "e2", "e3", "e4"
-// Rewind to "e2" discards "e3" and "e4".
+    // Assume session "sess-1" has events with IDs: "e0", "e1", "e2", "e3", "e4"
+    // Rewind to "e2" discards "e3" and "e4".
 
-rewound, err := rewind.Rewind(ctx, svc, "my-app", "user-1", "sess-1", "e2")
-if err != nil {
-    log.Fatal(err)
+    rewound, err := rewind.Rewind(ctx, svc, "my-app", "user-1", "sess-1", "e2")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("events remaining:", rewound.Events().Len()) // 3
 }
-fmt.Println("events remaining:", rewound.Events().Len()) // 3
 ```
 
 ### Rewind by Index
 
 ```go
-// Keep only the first 3 events (indices 0, 1, 2).
-rewound, err := rewind.RewindToIndex(ctx, svc, "my-app", "user-1", "sess-1", 2)
-if err != nil {
-    log.Fatal(err)
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/ieshan/adk-go-pkg/session/rewind"
+    "google.golang.org/adk/v2/session"
+)
+
+func main() {
+    ctx := context.Background()
+    svc := session.InMemoryService()
+
+    // Keep only the first 3 events (indices 0, 1, 2).
+    rewound, err := rewind.RewindToIndex(ctx, svc, "my-app", "user-1", "sess-1", 2)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("events remaining:", rewound.Events().Len()) // 3
 }
-fmt.Println("events remaining:", rewound.Events().Len()) // 3
 ```
 
 ### State Recalculation

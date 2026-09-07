@@ -1,15 +1,17 @@
-package eval
+package eval_test
 
 import (
 	"context"
 	"testing"
+
+	"github.com/ieshan/adk-go-pkg/eval"
 )
 
 func TestMultiTurnTaskSuccessV1_NotEvaluated(t *testing.T) {
-	evalMetric := EvalMetric{MetricName: string(MultiTurnTaskSuccessV1)}
-	evaluator := NewMultiTurnTaskSuccessV1Evaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: string(eval.MultiTurnTaskSuccessV1)}
+	evaluator := eval.NewMultiTurnTaskSuccessV1Evaluator(evalMetric)
 
-	inv := []Invocation{{
+	inv := []eval.Invocation{{
 		FinalResponse: textToContent("task completed"),
 	}}
 
@@ -17,16 +19,16 @@ func TestMultiTurnTaskSuccessV1_NotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusNotEvaluated {
-		t.Errorf("should return NOT_EVALUATED, got %v", result.OverallEvalStatus)
+	if result.OverallEvalStatus != eval.EvalStatusNotEvaluated {
+		t.Errorf("got %v, want NOT_EVALUATED", result.OverallEvalStatus)
 	}
 }
 
 func TestMultiTurnTrajectoryQualityV1_NotEvaluated(t *testing.T) {
-	evalMetric := EvalMetric{MetricName: string(MultiTurnTrajectoryQualityV1)}
-	evaluator := NewMultiTurnTrajectoryQualityV1Evaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: string(eval.MultiTurnTrajectoryQualityV1)}
+	evaluator := eval.NewMultiTurnTrajectoryQualityV1Evaluator(evalMetric)
 
-	inv := []Invocation{{
+	inv := []eval.Invocation{{
 		FinalResponse: textToContent("response"),
 	}}
 
@@ -34,16 +36,16 @@ func TestMultiTurnTrajectoryQualityV1_NotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusNotEvaluated {
-		t.Errorf("should return NOT_EVALUATED, got %v", result.OverallEvalStatus)
+	if result.OverallEvalStatus != eval.EvalStatusNotEvaluated {
+		t.Errorf("got %v, want NOT_EVALUATED", result.OverallEvalStatus)
 	}
 }
 
 func TestMultiTurnToolUseQualityV1_NotEvaluated(t *testing.T) {
-	evalMetric := EvalMetric{MetricName: string(MultiTurnToolUseQualityV1)}
-	evaluator := NewMultiTurnToolUseQualityV1Evaluator(evalMetric)
+	evalMetric := eval.EvalMetric{MetricName: string(eval.MultiTurnToolUseQualityV1)}
+	evaluator := eval.NewMultiTurnToolUseQualityV1Evaluator(evalMetric)
 
-	inv := []Invocation{{
+	inv := []eval.Invocation{{
 		FinalResponse: textToContent("response"),
 	}}
 
@@ -51,7 +53,7 @@ func TestMultiTurnToolUseQualityV1_NotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateInvocations failed: %v", err)
 	}
-	if result.OverallEvalStatus != EvalStatusNotEvaluated {
-		t.Errorf("should return NOT_EVALUATED, got %v", result.OverallEvalStatus)
+	if result.OverallEvalStatus != eval.EvalStatusNotEvaluated {
+		t.Errorf("got %v, want NOT_EVALUATED", result.OverallEvalStatus)
 	}
 }

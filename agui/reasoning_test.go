@@ -30,7 +30,7 @@ func TestReasoningTracker_FullLifecycle(t *testing.T) {
 
 	got := drain(ch)
 	if len(got) != 6 {
-		t.Fatalf("expected 6 events, got %d", len(got))
+		t.Fatalf("got %d events, want 6", len(got))
 	}
 
 	expected := []events.EventType{

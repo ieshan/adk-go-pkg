@@ -1,4 +1,4 @@
-package agui
+package agui_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/ieshan/adk-go-pkg/agui"
 )
 
 func TestClientAgent_RunStreamsEvents(t *testing.T) {
@@ -20,9 +21,9 @@ func TestClientAgent_RunStreamsEvents(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "event: RUN_FINISHED\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"t1\",\"runId\":\"r1\"}\n\n")
 		flusher.Flush()
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
-	client := NewClientAgent(ClientConfig{Endpoint: server.URL})
+	client := agui.NewClientAgent(agui.ClientConfig{Endpoint: server.URL})
 	var received []events.Event
 	for ev, err := range client.Run(context.Background(), types.RunAgentInput{ThreadID: "t1", RunID: "r1"}) {
 		if err != nil {
@@ -34,7 +35,7 @@ func TestClientAgent_RunStreamsEvents(t *testing.T) {
 	}
 
 	if len(received) != 2 {
-		t.Fatalf("expected 2 events, got %d: %+v", len(received), received)
+		t.Fatalf("got %d events, want 2: %+v", len(received), received)
 	}
 	if received[0].Type() != events.EventTypeRunStarted {
 		t.Errorf("event[0] type = %v, want RUN_STARTED", received[0].Type())
@@ -59,9 +60,9 @@ func TestClientAgent_TextMessage(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "event: RUN_FINISHED\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"t1\",\"runId\":\"r1\"}\n\n")
 		flusher.Flush()
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
-	client := NewClientAgent(ClientConfig{Endpoint: server.URL})
+	client := agui.NewClientAgent(agui.ClientConfig{Endpoint: server.URL})
 	var text string
 	for ev, err := range client.Run(context.Background(), types.RunAgentInput{ThreadID: "t1", RunID: "r1"}) {
 		if err != nil {
@@ -76,7 +77,7 @@ func TestClientAgent_TextMessage(t *testing.T) {
 	}
 
 	if text != "Hello from remote!" {
-		t.Fatalf("expected 'Hello from remote!', got %q", text)
+		t.Fatalf("got %q, want 'Hello from remote!'", text)
 	}
 }
 
@@ -89,11 +90,11 @@ func TestClientAgent_ContextCancellation(t *testing.T) {
 		flusher.Flush()
 		<-r.Context().Done()
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	client := NewClientAgent(ClientConfig{Endpoint: server.URL})
+	client := agui.NewClientAgent(agui.ClientConfig{Endpoint: server.URL})
 	count := 0
 	for ev, err := range client.Run(ctx, types.RunAgentInput{ThreadID: "t1", RunID: "r1"}) {
 		if err != nil {
@@ -107,6 +108,6 @@ func TestClientAgent_ContextCancellation(t *testing.T) {
 		}
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 event before cancellation, got %d", count)
+		t.Fatalf("got %d events, want 1 (before cancellation)", count)
 	}
 }

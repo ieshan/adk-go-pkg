@@ -1,6 +1,9 @@
 package aguiadk
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // Preset builders return a Config with sensible defaults for common AG-UI
 // patterns. Each takes a base Config (typically providing Agent and services)
@@ -11,7 +14,7 @@ import "time"
 // Client tools are accepted in NextRun mode (the client fulfills tool calls
 // and starts a new run with results). State snapshots are enabled.
 func AgenticChatPreset(base Config) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.SessionTimeout = 20 * time.Minute
 	base.ClientTools = &ClientToolConfig{Mode: ClientToolModeNextRun}
 	return base
@@ -24,7 +27,7 @@ func AgenticChatPreset(base Config) Config {
 // structured-output or streaming-tool configuration. Use AgenticGenerativeUIPreset
 // for agents that drive UI state through tool calls mapped to STATE_DELTA events.
 func GenerativeUIPreset(base Config) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.SessionTimeout = 20 * time.Minute
 	base.ClientTools = &ClientToolConfig{Mode: ClientToolModeNextRun}
 	return base
@@ -33,14 +36,17 @@ func GenerativeUIPreset(base Config) Config {
 // HumanInTheLoopPreset returns a Config for a HITL agent that routes
 // consequential actions through approval interrupts. Client tools use
 // NextRun mode so the client can show approval UI and resume with the result.
-// When autoApprove is true, no RunStore is configured (tools execute without
-// interrupt); when false, an in-memory RunStore is created for the
-// interrupt/resume cycle.
+// When autoApprove is true, ApprovalModeFunc is set to always return true so
+// the bridge skips the approval interrupt and the run finishes normally
+// (the client executes the tool in a new run), and no RunStore is configured;
+// when false, an in-memory RunStore is created for the interrupt/resume cycle.
 func HumanInTheLoopPreset(base Config, autoApprove bool) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.SessionTimeout = 30 * time.Minute
 	base.ClientTools = &ClientToolConfig{Mode: ClientToolModeNextRun}
-	if !autoApprove && base.RunStore == nil {
+	if autoApprove {
+		base.ApprovalModeFunc = func(*http.Request) bool { return true }
+	} else if base.RunStore == nil {
 		base.RunStore = NewRunStore()
 	}
 	return base
@@ -51,7 +57,7 @@ func HumanInTheLoopPreset(base Config, autoApprove bool) Config {
 // STATE_DELTA events via the provided mapper. This lets tool invocations
 // appear as state mutations in the UI.
 func SharedStatePreset(base Config, mapper ToolToStateMapper) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.SessionTimeout = 20 * time.Minute
 	base.SuppressToolEvents = true
 	base.ToolToStateMapper = mapper
@@ -63,7 +69,7 @@ func SharedStatePreset(base Config, mapper ToolToStateMapper) Config {
 // The handler must mount the /tool-result endpoint (use Handler() which
 // does this automatically when ClientToolModeInline is set).
 func InlineToolsPreset(base Config) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.SessionTimeout = 20 * time.Minute
 	base.ClientTools = &ClientToolConfig{
 		Mode:    ClientToolModeInline,
@@ -78,7 +84,7 @@ func InlineToolsPreset(base Config) Config {
 // result. MESSAGES_SNAPSHOT is enabled so the client gets the full conversation
 // state at hand-back time.
 func HandBackPreset(base Config) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.EmitMessagesSnapshot = true
 	base.SessionTimeout = 20 * time.Minute
 	base.ClientTools = &ClientToolConfig{Mode: ClientToolModeHandBack}
@@ -91,10 +97,9 @@ func HandBackPreset(base Config) Config {
 // for streaming tool progress, and step events for phase tracking. The agent
 // should use agui.PredictiveStateTracker to emit predictive deltas.
 func PredictiveStatePreset(base Config) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.EmitActivityDeltas = true
-	stepOn := true
-	base.EmitStepEvents = &stepOn
+	base.EmitStepEvents = new(true)
 	base.SessionTimeout = 20 * time.Minute
 	return base
 }
@@ -105,15 +110,11 @@ func PredictiveStatePreset(base Config) Config {
 // instead, the provided mapper converts tool invocations into state mutations.
 // Step events and messages snapshots are enabled for UI consistency.
 func AgenticGenerativeUIPreset(base Config, mapper ToolToStateMapper) Config {
-	base.EmitStateSnapshot = boolPtr(true)
+	base.EmitStateSnapshot = new(true)
 	base.EmitMessagesSnapshot = true
-	stepOn := true
-	base.EmitStepEvents = &stepOn
+	base.EmitStepEvents = new(true)
 	base.SuppressToolEvents = true
 	base.ToolToStateMapper = mapper
 	base.SessionTimeout = 20 * time.Minute
 	return base
 }
-
-// boolPtr returns a pointer to the given bool.
-func boolPtr(b bool) *bool { return &b }

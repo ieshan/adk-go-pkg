@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 )
 
 const defaultMaxSteps = 10
+
+// ErrPlanParseFailed is returned when the LLM response cannot be parsed as a plan JSON.
+var ErrPlanParseFailed = errors.New("planner: failed to parse plan JSON")
 
 // defaultPlanInstruction is the system prompt injected into every planning
 // request when the caller has not supplied a custom PlanInstruction.
@@ -180,7 +184,7 @@ func (p *PlanReActPlanner) GeneratePlan(ctx context.Context, input *PlanRequest)
 
 	plan, err := parsePlanJSON(responseText.String())
 	if err != nil {
-		return nil, fmt.Errorf("planner: failed to parse plan JSON: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrPlanParseFailed, err)
 	}
 
 	// Enforce MaxSteps limit.

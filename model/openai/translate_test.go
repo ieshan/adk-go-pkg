@@ -3,7 +3,6 @@ package openai
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/model"
@@ -26,7 +25,7 @@ func TestContentsToMessages_UserText(t *testing.T) {
 	}
 
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	msg := msgs[0]
 	if msg.Role != "user" {
@@ -53,7 +52,7 @@ func TestContentsToMessages_ModelText(t *testing.T) {
 	}
 
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	if msgs[0].Role != "assistant" {
 		t.Errorf("role: got %q, want %q", msgs[0].Role, "assistant")
@@ -82,7 +81,7 @@ func TestContentsToMessages_SystemInstruction(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(chatReq.Messages) < 2 {
-		t.Fatalf("expected at least 2 messages, got %d", len(chatReq.Messages))
+		t.Fatalf("got %d messages, want at least 2", len(chatReq.Messages))
 	}
 	systemMsg := chatReq.Messages[0]
 	if systemMsg.Role != "system" {
@@ -125,7 +124,7 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 	}
 
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	msg := msgs[0]
 	if msg.Role != "tool" {
@@ -137,7 +136,7 @@ func TestContentsToMessages_FunctionResponse(t *testing.T) {
 	// Verify content contains valid JSON with expected data
 	content, ok := msg.Content.(string)
 	if !ok {
-		t.Fatalf("content: expected string, got %T", msg.Content)
+		t.Fatalf("content: got %T, want string", msg.Content)
 	}
 	var result map[string]any
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
@@ -172,20 +171,20 @@ func TestContentsToMessages_InlineData(t *testing.T) {
 	}
 
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("got %d messages, want 1", len(msgs))
 	}
 	// Content should be a slice of content parts ([]any) for multimodal.
 	parts, ok := msgs[0].Content.([]any)
 	if !ok {
-		t.Fatalf("content: expected []any for multimodal, got %T", msgs[0].Content)
+		t.Fatalf("content: got %T, want []any for multimodal", msgs[0].Content)
 	}
 	if len(parts) != 2 {
-		t.Fatalf("expected 2 content parts, got %d", len(parts))
+		t.Fatalf("got %d content parts, want 2", len(parts))
 	}
 	// Second part should be image_url type.
 	imgPart, ok := parts[1].(map[string]any)
 	if !ok {
-		t.Fatalf("image part: expected map[string]any, got %T", parts[1])
+		t.Fatalf("image part: got %T, want map[string]any", parts[1])
 	}
 	if imgPart["type"] != "image_url" {
 		t.Errorf("image part type: got %v, want %q", imgPart["type"], "image_url")
@@ -228,7 +227,7 @@ func TestBuildChatRequest_BasicFields(t *testing.T) {
 		t.Errorf("stop: got %v, want [### END]", chatReq.Stop)
 	}
 	if chatReq.Stream != false {
-		t.Error("stream: expected false")
+		t.Errorf("stream: got true, want false")
 	}
 }
 
@@ -256,12 +255,12 @@ func TestBuildChatRequest_ResponseSchema(t *testing.T) {
 	}
 
 	if chatReq.ResponseFormat == nil {
-		t.Fatal("response_format: expected non-nil")
+		t.Fatal("response_format: got nil, want non-nil")
 	}
 
 	rfMap, ok := chatReq.ResponseFormat.(map[string]any)
 	if !ok {
-		t.Fatalf("response_format: expected map[string]any, got %T", chatReq.ResponseFormat)
+		t.Fatalf("response_format: got %T, want map[string]any", chatReq.ResponseFormat)
 	}
 	if rfMap["type"] != "json_schema" {
 		t.Errorf("response_format.type: got %v, want %q", rfMap["type"], "json_schema")
@@ -290,12 +289,12 @@ func TestBuildChatRequest_ResponseMIMEType(t *testing.T) {
 	}
 
 	if chatReq.ResponseFormat == nil {
-		t.Fatal("response_format: expected non-nil")
+		t.Fatal("response_format: got nil, want non-nil")
 	}
 
 	rfMap, ok := chatReq.ResponseFormat.(map[string]any)
 	if !ok {
-		t.Fatalf("response_format: expected map[string]any, got %T", chatReq.ResponseFormat)
+		t.Fatalf("response_format: got %T, want map[string]any", chatReq.ResponseFormat)
 	}
 	if rfMap["type"] != "json_object" {
 		t.Errorf("response_format.type: got %v, want %q", rfMap["type"], "json_object")
@@ -322,16 +321,16 @@ func TestTranslateResponse_TextContent(t *testing.T) {
 	llmResp := translateResponse(resp)
 
 	if llmResp == nil {
-		t.Fatal("expected non-nil LLMResponse")
+		t.Fatal("got nil LLMResponse, want non-nil")
 	}
 	if llmResp.Content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 	if llmResp.Content.Role != "model" {
 		t.Errorf("role: got %q, want %q", llmResp.Content.Role, "model")
 	}
 	if len(llmResp.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(llmResp.Content.Parts))
+		t.Fatalf("got %d parts, want 1", len(llmResp.Content.Parts))
 	}
 	if llmResp.Content.Parts[0].Text != "Hello, world!" {
 		t.Errorf("text: got %q, want %q", llmResp.Content.Parts[0].Text, "Hello, world!")
@@ -362,7 +361,7 @@ func TestTranslateResponse_Usage(t *testing.T) {
 	llmResp := translateResponse(resp)
 
 	if llmResp.UsageMetadata == nil {
-		t.Fatal("expected non-nil UsageMetadata")
+		t.Fatal("got nil UsageMetadata, want non-nil")
 	}
 	if llmResp.UsageMetadata.PromptTokenCount != 10 {
 		t.Errorf("prompt tokens: got %d, want 10", llmResp.UsageMetadata.PromptTokenCount)
@@ -411,7 +410,7 @@ func TestMessageToContent_AssistantText(t *testing.T) {
 	content := messageToContent(msg)
 
 	if content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 	if content.Role != "model" {
 		t.Errorf("role: got %q, want %q", content.Role, "model")
@@ -435,7 +434,7 @@ func TestBuildChatRequest_StreamFlag(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !chatReq.Stream {
-		t.Error("stream: expected true")
+		t.Errorf("stream: got false, want true")
 	}
 }
 
@@ -457,7 +456,7 @@ func TestBuildChatRequest_NilConfig(t *testing.T) {
 		t.Errorf("model: got %q, want %q", chatReq.Model, "gpt-4o")
 	}
 	if chatReq.Temperature != nil {
-		t.Errorf("temperature: expected nil, got %v", chatReq.Temperature)
+		t.Errorf("temperature: got %v, want nil", chatReq.Temperature)
 	}
 }
 
@@ -491,14 +490,14 @@ func TestTranslateResponse_ToolCalls(t *testing.T) {
 	llmResp := translateResponse(resp)
 
 	if llmResp.Content == nil {
-		t.Fatal("expected non-nil Content")
+		t.Fatal("got nil Content, want non-nil")
 	}
 	if len(llmResp.Content.Parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(llmResp.Content.Parts))
+		t.Fatalf("got %d parts, want 1", len(llmResp.Content.Parts))
 	}
 	fc := llmResp.Content.Parts[0].FunctionCall
 	if fc == nil {
-		t.Fatal("expected FunctionCall part")
+		t.Fatal("got no FunctionCall part, want one")
 	}
 	if fc.Name != "get_weather" {
 		t.Errorf("function name: got %q, want %q", fc.Name, "get_weather")
@@ -508,7 +507,7 @@ func TestTranslateResponse_ToolCalls(t *testing.T) {
 	}
 	// Args should be parsed from JSON.
 	if fc.Args == nil {
-		t.Fatal("expected non-nil Args")
+		t.Fatal("got nil Args, want non-nil")
 	}
 	_, _ = json.Marshal(fc.Args) // just ensure it's serialisable
 }
@@ -530,7 +529,7 @@ func TestTranslateThoughtPart_Request(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) == 0 {
-		t.Fatal("expected at least one message")
+		t.Fatal("got no messages, want at least one")
 	}
 }
 
@@ -543,10 +542,10 @@ func TestTranslateThoughtPart_Response(t *testing.T) {
 	}
 	content := messageToContent(msg)
 	if content == nil {
-		t.Fatal("expected non-nil content")
+		t.Fatal("got nil content, want non-nil")
 	}
 	if content.Role != "model" {
-		t.Errorf("expected role 'model', got %q", content.Role)
+		t.Errorf("got %q, want role 'model'", content.Role)
 	}
 }
 
@@ -563,10 +562,14 @@ func TestBuildChatRequest_MaxTokensOmittedWhenZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cr.MaxTokens != nil {
-		t.Errorf("expected MaxTokens nil when unset, got %v", *cr.MaxTokens)
+		t.Errorf("got %v for MaxTokens when unset, want nil", *cr.MaxTokens)
 	}
 	data, _ := json.Marshal(cr)
-	if strings.Contains(string(data), "max_tokens") {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal chat request: %v", err)
+	}
+	if _, ok := raw["max_tokens"]; ok {
 		t.Error("max_tokens should be omitted from JSON when nil")
 	}
 }
@@ -584,7 +587,7 @@ func TestContentsToMessages_NilEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(msgs) != 1 {
-		t.Errorf("expected 1 message (skipping nils), got %d", len(msgs))
+		t.Errorf("got %d messages (skipping nils), want 1", len(msgs))
 	}
 }
 
@@ -608,10 +611,10 @@ func TestContentsToMessages_FunctionResponse_NoParts(t *testing.T) {
 
 	_, err := contentsToMessagesErr(contents)
 	if err == nil {
-		t.Fatal("expected error for empty Parts, got nil")
+		t.Fatal("got nil error for empty Parts, want error")
 	}
 	if !errors.Is(err, ErrEmptyFunctionResponseParts) {
-		t.Errorf("expected ErrEmptyFunctionResponseParts, got: %v", err)
+		t.Errorf("got %v, want ErrEmptyFunctionResponseParts", err)
 	}
 }
 
@@ -642,10 +645,10 @@ func TestContentsToMessages_FunctionResponse_EmptyID(t *testing.T) {
 
 	_, err := contentsToMessagesErr(contents)
 	if err == nil {
-		t.Fatal("expected error for empty ID, got nil")
+		t.Fatal("got nil error for empty ID, want error")
 	}
 	if !errors.Is(err, ErrEmptyToolCallID) {
-		t.Errorf("expected ErrEmptyToolCallID, got: %v", err)
+		t.Errorf("got %v, want ErrEmptyToolCallID", err)
 	}
 }
 
@@ -676,9 +679,37 @@ func TestContentsToMessages_FunctionResponse_InvalidJSON(t *testing.T) {
 
 	_, err := contentsToMessagesErr(contents)
 	if err == nil {
-		t.Fatal("expected error for invalid JSON, got nil")
+		t.Fatal("got nil error for invalid JSON, want error")
 	}
 	if !errors.Is(err, ErrInvalidJSONData) {
-		t.Errorf("expected ErrInvalidJSONData, got: %v", err)
+		t.Errorf("got %v, want ErrInvalidJSONData", err)
 	}
+}
+
+// FuzzContentsToMessages verifies that contentsToMessagesErr never panics on
+// arbitrary JSON input. Valid JSON arrays of genai.Content should parse and
+// translate without error; invalid input should return an error (no panic).
+func FuzzContentsToMessages(f *testing.F) {
+	// Seed: valid JSON array of contents.
+	f.Add([]byte(`[{"role":"user","parts":[{"text":"Hello"}]}]`))
+	// Seed: malformed JSON.
+	f.Add([]byte(`invalid json`))
+	// Seed: empty array.
+	f.Add([]byte(`[]`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var contents []*genai.Content
+		if err := json.Unmarshal(data, &contents); err != nil {
+			// Skip unmarshal failures — expected for random bytes.
+			return
+		}
+		msgs, err := contentsToMessagesErr(contents)
+		// The function must not panic — reaching here is the primary assertion.
+		// Both error and non-error outcomes are acceptable as long as no panic
+		// occurred.
+		if err != nil {
+			return
+		}
+		_ = msgs
+	})
 }

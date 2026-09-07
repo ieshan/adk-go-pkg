@@ -43,7 +43,7 @@ func TestParseStream_SimpleText(t *testing.T) {
 	results := collectStream(context.Background(), body)
 
 	if len(results) < 2 {
-		t.Fatalf("expected at least 2 results, got %d", len(results))
+		t.Fatalf("got %d results, want at least 2", len(results))
 	}
 
 	for i, r := range results {
@@ -68,7 +68,7 @@ func TestParseStream_SimpleText(t *testing.T) {
 		}
 	}
 	if textPartialCount == 0 {
-		t.Error("expected at least one chunk with text content and Partial=true")
+		t.Errorf("got no chunk with text content and Partial=true, want at least one")
 	}
 
 	// The last result must have TurnComplete=true.
@@ -77,7 +77,7 @@ func TestParseStream_SimpleText(t *testing.T) {
 		t.Fatalf("last result has unexpected error: %v", last.err)
 	}
 	if last.resp == nil || !last.resp.TurnComplete {
-		t.Errorf("last result: expected TurnComplete=true, got %+v", last.resp)
+		t.Errorf("last result: got %+v, want TurnComplete=true", last.resp)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestParseStream_ToolCalls(t *testing.T) {
 	results := collectStream(context.Background(), body)
 
 	if len(results) == 0 {
-		t.Fatal("expected at least one result")
+		t.Fatal("got no results, want at least one")
 	}
 
 	for i, r := range results {
@@ -113,7 +113,7 @@ func TestParseStream_ToolCalls(t *testing.T) {
 	// The last result must be TurnComplete.
 	last := results[len(results)-1]
 	if last.resp == nil || !last.resp.TurnComplete {
-		t.Errorf("last result: expected TurnComplete=true, got %+v", last.resp)
+		t.Errorf("last result: got %+v, want TurnComplete=true", last.resp)
 	}
 
 	// Scan all results for a FunctionCall Part with the assembled arguments.
@@ -143,7 +143,7 @@ func TestParseStream_ToolCalls(t *testing.T) {
 		}
 	}
 	if !foundFC {
-		t.Error("expected at least one FunctionCall Part across all results")
+		t.Errorf("got no FunctionCall Part across all results, want at least one")
 	}
 }
 
@@ -155,14 +155,14 @@ func TestParseStream_Done(t *testing.T) {
 	results := collectStream(context.Background(), body)
 
 	if len(results) != 1 {
-		t.Fatalf("expected exactly 1 result, got %d", len(results))
+		t.Fatalf("got %d results, want exactly 1", len(results))
 	}
 	r := results[0]
 	if r.err != nil {
 		t.Fatalf("unexpected error: %v", r.err)
 	}
 	if r.resp == nil || !r.resp.TurnComplete {
-		t.Errorf("expected TurnComplete=true, got %+v", r.resp)
+		t.Errorf("got %+v, want TurnComplete=true", r.resp)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestParseStream_EmptyLines(t *testing.T) {
 	results := collectStream(context.Background(), body)
 
 	if len(results) == 0 {
-		t.Fatal("expected at least one result")
+		t.Fatal("got no results, want at least one")
 	}
 
 	for i, r := range results {
@@ -193,7 +193,7 @@ func TestParseStream_EmptyLines(t *testing.T) {
 
 	last := results[len(results)-1]
 	if last.resp == nil || !last.resp.TurnComplete {
-		t.Errorf("last result: expected TurnComplete=true")
+		t.Errorf("last result: got TurnComplete=false, want true")
 	}
 }
 
@@ -219,7 +219,7 @@ func TestParseStream_ContextCancellation(t *testing.T) {
 	}
 
 	if len(results) == 0 {
-		t.Fatal("expected at least one result before cancellation")
+		t.Fatal("got no results before cancellation, want at least one")
 	}
 
 	foundInterrupted := false
@@ -230,7 +230,7 @@ func TestParseStream_ContextCancellation(t *testing.T) {
 		}
 	}
 	if !foundInterrupted {
-		t.Errorf("expected an Interrupted=true result after context cancellation; got %d result(s)", len(results))
+		t.Errorf("got %d result(s) after context cancellation, want an Interrupted=true result", len(results))
 	}
 }
 
@@ -242,7 +242,7 @@ func TestParseStream_MalformedJSON(t *testing.T) {
 	results := collectStream(context.Background(), body)
 
 	if len(results) == 0 {
-		t.Fatal("expected at least one result containing an error")
+		t.Fatal("got no results containing an error, want at least one")
 	}
 
 	foundErr := false
@@ -253,6 +253,33 @@ func TestParseStream_MalformedJSON(t *testing.T) {
 		}
 	}
 	if !foundErr {
-		t.Errorf("expected an error result for malformed JSON, but none was yielded")
+		t.Errorf("got no error result for malformed JSON, want one")
 	}
+}
+
+// FuzzParseStream verifies that parseStream never panics on arbitrary input
+// and always terminates (the iterator reaches completion).
+func FuzzParseStream(f *testing.F) {
+	// Seed: valid SSE stream with text content and DONE sentinel.
+	f.Add(strings.Join([]string{
+		`data: {"id":"1","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]}`,
+		``,
+		`data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n"))
+	// Seed: malformed JSON.
+	f.Add("data: {invalid\n")
+	// Seed: empty input.
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		ctx := context.Background()
+		for resp, err := range parseStream(ctx, strings.NewReader(input)) {
+			// The function must not panic. Errors are acceptable for malformed input.
+			_ = resp
+			_ = err
+		}
+	})
 }

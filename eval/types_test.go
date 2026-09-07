@@ -1,9 +1,10 @@
-package eval
+package eval_test
 
 import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ieshan/adk-go-pkg/eval"
 	"google.golang.org/genai"
 )
 
@@ -29,7 +30,7 @@ func TestInvocationUnmarshalJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var inv Invocation
+			var inv eval.Invocation
 			err := json.Unmarshal([]byte(tt.json), &inv)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
@@ -70,7 +71,7 @@ func TestEvalCaseUnmarshalJSON_XORValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var ec EvalCase
+			var ec eval.EvalCase
 			err := json.Unmarshal([]byte(tt.json), &ec)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
@@ -80,13 +81,13 @@ func TestEvalCaseUnmarshalJSON_XORValidation(t *testing.T) {
 }
 
 func TestEvalSetJSONRoundTrip(t *testing.T) {
-	original := &EvalSet{
+	original := &eval.EvalSet{
 		EvalSetID: "test-set",
 		Name:      "Test Set",
-		EvalCases: []EvalCase{
+		EvalCases: []eval.EvalCase{
 			{
 				EvalID: "case-1",
-				Conversation: []Invocation{
+				Conversation: []eval.Invocation{
 					{
 						UserContent:   &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "hello"}}},
 						FinalResponse: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "world"}}},
@@ -101,7 +102,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 		t.Fatalf("Marshal failed: %v", err)
 	}
 
-	var decoded EvalSet
+	var decoded eval.EvalSet
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 		t.Errorf("EvalSetID = %q, want %q", decoded.EvalSetID, original.EvalSetID)
 	}
 	if len(decoded.EvalCases) != 1 {
-		t.Fatalf("len(EvalCases) = %d, want 1", len(decoded.EvalCases))
+		t.Errorf("len(EvalCases) = %d, want 1", len(decoded.EvalCases))
 	}
 	if decoded.EvalCases[0].EvalID != "case-1" {
 		t.Errorf("EvalID = %q, want %q", decoded.EvalCases[0].EvalID, "case-1")
@@ -118,7 +119,7 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 }
 
 func TestNewEvalSet(t *testing.T) {
-	es := NewEvalSet("my-set")
+	es := eval.NewEvalSet("my-set")
 	if es.EvalSetID != "my-set" {
 		t.Errorf("EvalSetID = %q, want %q", es.EvalSetID, "my-set")
 	}
@@ -134,7 +135,7 @@ func TestNewEvalSet(t *testing.T) {
 }
 
 func TestSessionStateTypeAlias(t *testing.T) {
-	var s = SessionState(map[string]any{"key": "value"})
+	var s = eval.SessionState(map[string]any{"key": "value"})
 	if s["key"] != "value" {
 		t.Error("SessionState map not working")
 	}

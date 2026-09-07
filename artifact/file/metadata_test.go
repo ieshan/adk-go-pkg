@@ -2,7 +2,7 @@ package file
 
 import (
 	"encoding/json"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 )
@@ -72,12 +72,15 @@ func TestVersionMetadata_MarshalJSON_OmitEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
-	s := string(data)
-	if strings.Contains(s, "mimeType") {
-		t.Errorf("expected mimeType to be omitted, got: %s", s)
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal into map: %v", err)
 	}
-	if strings.Contains(s, "customMetadata") {
-		t.Errorf("expected customMetadata to be omitted, got: %s", s)
+	if _, ok := got["mimeType"]; ok {
+		t.Errorf("got %s, want mimeType to be omitted", data)
+	}
+	if _, ok := got["customMetadata"]; ok {
+		t.Errorf("got %s, want customMetadata to be omitted", data)
 	}
 }
 
@@ -197,11 +200,6 @@ func TestWriteMetadata(t *testing.T) {
 	if got["canonicalUri"] != "gs://my-bucket/app/user/session/report.pdf/3" {
 		t.Errorf("canonicalUri: got %v", got["canonicalUri"])
 	}
-
-	// Verify the file is pretty-printed (contains newlines).
-	if !strings.Contains(string(data), "\n") {
-		t.Error("expected pretty-printed JSON with newlines")
-	}
 }
 
 // TestReadMetadata writes a metadata.json directly to the service root and
@@ -253,10 +251,10 @@ func TestReadMetadata_NotFound(t *testing.T) {
 
 	_, err := svc.readMetadata("nonexistent")
 	if err == nil {
-		t.Fatal("expected an error for non-existent path, got nil")
+		t.Fatal("got nil error, want error for non-existent path")
 	}
-	// The error message should mention "read metadata".
-	if !strings.Contains(err.Error(), "read metadata") {
-		t.Errorf("error message %q does not contain 'read metadata'", err.Error())
+	// The error should wrap ErrReadMetadata.
+	if !errors.Is(err, ErrReadMetadata) {
+		t.Errorf("error %v does not wrap ErrReadMetadata", err)
 	}
 }

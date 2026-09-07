@@ -14,7 +14,7 @@ session state, artifacts, memory, and structured input.
 |------|-------------|
 | `TemplateEngine` | Parses and executes `text/template` prompts. Immutable after construction. |
 | `Template` | A parsed prompt template. Call `Execute` to render. |
-| `TemplateData` | Top-level data object passed to templates. Exposes `.State`, `.User`, `.Session`, `.Agent`, `.Memory`, `.App`, `.Input`, and `.Artifact`. |
+| `TemplateData` | Top-level data object passed to templates. Exposes `.State`, `.User`, `.Session`, `.Agent`, `.Memory`, `.App`, `.Input` (struct fields), and `.Artifact` (a method, not a field). |
 | `TemplateRegistry` | Thread-safe registry of named templates. Parses once, executes many. |
 | `TemplateLoader` | Loads templates from strings, files, or `embed.FS`. |
 | `TemplateRef` | Tagged union for referencing a template by name, inline text, or file path. |
@@ -83,7 +83,7 @@ Three builder functions cover different context types:
 |----------|----------|-----------|
 | `BuildData(input)` | Standalone templates (no agent context) | `Input` only |
 | `BuildDataFromReadonlyContext(ctx)` | `agent.ReadonlyContext` (e.g., `InstructionProvider`) | `State`, `User`, `Session`, `Agent`, `App`, and optionally `Memory`/`Artifacts` via type assertion |
-| `BuildDataFromInvocationContext(ctx)` | `agent.InvocationContext` (e.g., inside agent `Run`) | `State`, `User`, `Session`, `Agent`, `App`, `Memory`, `Artifacts` |
+| `BuildDataFromInvocationContext(ctx)` | `agent.InvocationContext` that also satisfies `agent.ReadonlyContext` (e.g., inside agent `Run`) | `State`, `User`, `Session`, `Agent`, `App`, `Memory`, `Artifacts` |
 
 `BuildDataFromReadonlyContext` uses a type assertion to access `Artifacts()`,
 `Memory()`, `Session()`, and `Agent()` methods when the concrete context
@@ -101,7 +101,10 @@ Wraps `session.ReadonlyState` for template access:
 {{range $k, $v := .State.All}}{{$k}}={{$v}};{{end}}
 ```
 
-#### UserData
+`Has` returns `true` when the key exists (no error) **or** when the underlying
+`state.Get` returns any error other than `session.ErrStateKeyNotExist` — i.e.,
+any non-missing error is treated as "key present". Only a missing-key error
+returns `false`.
 
 Exposes the content that started the invocation:
 
@@ -190,7 +193,8 @@ map/slice); otherwise it returns `val`.
 ### TemplateRegistry
 
 Thread-safe registry of named templates. Templates are parsed once and can be
-executed multiple times.
+executed multiple times. `Register` rejects duplicate names — registering a
+name that is already in the registry returns an error.
 
 ```go
 engine := prompt.New()
@@ -299,8 +303,14 @@ provider, err := prompt.NewInstructionProvider(
 
 ### NewInstructionProviderFromTemplate
 
-Creates an `InstructionProvider` from an already-parsed template. Accepts an
-optional `inputFn` that populates `TemplateData.Input` from the agent context:
+Creates an `InstructionProvider` from an already-parsed template. The `inputFn`
+parameter is variadic — at most one callback may be provided. When supplied, it
+is called with the agent context and its return value populates
+`TemplateData.Input` before template execution:
+
+```go
+func NewInstructionProviderFromTemplate(t *Template, inputFn ...func(agent.ReadonlyContext) map[string]any) llmagent.InstructionProvider
+```
 
 ```go
 engine := prompt.New()

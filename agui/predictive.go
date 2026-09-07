@@ -78,7 +78,10 @@ func (p *PredictiveStateTracker) PredictiveDelta(patch []events.JSONPatchOperati
 // prediction — a dropped or garbled prediction cannot corrupt it.
 //
 // If the target path's parent does not exist, Commit creates the intermediate
-// objects so the caller does not need to pre-seed the state tree.
+// objects so the caller does not need to pre-seed the state tree. The fallback
+// uses a nested add on the top-level key; if that key already exists, RFC 6902
+// "add" replaces the existing value rather than merging into it, so existing
+// siblings under the same top-level key may be lost.
 func (p *PredictiveStateTracker) Commit(path string, value any) error {
 	emitOps := []events.JSONPatchOperation{
 		{Op: "add", Path: path, Value: value},
@@ -91,7 +94,7 @@ func (p *PredictiveStateTracker) Commit(path string, value any) error {
 		// client sees the logical commit, not the storage workaround.
 		nestedOps := ensureParentPath(emitOps)
 		if err2 := p.state.Apply(nestedOps); err2 != nil {
-			return fmt.Errorf("agui: apply commit: %w", err)
+			return fmt.Errorf("agui: apply commit: %w", err2)
 		}
 	}
 

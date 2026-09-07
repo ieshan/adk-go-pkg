@@ -65,41 +65,59 @@ type ToolCallAndResponse struct {
 }
 
 // GetAllToolCallsWithResponses pairs tool calls with their responses from
-// an invocation's intermediate data.
+// an invocation's intermediate data. When function call IDs are available,
+// calls and responses are paired by ID (matching ADK-Python). When IDs are
+// absent (e.g. legacy format without IDs), calls and responses are paired
+// by index.
 func GetAllToolCallsWithResponses(invocation Invocation) []ToolCallAndResponse {
 	if invocation.IntermediateData == nil {
 		return nil
 	}
 
-	// Legacy format: pair by index.
-	uses := invocation.IntermediateData.GetToolUses()
-	responses := invocation.IntermediateData.GetToolResponses()
-	if uses != nil {
-		var pairs []ToolCallAndResponse
-		for i, call := range uses {
-			pair := ToolCallAndResponse{Call: &call}
-			if i < len(responses) {
-				pair.Response = &responses[i]
+	calls := GetAllToolCalls(invocation)
+	if calls == nil {
+		return nil
+	}
+	responses := GetAllToolResponses(invocation)
+
+	// Check if any calls have non-empty IDs — if so, use ID-based pairing.
+	hasIDs := false
+	for i := range calls {
+		if calls[i].ID != "" {
+			hasIDs = true
+			break
+		}
+	}
+
+	if hasIDs {
+		// Pair by function call ID (matches ADK-Python).
+		responseByID := make(map[string]*genai.FunctionResponse, len(responses))
+		for i := range responses {
+			if responses[i].ID != "" {
+				responseByID[responses[i].ID] = &responses[i]
+			}
+		}
+		pairs := make([]ToolCallAndResponse, 0, len(calls))
+		for i := range calls {
+			pair := ToolCallAndResponse{Call: &calls[i]}
+			if calls[i].ID != "" {
+				if resp, ok := responseByID[calls[i].ID]; ok {
+					pair.Response = resp
+				}
 			}
 			pairs = append(pairs, pair)
 		}
 		return pairs
 	}
 
-	// Events format.
-	var pairs []ToolCallAndResponse
-	for _, event := range invocation.IntermediateData.GetInvocationEvents() {
-		if event.Content == nil {
-			continue
+	// Fall back to index-based pairing (legacy behavior).
+	pairs := make([]ToolCallAndResponse, 0, len(calls))
+	for i := range calls {
+		pair := ToolCallAndResponse{Call: &calls[i]}
+		if i < len(responses) {
+			pair.Response = &responses[i]
 		}
-		for _, part := range event.Content.Parts {
-			if part.FunctionCall != nil {
-				pairs = append(pairs, ToolCallAndResponse{Call: part.FunctionCall})
-			}
-			if part.FunctionResponse != nil {
-				pairs = append(pairs, ToolCallAndResponse{Response: part.FunctionResponse})
-			}
-		}
+		pairs = append(pairs, pair)
 	}
 	return pairs
 }

@@ -327,7 +327,7 @@ func main() {
 | `Type`    | `string`            | Transport type: `"http"`, `"streamable"`, or `""` (empty string) are all aliases for streamable HTTP; only `"sse"` selects SSE. An empty `Type` defaults to streamable HTTP. |
 | `URL`     | `string`            | MCP server endpoint URL                          |
 | `Headers` | `map[string]string` | Optional HTTP headers for authentication         |
-| `ServerID`| `string`            | Optional. Server identifier for tool namespacing and proxied request routing (see [Proxied MCP Requests](#proxied-mcp-requests)). An empty `ServerID` produces a tool name like `mcp______tool` (with an empty sanitized segment). |
+| `ServerID`| `string`            | Optional. Server identifier for tool namespacing and proxied request routing (see [Proxied MCP Requests](#proxied-mcp-requests)). An empty `ServerID` produces a tool name like `mcp____tool` (with an empty sanitized segment, yielding four underscores between `mcp` and the tool name). |
 
 ### MCPMiddlewareOptions
 
@@ -386,9 +386,12 @@ func CallMCPTool(ctx context.Context, config MCPClientConfig, name string, args 
 func ReadMCPResource(ctx context.Context, config MCPClientConfig, uri string) (any, error)
 
 // ExecuteMCPRequest sends an arbitrary MCP method/params pair to the server.
-func ExecuteMCPRequest(ctx context.Context, config MCPClientConfig, method string, params any) (any, error)
+func ExecuteMCPRequest(ctx context.Context, config MCPClientConfig, method string, params map[string]any) (any, error)
 
 // ExtractTextContent pulls the concatenated text content out of a CallToolResult.
+// If no text content is present, it falls back to JSON-encoding the content
+// array so non-text results (e.g., images, embedded resources) are not
+// silently dropped.
 func ExtractTextContent(result *mcp.CallToolResult) string
 ```
 
@@ -397,8 +400,8 @@ func ExtractTextContent(result *mcp.CallToolResult) string
 The `agui/mcp_naming.go` file exports these helpers:
 
 ```go
-// SanitizeSegment replaces special characters with underscores and truncates
-// a single name segment for use in tool namespacing.
+// SanitizeSegment replaces special characters with underscores and trims
+// leading/trailing underscores from a single name segment for use in tool namespacing.
 func SanitizeSegment(s string) string
 
 // MakeUniqueToolName builds a namespaced tool name (mcp__{server}__{tool}),
@@ -406,9 +409,10 @@ func SanitizeSegment(s string) string
 func MakeUniqueToolName(serverID, toolName string, used map[string]struct{}) string
 
 // GetServerHash returns a stable hash for the server config: SHA-256 of the
-// JSON-encoded {Type, URL, Headers} tuple, first 16 hex chars. It does NOT
-// include ServerID. This matters for frontend fallback routing — two configs
-// differing only in ServerID share the same hash.
+// JSON-encoded {Type, URL, Headers} tuple, first 16 hex chars. The JSON
+// object uses lower-case keys: {"type":...,"url":...,"headers":...}. It does
+// NOT include ServerID. This matters for frontend fallback routing — two
+// configs differing only in ServerID share the same hash.
 func GetServerHash(config MCPClientConfig) string
 ```
 
@@ -434,7 +438,7 @@ type ProxiedMCPRequest struct {
 	ServerHash string
 	ServerID   string
 	Method     string
-	Params     any
+	Params     map[string]any
 }
 ```
 
