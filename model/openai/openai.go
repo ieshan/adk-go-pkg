@@ -2,7 +2,8 @@
 // with OpenAI-compatible APIs.
 //
 // The primary entry point is [New], which constructs a [model.LLM] that speaks
-// the OpenAI Chat Completions API protocol. Any server that is compatible with
+// the OpenAI Chat Completions API protocol (or the Responses API when
+// [Config.API] is set to [APIResponses]). Any server that is compatible with
 // that protocol (e.g. local LLM servers, Azure OpenAI, Together AI, etc.) can
 // be targeted by setting [Config.BaseURL].
 //
@@ -58,6 +59,16 @@ import (
 
 const defaultBaseURL = "https://api.openai.com/v1"
 
+// API selects the OpenAI endpoint flavour.
+type API string
+
+const (
+	// APIChatCompletions selects the /v1/chat/completions endpoint (default).
+	APIChatCompletions API = "chat/completions"
+	// APIResponses selects the /v1/responses endpoint.
+	APIResponses API = "responses"
+)
+
 // HTTPError represents a non-2xx HTTP response from the OpenAI API.
 type HTTPError struct {
 	StatusCode int
@@ -96,6 +107,10 @@ type Config struct {
 	// These are applied after the standard Content-Type and Authorization headers,
 	// so they can be used to override those values if needed.
 	Headers map[string]string
+
+	// API selects the OpenAI endpoint flavour. Defaults to
+	// [APIChatCompletions] when empty, preserving current behaviour.
+	API API
 }
 
 // openaiModel is the unexported concrete type that implements [model.LLM].
@@ -105,6 +120,7 @@ type openaiModel struct {
 	baseURL string
 	client  *http.Client
 	headers map[string]string
+	api     API
 }
 
 // New creates a [model.LLM] that communicates with an OpenAI-compatible Chat
@@ -152,6 +168,7 @@ func New(cfg Config) (model.LLM, error) {
 		baseURL: baseURL,
 		client:  client,
 		headers: hdrs,
+		api:     cfg.API,
 	}, nil
 }
 
@@ -161,8 +178,30 @@ func (m *openaiModel) Name() string {
 	return m.model
 }
 
-// GenerateContent sends the request to the OpenAI Chat Completions endpoint and
-// yields [model.LLMResponse] values. It satisfies the [model.LLM] interface.
+// GenerateContent sends the request to the OpenAI endpoint and yields
+// [model.LLMResponse] values. It satisfies the [model.LLM] interface.
+//
+// When [Config.API] is [APIResponses], the request is sent to the
+// /v1/responses endpoint; otherwise it is sent to /v1/chat/completions.
+//
+// When stream is false, the endpoint is called without streaming; a single
+// response is yielded with TurnComplete set to true.
+//
+// When stream is true, the response body is treated as an SSE stream; each
+// event produces one yield. The caller must consume the full iterator or
+// cancel ctx to release resources.
+//
+// Non-2xx HTTP status codes cause a single error to be yielded and the iterator
+// stops.
+func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	if m.api == APIResponses {
+		return m.generateResponses(ctx, req, stream)
+	}
+	return m.generateChat(ctx, req, stream)
+}
+
+// generateChat sends the request to the OpenAI Chat Completions endpoint and
+// yields [model.LLMResponse] values.
 //
 // When stream is false, the endpoint is called without streaming; the response
 // body is read in full, unmarshalled as a [chatResponse], and translated using
@@ -174,7 +213,7 @@ func (m *openaiModel) Name() string {
 //
 // Non-2xx HTTP status codes cause a single error to be yielded and the iterator
 // stops.
-func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+func (m *openaiModel) generateChat(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
 		// 1. Build the chat request.
 		chatReq, err := buildChatRequest(req, m.model, stream)
@@ -199,13 +238,7 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		}
 
 		// 4. Set standard and custom headers.
-		httpReq.Header.Set("Content-Type", "application/json")
-		if m.apiKey != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
-		}
-		for k, v := range m.headers {
-			httpReq.Header.Set(k, v)
-		}
+		m.setHeaders(httpReq)
 
 		// 5. Execute the request.
 		resp, err := m.client.Do(httpReq)
@@ -252,5 +285,17 @@ func (m *openaiModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		llmResp := translateResponse(&chatResp)
 		llmResp.TurnComplete = true
 		yield(llmResp, nil)
+	}
+}
+
+// setHeaders applies the standard Content-Type, Authorization, and any custom
+// headers to the given HTTP request.
+func (m *openaiModel) setHeaders(httpReq *http.Request) {
+	httpReq.Header.Set("Content-Type", "application/json")
+	if m.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
+	}
+	for k, v := range m.headers {
+		httpReq.Header.Set(k, v)
 	}
 }
