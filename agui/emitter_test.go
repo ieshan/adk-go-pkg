@@ -2,6 +2,7 @@ package agui_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -564,5 +565,193 @@ func TestEventEmitter_ContextCancellationUnblocks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("emitter blocked indefinitely despite context cancellation")
+	}
+}
+
+func TestSubagentStarted(t *testing.T) {
+	ch := make(chan events.Event, 1)
+	em := agui.NewEventEmitter(ch)
+	if err := em.SubagentStarted("sub_run_1", "researcher",
+		events.WithSubagentDescription("Researches topics")); err != nil {
+		t.Fatalf("SubagentStarted: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	ev, ok := got[0].(*events.SubagentStartedEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.SubagentStartedEvent", got[0])
+	}
+	if ev.SubagentRunID != "sub_run_1" {
+		t.Errorf("SubagentRunID = %q, want %q", ev.SubagentRunID, "sub_run_1")
+	}
+	if ev.Name != "researcher" {
+		t.Errorf("Name = %q, want %q", ev.Name, "researcher")
+	}
+	if ev.Description != "Researches topics" {
+		t.Errorf("Description = %q, want %q", ev.Description, "Researches topics")
+	}
+}
+
+func TestSubagentFinished(t *testing.T) {
+	ch := make(chan events.Event, 1)
+	em := agui.NewEventEmitter(ch)
+	if err := em.SubagentFinished("sub_run_1",
+		events.WithSubagentResult("task completed"),
+		events.WithSubagentSuccessOutcome(),
+	); err != nil {
+		t.Fatalf("SubagentFinished: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	ev, ok := got[0].(*events.SubagentFinishedEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.SubagentFinishedEvent", got[0])
+	}
+	if ev.SubagentRunID != "sub_run_1" {
+		t.Errorf("SubagentRunID = %q, want %q", ev.SubagentRunID, "sub_run_1")
+	}
+	if ev.Result != "task completed" {
+		t.Errorf("Result = %v, want %q", ev.Result, "task completed")
+	}
+	if ev.Outcome == nil {
+		t.Fatal("Outcome = nil, want non-nil")
+	}
+	if ev.Outcome.Type != events.SubagentFinishedOutcomeTypeSuccess {
+		t.Errorf("Outcome.Type = %q, want %q", ev.Outcome.Type, events.SubagentFinishedOutcomeTypeSuccess)
+	}
+	// Success outcome must not carry InterruptIDs (strict discriminated union).
+	if ev.Outcome.InterruptIDs != nil {
+		t.Errorf("Outcome.InterruptIDs = %v, want nil for success outcome", ev.Outcome.InterruptIDs)
+	}
+}
+
+func TestSubagentError(t *testing.T) {
+	ch := make(chan events.Event, 1)
+	em := agui.NewEventEmitter(ch)
+	if err := em.SubagentError("sub_run_1", "tool failed",
+		events.WithSubagentErrorCode("TOOL_ERROR")); err != nil {
+		t.Fatalf("SubagentError: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	ev, ok := got[0].(*events.SubagentErrorEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.SubagentErrorEvent", got[0])
+	}
+	if ev.SubagentRunID != "sub_run_1" {
+		t.Errorf("SubagentRunID = %q, want %q", ev.SubagentRunID, "sub_run_1")
+	}
+	if ev.Message != "tool failed" {
+		t.Errorf("Message = %q, want %q", ev.Message, "tool failed")
+	}
+	if ev.Code == nil || *ev.Code != "TOOL_ERROR" {
+		t.Errorf("Code = %v, want %q", ev.Code, "TOOL_ERROR")
+	}
+}
+
+// TestSubagentFinished_SuspendedOutcome_WireFormat verifies that the suspended
+// outcome emits "interruptIds" (the canonical field name) and not "interrupts"
+// (the legacy field name), and that success outcomes omit the field entirely —
+// the TypeScript schema parses the outcome as a strict discriminated union.
+func TestSubagentFinished_SuspendedOutcome_WireFormat(t *testing.T) {
+	t.Run("suspended emits interruptIds", func(t *testing.T) {
+		ch := make(chan events.Event, 1)
+		em := agui.NewEventEmitter(ch)
+		if err := em.SubagentFinished("sub_1",
+			events.WithSubagentSuspendedOutcome([]string{"int-1", "int-2"}),
+		); err != nil {
+			t.Fatalf("SubagentFinished: %v", err)
+		}
+
+		got := drain(ch)
+		data, err := got[0].ToJSON()
+		if err != nil {
+			t.Fatalf("ToJSON: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		outcome, ok := m["outcome"].(map[string]any)
+		if !ok {
+			t.Fatalf("outcome = %v, want a map", m["outcome"])
+		}
+		if outcome["type"] != "suspended" {
+			t.Fatalf("outcome.type = %v, want suspended", outcome["type"])
+		}
+		ids, ok := outcome["interruptIds"].([]any)
+		if !ok {
+			t.Fatalf("interruptIds = %v, want a slice; raw json: %s", outcome["interruptIds"], string(data))
+		}
+		if len(ids) != 2 || ids[0] != "int-1" || ids[1] != "int-2" {
+			t.Errorf("interruptIds = %v, want [int-1, int-2]", ids)
+		}
+		if _, has := outcome["interrupts"]; has {
+			t.Errorf("legacy 'interrupts' field present, want absent: %s", string(data))
+		}
+	})
+
+	t.Run("success omits interruptIds", func(t *testing.T) {
+		ch := make(chan events.Event, 1)
+		em := agui.NewEventEmitter(ch)
+		if err := em.SubagentFinished("sub_1", events.WithSubagentSuccessOutcome()); err != nil {
+			t.Fatalf("SubagentFinished: %v", err)
+		}
+
+		got := drain(ch)
+		data, err := got[0].ToJSON()
+		if err != nil {
+			t.Fatalf("ToJSON: %v", err)
+		}
+		if strings.Contains(string(data), "interruptIds") {
+			t.Errorf("success outcome must not carry interruptIds: %s", string(data))
+		}
+		if strings.Contains(string(data), "interrupts") {
+			t.Errorf("success outcome must not carry legacy interrupts field: %s", string(data))
+		}
+	})
+}
+
+// TestForSubagent_BaseEmitterUntouched verifies that events emitted through the
+// base emitter do NOT carry subagentRunId, while events through the sub-agent
+// wrapper do — ensuring ForSubagent only affects the wrapper, not the original.
+func TestForSubagent_BaseEmitterUntouched(t *testing.T) {
+	ch := make(chan events.Event, 2)
+	base := agui.NewEventEmitter(ch)
+	sub := base.ForSubagent("sub_run_1")
+
+	if err := base.TextMessageContent("m1", "hello"); err != nil {
+		t.Fatalf("base TextMessageContent: %v", err)
+	}
+	if err := sub.TextMessageContent("m2", "world"); err != nil {
+		t.Fatalf("sub TextMessageContent: %v", err)
+	}
+
+	got := drain(ch)
+	var baseJSON, subJSON string
+	for _, ev := range got {
+		data, _ := ev.ToJSON()
+		s := string(data)
+		if strings.Contains(s, `"m1"`) {
+			baseJSON = s
+		}
+		if strings.Contains(s, `"m2"`) {
+			subJSON = s
+		}
+	}
+	if strings.Contains(baseJSON, `"subagentRunId"`) {
+		t.Errorf("base emitter event should not carry subagentRunId: %s", baseJSON)
+	}
+	if !strings.Contains(subJSON, `"subagentRunId":"sub_run_1"`) {
+		t.Errorf("sub emitter event should carry subagentRunId: %s", subJSON)
 	}
 }

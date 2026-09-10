@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/genai"
 )
 
@@ -31,7 +32,10 @@ func TestTranslateToolDeclarations(t *testing.T) {
 		},
 	}
 
-	got := translateToolDeclarations(tools)
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
 
 	if len(got) != 1 {
 		t.Fatalf("got %d tools, want 1", len(got))
@@ -86,7 +90,10 @@ func TestTranslateToolDeclarations_Multiple(t *testing.T) {
 		},
 	}
 
-	got := translateToolDeclarations(tools)
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
 
 	if len(got) != 2 {
 		t.Fatalf("got %d tools, want 2", len(got))
@@ -113,14 +120,26 @@ func TestTranslateToolDeclarations_Multiple(t *testing.T) {
 // TestTranslateToolDeclarations_Empty verifies that nil or empty tool slices
 // return nil.
 func TestTranslateToolDeclarations_Empty(t *testing.T) {
-	if got := translateToolDeclarations(nil); got != nil {
+	got, err := translateToolDeclarations(nil)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations(nil): unexpected error: %v", err)
+	}
+	if got != nil {
 		t.Errorf("nil input: got %v, want nil", got)
 	}
-	if got := translateToolDeclarations([]*genai.Tool{}); got != nil {
+	got, err = translateToolDeclarations([]*genai.Tool{})
+	if err != nil {
+		t.Fatalf("translateToolDeclarations([]): unexpected error: %v", err)
+	}
+	if got != nil {
 		t.Errorf("empty input: got %v, want nil", got)
 	}
 	// Tool with no declarations also yields nil.
-	if got := translateToolDeclarations([]*genai.Tool{{}}); got != nil {
+	got, err = translateToolDeclarations([]*genai.Tool{{}})
+	if err != nil {
+		t.Fatalf("translateToolDeclarations([{}]) : unexpected error: %v", err)
+	}
+	if got != nil {
 		t.Errorf("empty declarations: got %v, want nil", got)
 	}
 }
@@ -347,5 +366,174 @@ func TestToolCallsToFunctionCalls_InvalidJSON(t *testing.T) {
 
 	if parts[1].FunctionCall.ID != "call_also_good" {
 		t.Errorf("parts[1] ID: got %q, want %q", parts[1].FunctionCall.ID, "call_also_good")
+	}
+}
+
+// --- ParametersJsonSchema tests ---
+
+func TestTranslateToolDeclarations_ParametersJsonSchema(t *testing.T) {
+	tools := []*genai.Tool{
+		{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name:        "search",
+					Description: "Search query",
+					ParametersJsonSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"query": map[string]any{"type": "string"},
+						},
+						"required": []any{"query"},
+					},
+				},
+			},
+		},
+	}
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tools, want 1", len(got))
+	}
+	fn := got[0]["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters: got %T, want map[string]any", fn["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
+	}
+	req, ok := params["required"].([]any)
+	if !ok || len(req) != 1 || req[0] != "query" {
+		t.Errorf("parameters.required: got %v, want [query]", params["required"])
+	}
+}
+
+func TestTranslateToolDeclarations_ParametersJsonSchemaFromStruct(t *testing.T) {
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"query": {Type: "string", Description: "search query"},
+		},
+		Required: []string{"query"},
+	}
+	tools := []*genai.Tool{
+		{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name:                 "search",
+					Description:          "Search query",
+					ParametersJsonSchema: schema,
+				},
+			},
+		},
+	}
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tools, want 1", len(got))
+	}
+	fn := got[0]["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters: got %T, want map[string]any", fn["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
+	}
+	req, ok := params["required"].([]any)
+	if !ok || len(req) != 1 || req[0] != "query" {
+		t.Errorf("parameters.required: got %v, want [query]", params["required"])
+	}
+}
+
+func TestTranslateToolDeclarations_ParametersPrecedence(t *testing.T) {
+	tools := []*genai.Tool{
+		{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name: "search",
+					Parameters: &genai.Schema{
+						Type: genai.TypeObject,
+						Properties: map[string]*genai.Schema{
+							"winner": {Type: genai.TypeString},
+						},
+					},
+					ParametersJsonSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"loser": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tools, want 1", len(got))
+	}
+	fn := got[0]["function"].(map[string]any)
+	params := fn["parameters"].(map[string]any)
+	props := params["properties"].(map[string]any)
+	if _, ok := props["winner"]; !ok {
+		t.Errorf("winner property missing: Parameters should take precedence over ParametersJsonSchema")
+	}
+	if _, ok := props["loser"]; ok {
+		t.Errorf("loser property present: ParametersJsonSchema should have been ignored")
+	}
+}
+
+func TestTranslateToolDeclarations_NoParameters(t *testing.T) {
+	tools := []*genai.Tool{
+		{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name: "no_params",
+				},
+			},
+		},
+	}
+	got, err := translateToolDeclarations(tools)
+	if err != nil {
+		t.Fatalf("translateToolDeclarations: unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tools, want 1", len(got))
+	}
+	fn := got[0]["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters: got %T, want map[string]any", fn["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok || len(props) != 0 {
+		t.Errorf("parameters.properties: got %v, want empty map", params["properties"])
+	}
+}
+
+func TestTranslateToolDeclarations_InvalidParametersJsonSchema(t *testing.T) {
+	tools := []*genai.Tool{
+		{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name:                 "bad_schema",
+					ParametersJsonSchema: func() {},
+				},
+			},
+		},
+	}
+	_, err := translateToolDeclarations(tools)
+	if err == nil {
+		t.Fatal("translateToolDeclarations with func() schema: got nil error, want error")
 	}
 }

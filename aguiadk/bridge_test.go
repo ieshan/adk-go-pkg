@@ -14,6 +14,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/aguiadk"
@@ -4175,12 +4176,15 @@ func TestBridge_SubagentLifecycle(t *testing.T) {
 
 	var subagentStarts, subagentFinishes int
 	var textContentJSON []string
+	var finishedJSON string
 	for _, ev := range collected {
 		switch ev.Type() {
 		case "SUBAGENT_STARTED":
 			subagentStarts++
 		case "SUBAGENT_FINISHED":
 			subagentFinishes++
+			data, _ := ev.ToJSON()
+			finishedJSON = string(data)
 		case events.EventTypeTextMessageContent:
 			data, _ := ev.ToJSON()
 			textContentJSON = append(textContentJSON, string(data))
@@ -4192,6 +4196,18 @@ func TestBridge_SubagentLifecycle(t *testing.T) {
 	}
 	if subagentFinishes != 1 {
 		t.Errorf("SUBAGENT_FINISHED count = %d, want 1", subagentFinishes)
+	}
+
+	// The canonical SubagentFinishedEvent has no Name field. Verify the
+	// wire JSON does not carry "name" (the legacy agui field was removed).
+	if finishedJSON != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(finishedJSON), &m); err != nil {
+			t.Fatalf("unmarshal SUBAGENT_FINISHED: %v", err)
+		}
+		if _, has := m["name"]; has {
+			t.Errorf("SUBAGENT_FINISHED carries 'name' field, want absent (canonical type has no Name): %s", finishedJSON)
+		}
 	}
 
 	// Verify that TEXT_MESSAGE_CONTENT events carry subagentRunId.
@@ -4340,9 +4356,9 @@ func TestBridge_TokenUsageOnRunnerError(t *testing.T) {
 		t.Fatal("got no RUN_ERROR event, want one")
 	}
 
-	usageEv, ok := errorEv.(*agui.RunErrorWithUsageEvent)
+	usageEv, ok := errorEv.(*events.RunErrorEvent)
 	if !ok {
-		t.Fatalf("got %T, want *agui.RunErrorWithUsageEvent", errorEv)
+		t.Fatalf("got %T, want *events.RunErrorEvent", errorEv)
 	}
 	if len(usageEv.Usage) == 0 {
 		t.Fatal("got empty usage on RUN_ERROR, want non-empty")
@@ -4408,9 +4424,9 @@ func TestBridge_TokenUsageReporting(t *testing.T) {
 		t.Fatal("got no RUN_FINISHED event, want one")
 	}
 
-	usageEv, ok := finishedEv.(*agui.RunFinishedWithUsageEvent)
+	usageEv, ok := finishedEv.(*events.RunFinishedEvent)
 	if !ok {
-		t.Fatalf("got %T, want *agui.RunFinishedWithUsageEvent", finishedEv)
+		t.Fatalf("got %T, want *events.RunFinishedEvent", finishedEv)
 	}
 	if len(usageEv.Usage) == 0 {
 		t.Fatal("got empty usage on RUN_FINISHED, want non-empty")
@@ -4430,5 +4446,1078 @@ func TestBridge_TokenUsageReporting(t *testing.T) {
 	}
 	if u.TotalTokens == nil || *u.TotalTokens != 30 {
 		t.Errorf("usage totalTokens = %v, want 30", u.TotalTokens)
+	}
+}
+
+// TestBridge_ExecutableCodeCustomEvent verifies that a genai.ExecutableCode
+// part is emitted as a CUSTOM event with the code and language.
+func TestBridge_ExecutableCodeCustomEvent(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						ExecutableCode: &genai.ExecutableCode{
+							Code:     "print('hello')",
+							Language: genai.LanguagePython,
+						},
+					}},
+				},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundCustom bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeCustom {
+			customEv, ok := ev.(*events.CustomEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.CustomEvent", ev)
+			}
+			if customEv.Name != "executable_code" {
+				continue
+			}
+			foundCustom = true
+			m, ok := customEv.Value.(map[string]any)
+			if !ok {
+				t.Fatalf("custom value = %T, want map[string]any", customEv.Value)
+			}
+			if m["code"] != "print('hello')" {
+				t.Errorf("code = %v, want print('hello')", m["code"])
+			}
+		}
+	}
+	if !foundCustom {
+		t.Error("got no executable_code CUSTOM event, want one")
+	}
+}
+
+// TestBridge_CodeExecutionResultCustomEvent verifies that a
+// genai.CodeExecutionResult part is emitted as a CUSTOM event.
+func TestBridge_CodeExecutionResultCustomEvent(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						CodeExecutionResult: &genai.CodeExecutionResult{
+							Outcome: genai.OutcomeOK,
+							Output:  "hello\n",
+						},
+					}},
+				},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundCustom bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeCustom {
+			customEv, ok := ev.(*events.CustomEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.CustomEvent", ev)
+			}
+			if customEv.Name != "code_execution_result" {
+				continue
+			}
+			foundCustom = true
+			m, ok := customEv.Value.(map[string]any)
+			if !ok {
+				t.Fatalf("custom value = %T, want map[string]any", customEv.Value)
+			}
+			if m["output"] != "hello\n" {
+				t.Errorf("output = %v, want hello\\n", m["output"])
+			}
+		}
+	}
+	if !foundCustom {
+		t.Error("got no code_execution_result CUSTOM event, want one")
+	}
+}
+
+// TestBridge_RootModelErrorCustomEvent verifies that a root-agent model error
+// (ErrorCode/ErrorMessage with no Go error) is emitted as a CUSTOM event
+// rather than RUN_ERROR, allowing the runner to retry.
+func TestBridge_RootModelErrorCustomEvent(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.ErrorCode = "MODEL_ERROR"
+			ev.ErrorMessage = "transient failure"
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundModelError, foundRunError bool
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeCustom:
+			customEv, ok := ev.(*events.CustomEvent)
+			if !ok {
+				continue
+			}
+			if customEv.Name == "model_error" {
+				foundModelError = true
+				m, ok := customEv.Value.(map[string]any)
+				if !ok {
+					t.Fatalf("custom value = %T, want map[string]any", customEv.Value)
+				}
+				if m["code"] != "MODEL_ERROR" {
+					t.Errorf("code = %v, want MODEL_ERROR", m["code"])
+				}
+				if m["message"] != "transient failure" {
+					t.Errorf("message = %v, want transient failure", m["message"])
+				}
+			}
+		case events.EventTypeRunError:
+			foundRunError = true
+		}
+	}
+	if !foundModelError {
+		t.Error("got no model_error CUSTOM event, want one")
+	}
+	if foundRunError {
+		t.Error("got RUN_ERROR for transient model error, want none (CUSTOM event only)")
+	}
+}
+
+// TestBridge_SubagentModelErrorEmitsSubagentError verifies that a sub-agent
+// model error is emitted as SUBAGENT_ERROR (not a CUSTOM event) so the
+// sub-agent lifecycle is balanced.
+func TestBridge_SubagentModelErrorEmitsSubagentError(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Sub-agent starts.
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "researcher"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{Parts: []*genai.Part{{Text: "Researching"}}},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+			// Sub-agent model error.
+			ev2 := session.NewEvent(context.Background(), "inv-1")
+			ev2.Author = "researcher"
+			ev2.ErrorCode = "MODEL_ERROR"
+			ev2.ErrorMessage = "sub-agent failed"
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var subagentStarts, subagentErrors int
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeSubagentStarted:
+			subagentStarts++
+		case events.EventTypeSubagentError:
+			subagentErrors++
+			errorEv, ok := ev.(*events.SubagentErrorEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.SubagentErrorEvent", ev)
+			}
+			if errorEv.Message != "sub-agent failed" {
+				t.Errorf("message = %q, want 'sub-agent failed'", errorEv.Message)
+			}
+		}
+	}
+	if subagentStarts != 1 {
+		t.Errorf("SUBAGENT_STARTED count = %d, want 1", subagentStarts)
+	}
+	if subagentErrors != 1 {
+		t.Errorf("SUBAGENT_ERROR count = %d, want 1", subagentErrors)
+	}
+}
+
+// TestBridge_BuiltinToolCall verifies that a genai.ToolCall part (a server-side
+// built-in tool like Google Search) is emitted as TOOL_CALL_START +
+// TOOL_CALL_ARGS + TOOL_CALL_END events.
+func TestBridge_BuiltinToolCall(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						ToolCall: &genai.ToolCall{
+							ID:       "btc-1",
+							ToolType: genai.ToolTypeGoogleSearchWeb,
+							Args:     map[string]any{"query": "weather"},
+						},
+					}},
+				},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var hasStart, hasArgs, hasEnd bool
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeToolCallStart:
+			hasStart = true
+			startEv, ok := ev.(*events.ToolCallStartEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.ToolCallStartEvent", ev)
+			}
+			if startEv.ToolCallID != "btc-1" {
+				t.Errorf("ToolCallID = %q, want btc-1", startEv.ToolCallID)
+			}
+			// ToolType is a string enum; string(genai.ToolTypeGoogleSearchWeb) is the name.
+			if startEv.ToolCallName == "" {
+				t.Error("ToolCallName is empty, want the built-in tool type name")
+			}
+		case events.EventTypeToolCallArgs:
+			hasArgs = true
+		case events.EventTypeToolCallEnd:
+			hasEnd = true
+		}
+	}
+	if !hasStart {
+		t.Error("got no TOOL_CALL_START event, want one")
+	}
+	if !hasArgs {
+		t.Error("got no TOOL_CALL_ARGS event, want one")
+	}
+	if !hasEnd {
+		t.Error("got no TOOL_CALL_END event, want one")
+	}
+}
+
+// TestBridge_BuiltinToolResponse verifies that a genai.ToolResponse part
+// (the result of a server-side built-in tool) is emitted as a
+// TOOL_CALL_RESULT event correlated with the earlier ToolCall.
+func TestBridge_BuiltinToolResponse(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Phase 1: emit the built-in tool call.
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "test-agent"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						ToolCall: &genai.ToolCall{
+							ID:       "btc-1",
+							ToolType: genai.ToolTypeGoogleSearchWeb,
+							Args:     map[string]any{"query": "weather"},
+						},
+					}},
+				},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+			// Phase 2: emit the built-in tool response.
+			ev2 := session.NewEvent(context.Background(), "inv-1")
+			ev2.Author = "test-agent"
+			ev2.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						ToolResponse: &genai.ToolResponse{
+							ID:       "btc-1",
+							ToolType: genai.ToolTypeGoogleSearchWeb,
+							Response: map[string]any{"result": "sunny"},
+						},
+					}},
+				},
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var hasResult bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			hasResult = true
+			resultEv, ok := ev.(*events.ToolCallResultEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.ToolCallResultEvent", ev)
+			}
+			if resultEv.ToolCallID != "btc-1" {
+				t.Errorf("ToolCallID = %q, want btc-1", resultEv.ToolCallID)
+			}
+		}
+	}
+	if !hasResult {
+		t.Error("got no TOOL_CALL_RESULT event for built-in tool response, want one")
+	}
+}
+
+// TestBridge_CitationMetadata verifies that CitationMetadata on a session
+// event is emitted as a CUSTOM event with name "citation_metadata".
+func TestBridge_CitationMetadata(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Cited answer"}},
+				},
+			}
+			ev.CitationMetadata = &genai.CitationMetadata{
+				Citations: []*genai.Citation{
+					{Title: "Source A", URI: "https://example.com/a", StartIndex: 0, EndIndex: 5},
+				},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundCustom bool
+	for _, ev := range collected {
+		if ev.Type() != events.EventTypeCustom {
+			continue
+		}
+		customEv, ok := ev.(*events.CustomEvent)
+		if !ok {
+			t.Fatalf("got %T, want *events.CustomEvent", ev)
+		}
+		if customEv.Name != "citation_metadata" {
+			continue
+		}
+		foundCustom = true
+		// The value is the full CitationMetadata struct, which serializes
+		// with a "citations" field.
+		m, ok := customEv.Value.(map[string]any)
+		if !ok {
+			// The value may be the struct itself; marshal to check.
+			b, mErr := json.Marshal(customEv.Value)
+			if mErr != nil {
+				t.Fatalf("marshal citation value: %v", mErr)
+			}
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatalf("unmarshal citation value: %v", err)
+			}
+		}
+		citations, ok := m["citations"].([]any)
+		if !ok {
+			t.Fatalf("citations = %v, want a slice", m["citations"])
+		}
+		if len(citations) != 1 {
+			t.Fatalf("citations len = %d, want 1", len(citations))
+		}
+		first := citations[0].(map[string]any)
+		if first["title"] != "Source A" {
+			t.Errorf("title = %v, want Source A", first["title"])
+		}
+	}
+	if !foundCustom {
+		t.Error("got no citation_metadata CUSTOM event, want one")
+	}
+}
+
+// TestBridge_GroundingMetadata verifies that GroundingMetadata on a session
+// event is emitted as a CUSTOM event with name "grounding_metadata".
+func TestBridge_GroundingMetadata(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Grounded answer"}},
+				},
+			}
+			ev.GroundingMetadata = &genai.GroundingMetadata{
+				WebSearchQueries: []string{"weather today"},
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundCustom bool
+	for _, ev := range collected {
+		if ev.Type() != events.EventTypeCustom {
+			continue
+		}
+		customEv, ok := ev.(*events.CustomEvent)
+		if !ok {
+			t.Fatalf("got %T, want *events.CustomEvent", ev)
+		}
+		if customEv.Name != "grounding_metadata" {
+			continue
+		}
+		foundCustom = true
+		// The value is the full GroundingMetadata struct; check webSearchQueries.
+		b, mErr := json.Marshal(customEv.Value)
+		if mErr != nil {
+			t.Fatalf("marshal grounding value: %v", mErr)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("unmarshal grounding value: %v", err)
+		}
+		queries, ok := m["webSearchQueries"].([]any)
+		if !ok {
+			t.Fatalf("webSearchQueries = %v, want a slice", m["webSearchQueries"])
+		}
+		if len(queries) != 1 || queries[0] != "weather today" {
+			t.Errorf("webSearchQueries = %v, want [weather today]", queries)
+		}
+	}
+	if !foundCustom {
+		t.Error("got no grounding_metadata CUSTOM event, want one")
+	}
+}
+
+// TestBridge_SubagentError_NoContent verifies that a sub-agent model error
+// with Content == nil still triggers a balanced SUBAGENT_STARTED →
+// SUBAGENT_ERROR lifecycle. This tests the maybeEmitSubagentLifecycle move
+// before the nil-content early return: without it, activeSubagentRun would
+// never be set for contentless error events.
+func TestBridge_SubagentError_NoContent(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Sub-agent starts with content.
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "researcher"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{Parts: []*genai.Part{{Text: "Researching"}}},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+			// Sub-agent error with NO content (Content == nil).
+			ev2 := session.NewEvent(context.Background(), "inv-1")
+			ev2.Author = "researcher"
+			ev2.ErrorCode = "MODEL_ERROR"
+			ev2.ErrorMessage = "sub-agent contentless failure"
+			// Content is nil — this is the key test condition.
+			if !yield(ev2, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var subagentStarts, subagentErrors int
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeSubagentStarted:
+			subagentStarts++
+		case events.EventTypeSubagentError:
+			subagentErrors++
+		}
+	}
+	if subagentStarts != 1 {
+		t.Errorf("SUBAGENT_STARTED count = %d, want 1", subagentStarts)
+	}
+	if subagentErrors != 1 {
+		t.Errorf("SUBAGENT_ERROR count = %d, want 1 (lifecycle must be balanced even for contentless errors)", subagentErrors)
+	}
+}
+
+// TestBridge_RequestedInput verifies that a session event carrying
+// RequestedInput (with LongRunningToolIDs and a synthesised FunctionCall)
+// emits a RUN_FINISHED with an interrupt outcome carrying the
+// RequestedInput's Message and ResponseSchema — not the approval schema.
+func TestBridge_RequestedInput(t *testing.T) {
+	// Build a jsonschema for the requested input response.
+	schemaJSON := `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+	var schema jsonschema.Schema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			ev := session.NewEvent(context.Background(), "inv-1")
+			ev.Author = "test-agent"
+			ev.LLMResponse = model.LLMResponse{
+				Partial: false,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:   "ri-interrupt-1",
+							Name: "adk_request_input",
+							Args: map[string]any{"prompt": "What is your name?"},
+						},
+					}},
+				},
+			}
+			ev.LongRunningToolIDs = []string{"ri-interrupt-1"}
+			ev.RequestedInput = &session.RequestInput{
+				InterruptID:    "ri-interrupt-1",
+				Message:        "Please provide your name",
+				ResponseSchema: &schema,
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:   a,
+		AppName: "testapp",
+		UserID:  "user1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collected := collectEvents(t, bridgeAgent, defaultInput())
+
+	var foundInterrupt bool
+	for _, ev := range collected {
+		if ev.Type() != events.EventTypeRunFinished {
+			continue
+		}
+		finEvt, ok := ev.(*events.RunFinishedEvent)
+		if !ok {
+			t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
+		}
+		if finEvt.Outcome == nil {
+			t.Fatal("got nil Outcome, want non-nil")
+		}
+		if finEvt.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
+			t.Errorf("Outcome.Type = %q, want %q", finEvt.Outcome.Type, events.RunFinishedOutcomeTypeInterrupt)
+			continue
+		}
+		if len(finEvt.Outcome.Interrupts) != 1 {
+			t.Fatalf("got %d interrupts, want 1", len(finEvt.Outcome.Interrupts))
+		}
+		intr := finEvt.Outcome.Interrupts[0]
+		if intr.ID != "ri-interrupt-1" {
+			t.Errorf("Interrupt.ID = %q, want ri-interrupt-1", intr.ID)
+		}
+		if intr.Reason != "requested_input" {
+			t.Errorf("Interrupt.Reason = %q, want requested_input", intr.Reason)
+		}
+		if intr.Message != "Please provide your name" {
+			t.Errorf("Interrupt.Message = %q, want 'Please provide your name'", intr.Message)
+		}
+		// ResponseSchema must be the RequestedInput's schema, not the approval schema.
+		if intr.ResponseSchema == nil {
+			t.Fatal("got nil ResponseSchema, want the RequestedInput schema")
+		}
+		if _, hasProps := intr.ResponseSchema["properties"]; !hasProps {
+			t.Errorf("ResponseSchema missing 'properties': %v", intr.ResponseSchema)
+		}
+		// The approval schema has {"approved": boolean}; the RequestedInput
+		// schema has {"answer": string}. Verify it's NOT the approval schema.
+		props, propsOK := intr.ResponseSchema["properties"].(map[string]any)
+		if !propsOK {
+			t.Fatalf("properties = %v, want a map", intr.ResponseSchema["properties"])
+		}
+		if _, hasApproved := props["approved"]; hasApproved {
+			t.Errorf("ResponseSchema has 'approved' property — this is the approval schema, not the RequestedInput schema: %v", intr.ResponseSchema)
+		}
+		if _, hasAnswer := props["answer"]; !hasAnswer {
+			t.Errorf("ResponseSchema missing 'answer' property: %v", intr.ResponseSchema)
+		}
+		foundInterrupt = true
+	}
+	if !foundInterrupt {
+		t.Error("got no RUN_FINISHED with interrupt outcome, want one")
+	}
+}
+
+// TestBridge_RequestedInputResume is a two-phase test: phase 1 emits a
+// RequestedInput event and pauses; phase 2 resumes with a ResumeEntry
+// carrying the interrupt ID and user payload. The run should resume and
+// the FunctionResponse should carry the user's payload.
+func TestBridge_RequestedInputResume(t *testing.T) {
+	// Build a jsonschema for the requested input response.
+	schemaJSON := `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+	var schema jsonschema.Schema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+
+	// Phase 1 event: emits RequestedInput.
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Partial: false,
+		Content: &genai.Content{
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "ri-interrupt-1",
+					Name: "adk_request_input",
+					Args: map[string]any{"prompt": "What is your name?"},
+				},
+			}},
+		},
+	}
+	interruptEv.LongRunningToolIDs = []string{"ri-interrupt-1"}
+	interruptEv.RequestedInput = &session.RequestInput{
+		InterruptID:    "ri-interrupt-1",
+		Message:        "Please provide your name",
+		ResponseSchema: &schema,
+	}
+
+	// Phase 2 event: the agent resumes after the user provides input.
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{
+		Partial:      false,
+		TurnComplete: true,
+		Content: &genai.Content{
+			Parts: []*genai.Part{{Text: "Thanks for your answer"}},
+		},
+	}
+
+	var sawFunctionResponse bool
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				if !yield(interruptEv, nil) {
+					return
+				}
+				return
+			}
+			// Phase 2: check session events for FunctionResponse carrying the
+			// user's payload (set by the resume path).
+			for e := range ctx.Session().Events().All() {
+				if e.Content != nil {
+					for _, p := range e.Content.Parts {
+						if p.FunctionResponse != nil {
+							if resp, ok := p.FunctionResponse.Response["result"]; ok {
+								if m, ok := resp.(map[string]any); ok {
+									if m["answer"] == "Alice" {
+										sawFunctionResponse = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			if !yield(resumeEv, nil) {
+				return
+			}
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Phase 1: run with the RequestedInput event to populate the runstore.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Phase 2: resume with the user's payload.
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{
+			InterruptID: "ri-interrupt-1",
+			Status:      types.ResumeStatusResolved,
+			Payload:     map[string]any{"answer": "Alice"},
+		},
+	}
+
+	collected := collectEvents(t, bridgeAgent, input)
+
+	// Verify the resume path re-emitted the tool call and result.
+	var hasToolCallResult bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeToolCallResult {
+			hasToolCallResult = true
+		}
+	}
+	if !hasToolCallResult {
+		t.Error("got no TOOL_CALL_RESULT event from resume, want one")
+	}
+	if !sawFunctionResponse {
+		t.Error("got no FunctionResponse with user payload in session events, want one")
+	}
+}
+
+// TestBridge_RequestedInputResume_NoMatch verifies that resuming with a
+// non-matching InterruptID emits RUN_ERROR with a descriptive message
+// instead of proceeding with a nil payload.
+func TestBridge_RequestedInputResume_NoMatch(t *testing.T) {
+	schemaJSON := `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+	var schema jsonschema.Schema
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+
+	interruptEv := session.NewEvent(context.Background(), "inv-1")
+	interruptEv.Author = "test-agent"
+	interruptEv.LLMResponse = model.LLMResponse{
+		Partial: false,
+		Content: &genai.Content{
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "ri-interrupt-1",
+					Name: "adk_request_input",
+					Args: map[string]any{"prompt": "What is your name?"},
+				},
+			}},
+		},
+	}
+	interruptEv.LongRunningToolIDs = []string{"ri-interrupt-1"}
+	interruptEv.RequestedInput = &session.RequestInput{
+		InterruptID:    "ri-interrupt-1",
+		Message:        "Please provide your name",
+		ResponseSchema: &schema,
+	}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				if !yield(interruptEv, nil) {
+					return
+				}
+				return
+			}
+			// Phase 2 should not be reached — the resume should fail.
+			t.Error("phase 2 agent run was reached, want RUN_ERROR before it")
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:    a,
+		AppName:  "testapp",
+		UserID:   "user1",
+		RunStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Phase 1: populate runstore.
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	// Phase 2: resume with a NON-matching InterruptID.
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{
+			InterruptID: "wrong-id",
+			Status:      types.ResumeStatusResolved,
+			Payload:     map[string]any{"answer": "Alice"},
+		},
+	}
+
+	collected := collectEvents(t, bridgeAgent, input)
+
+	var hasRunError bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			hasRunError = true
+			errorEv, ok := ev.(*events.RunErrorEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
+			}
+			if !strings.Contains(errorEv.Message, "resume did not address requested input") {
+				t.Errorf("RunError message = %q, want it to contain 'resume did not address requested input'", errorEv.Message)
+			}
+		}
+	}
+	if !hasRunError {
+		t.Error("got no RUN_ERROR event for non-matching resume, want one")
+	}
+}
+
+// TestBridge_TerminalPathLifecycle verifies that when a sub-agent has open
+// resources (text message, reasoning block, tool call, step) and the runner
+// returns an error, all lifecycle events are balanced: TEXT_MESSAGE_END,
+// REASONING_END, TOOL_CALL_END, STEP_FINISHED, SUBAGENT_FINISHED — all
+// carrying subagentRunId where applicable.
+func TestBridge_TerminalPathLifecycle(t *testing.T) {
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			// Event 1: non-partial text starts the "llm" step (step opens).
+			ev1 := session.NewEvent(context.Background(), "inv-1")
+			ev1.Author = "researcher"
+			ev1.LLMResponse = model.LLMResponse{
+				Partial:      false,
+				TurnComplete: false,
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "Starting research"}},
+				},
+			}
+			if !yield(ev1, nil) {
+				return
+			}
+			// Event 2: partial event opens streaming text, reasoning, and
+			// a tool call. The step from event 1 is still open.
+			ev2 := session.NewEvent(context.Background(), "inv-1")
+			ev2.Author = "researcher"
+			ev2.LLMResponse = model.LLMResponse{
+				Partial: true,
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{Thought: true, Text: "Thinking about this"},
+						{Text: "Let me search"},
+						{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "fc-lc-1",
+								Name: "search",
+								Args: map[string]any{"q": "test"},
+							},
+						},
+					},
+				},
+			}
+			if !yield(ev2, nil) {
+				return
+			}
+			// Runner error while sub-agent resources are open.
+			if !yield(nil, fmt.Errorf("runner crashed mid-subagent")) {
+				return
+			}
+		}
+	})
+
+	stepOn := true
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{
+		Agent:          a,
+		AppName:        "testapp",
+		UserID:         "user1",
+		EmitStepEvents: &stepOn,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	var collected []events.Event
+	for ev, err := range bridgeAgent.Run(ctx, defaultInput()) {
+		if err != nil {
+			// The runner error is expected; lifecycle events are emitted
+			// before it as proper events.
+			continue
+		}
+		if ev != nil {
+			collected = append(collected, ev)
+		}
+	}
+
+	// Count lifecycle events to verify balance.
+	var subagentStarts, subagentFinishes int
+	var textStarts, textEnds int
+	var reasoningStarts, reasoningEnds int
+	var toolCallStarts, toolCallEnds int
+	var stepStarts, stepFinishes int
+	for _, ev := range collected {
+		switch ev.Type() {
+		case events.EventTypeSubagentStarted:
+			subagentStarts++
+		case events.EventTypeSubagentFinished:
+			subagentFinishes++
+		case events.EventTypeTextMessageStart:
+			textStarts++
+		case events.EventTypeTextMessageEnd:
+			textEnds++
+		case events.EventTypeReasoningStart:
+			reasoningStarts++
+		case events.EventTypeReasoningEnd:
+			reasoningEnds++
+		case events.EventTypeToolCallStart:
+			toolCallStarts++
+		case events.EventTypeToolCallEnd:
+			toolCallEnds++
+		case events.EventTypeStepStarted:
+			stepStarts++
+		case events.EventTypeStepFinished:
+			stepFinishes++
+		}
+	}
+
+	if subagentStarts != 1 {
+		t.Errorf("SUBAGENT_STARTED = %d, want 1", subagentStarts)
+	}
+	if subagentFinishes != 1 {
+		t.Errorf("SUBAGENT_FINISHED = %d, want 1 (lifecycle must be balanced before RUN_ERROR)", subagentFinishes)
+	}
+	// Event 1 opens/closes a text message (non-partial); event 2 opens a
+	// streaming text message that the terminal path closes.
+	if textStarts != 2 {
+		t.Errorf("TEXT_MESSAGE_START = %d, want 2", textStarts)
+	}
+	if textEnds != 2 {
+		t.Errorf("TEXT_MESSAGE_END = %d, want 2 (must be closed at terminal path)", textEnds)
+	}
+	if reasoningStarts != 1 {
+		t.Errorf("REASONING_START = %d, want 1", reasoningStarts)
+	}
+	if reasoningEnds != 1 {
+		t.Errorf("REASONING_END = %d, want 1 (must be closed at terminal path)", reasoningEnds)
+	}
+	if toolCallStarts != 1 {
+		t.Errorf("TOOL_CALL_START = %d, want 1", toolCallStarts)
+	}
+	if toolCallEnds != 1 {
+		t.Errorf("TOOL_CALL_END = %d, want 1 (must be closed at terminal path)", toolCallEnds)
+	}
+	if stepStarts != 1 {
+		t.Errorf("STEP_STARTED = %d, want 1", stepStarts)
+	}
+	if stepFinishes != 1 {
+		t.Errorf("STEP_FINISHED = %d, want 1 (must be closed at terminal path)", stepFinishes)
+	}
+
+	// Verify TEXT_MESSAGE_END carries subagentRunId (attribution preserved
+	// because close ordering is: message → tool calls → step → sub-agent).
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeTextMessageEnd {
+			data, _ := ev.ToJSON()
+			if !strings.Contains(string(data), `"subagentRunId"`) {
+				t.Errorf("TEXT_MESSAGE_END missing subagentRunId: %s", string(data))
+			}
+		}
+		if ev.Type() == events.EventTypeStepFinished {
+			data, _ := ev.ToJSON()
+			if !strings.Contains(string(data), `"subagentRunId"`) {
+				t.Errorf("STEP_FINISHED missing subagentRunId: %s", string(data))
+			}
+		}
 	}
 }

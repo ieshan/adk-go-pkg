@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -712,4 +713,118 @@ func FuzzContentsToMessages(f *testing.F) {
 		}
 		_ = msgs
 	})
+}
+
+// --- ResponseJsonSchema and strict enforcement tests ---
+
+func TestBuildChatRequest_ResponseJsonSchema(t *testing.T) {
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "give JSON"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			ResponseJsonSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+
+	chatReq, err := buildChatRequest(req, "gpt-4o", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if chatReq.ResponseFormat == nil {
+		t.Fatal("response_format: got nil, want non-nil")
+	}
+
+	rfMap, ok := chatReq.ResponseFormat.(map[string]any)
+	if !ok {
+		t.Fatalf("response_format: got %T, want map[string]any", chatReq.ResponseFormat)
+	}
+	if rfMap["type"] != "json_schema" {
+		t.Errorf("response_format.type: got %v, want %q", rfMap["type"], "json_schema")
+	}
+	jsMap, ok := rfMap["json_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("json_schema: got %T, want map[string]any", rfMap["json_schema"])
+	}
+	if jsMap["strict"] != true {
+		t.Errorf("strict: got %v, want true", jsMap["strict"])
+	}
+	schema, ok := jsMap["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema: got %T, want map[string]any", jsMap["schema"])
+	}
+	if schema["additionalProperties"] != false {
+		t.Errorf("additionalProperties: got %v, want false", schema["additionalProperties"])
+	}
+	reqFields, ok := schema["required"].([]string)
+	if !ok || len(reqFields) != 1 || reqFields[0] != "name" {
+		t.Errorf("required: got %v, want [name]", schema["required"])
+	}
+}
+
+func TestBuildChatRequest_ResponseJsonSchemaFromStruct(t *testing.T) {
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"city": {Type: "string"},
+		},
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "give JSON"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			ResponseJsonSchema: schema,
+		},
+	}
+
+	chatReq, err := buildChatRequest(req, "gpt-4o", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rfMap := chatReq.ResponseFormat.(map[string]any)
+	jsMap := rfMap["json_schema"].(map[string]any)
+	sMap := jsMap["schema"].(map[string]any)
+	if sMap["additionalProperties"] != false {
+		t.Errorf("additionalProperties: got %v, want false", sMap["additionalProperties"])
+	}
+}
+
+func TestBuildChatRequest_ResponseSchemaEnforcesStrict(t *testing.T) {
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "give JSON"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			ResponseSchema: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"name": {Type: genai.TypeString},
+				},
+			},
+		},
+	}
+
+	chatReq, err := buildChatRequest(req, "gpt-4o", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rfMap := chatReq.ResponseFormat.(map[string]any)
+	jsMap := rfMap["json_schema"].(map[string]any)
+	schema := jsMap["schema"].(map[string]any)
+	if schema["additionalProperties"] != false {
+		t.Errorf("additionalProperties: got %v, want false", schema["additionalProperties"])
+	}
+	reqFields, ok := schema["required"].([]string)
+	if !ok || len(reqFields) != 1 || reqFields[0] != "name" {
+		t.Errorf("required: got %v, want [name]", schema["required"])
+	}
 }

@@ -1,8 +1,11 @@
 package jsonutil_test
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 )
 
@@ -260,4 +263,120 @@ func FuzzMapToJSON(f *testing.F) {
 			t.Error("MapToJSON returned nil data with nil error")
 		}
 	})
+}
+
+// --- NormalizeSchema tests ---
+
+func TestNormalizeSchema_Map(t *testing.T) {
+	t.Parallel()
+	input := map[string]any{"type": "object"}
+	result, err := jsonutil.NormalizeSchema(input)
+	if err != nil {
+		t.Fatalf("NormalizeSchema(%v): unexpected error: %v", input, err)
+	}
+	if result["type"] != "object" {
+		t.Errorf("NormalizeSchema(%v)[\"type\"]: got %v, want %q", input, result["type"], "object")
+	}
+}
+
+func TestNormalizeSchema_Nil(t *testing.T) {
+	t.Parallel()
+	result, err := jsonutil.NormalizeSchema(nil)
+	if !errors.Is(err, jsonutil.ErrEmptyJSONSchema) {
+		t.Errorf("NormalizeSchema(nil) error: got %v, want %v", err, jsonutil.ErrEmptyJSONSchema)
+	}
+	if result != nil {
+		t.Errorf("NormalizeSchema(nil) result: got %v, want nil", result)
+	}
+}
+
+func TestNormalizeSchema_TypedNil(t *testing.T) {
+	t.Parallel()
+	var s *jsonschema.Schema
+	result, err := jsonutil.NormalizeSchema(s)
+	if !errors.Is(err, jsonutil.ErrEmptyJSONSchema) {
+		t.Errorf("NormalizeSchema((*jsonschema.Schema)(nil)) error: got %v, want %v", err, jsonutil.ErrEmptyJSONSchema)
+	}
+	if result != nil {
+		t.Errorf("NormalizeSchema((*jsonschema.Schema)(nil)) result: got %v, want nil", result)
+	}
+}
+
+func TestNormalizeSchema_OtherType(t *testing.T) {
+	t.Parallel()
+	type mySchema struct {
+		Type       string         `json:"type"`
+		Properties map[string]any `json:"properties,omitempty"`
+	}
+	input := mySchema{Type: "object"}
+	result, err := jsonutil.NormalizeSchema(input)
+	if err != nil {
+		t.Fatalf("NormalizeSchema(%+v): unexpected error: %v", input, err)
+	}
+	if result["type"] != "object" {
+		t.Errorf("NormalizeSchema(%+v)[\"type\"]: got %v, want %q", input, result["type"], "object")
+	}
+}
+
+func TestNormalizeSchema_JsonschemaStruct(t *testing.T) {
+	t.Parallel()
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"query": {Type: "string", Description: "search query"},
+		},
+		Required: []string{"query"},
+	}
+	result, err := jsonutil.NormalizeSchema(schema)
+	if err != nil {
+		t.Fatalf("NormalizeSchema(schema): unexpected error: %v", err)
+	}
+	if result["type"] != "object" {
+		t.Errorf("result[\"type\"]: got %v, want %q", result["type"], "object")
+	}
+	required, ok := result["required"].([]any)
+	if !ok {
+		t.Fatalf("result[\"required\"]: got %T, want []any", result["required"])
+	}
+	if len(required) != 1 || required[0] != "query" {
+		t.Errorf("result[\"required\"]: got %v, want [query]", required)
+	}
+}
+
+func TestNormalizeSchema_Unmarshalable(t *testing.T) {
+	t.Parallel()
+	_, err := jsonutil.NormalizeSchema(func() {})
+	if err == nil {
+		t.Fatal("NormalizeSchema(func()): got nil error, want non-nil error")
+	}
+}
+
+func TestNormalizeSchema_PreservesLargeIntegers(t *testing.T) {
+	t.Parallel()
+	minLen := 9007199254740993 // 2^53 + 1, not exactly representable as float64
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"name": {Type: "string", MinLength: &minLen},
+		},
+	}
+	result, err := jsonutil.NormalizeSchema(schema)
+	if err != nil {
+		t.Fatalf("NormalizeSchema(largeIntegerSchema): unexpected error: %v", err)
+	}
+	props, ok := result["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties: got %T, want map[string]any", result["properties"])
+	}
+	name, ok := props["name"].(map[string]any)
+	if !ok {
+		t.Fatalf("name: got %T, want map[string]any", props["name"])
+	}
+	got, ok := name["minLength"].(json.Number)
+	if !ok {
+		t.Fatalf("minLength: got %T, want json.Number", name["minLength"])
+	}
+	if got.String() != "9007199254740993" {
+		t.Errorf("minLength: got %s, want 9007199254740993", got.String())
+	}
 }

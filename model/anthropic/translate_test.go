@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -337,6 +338,40 @@ func TestBuildMessageRequest_ResponseJsonSchema(t *testing.T) {
 	}
 	if msgReq.OutputConfig.JSONSchema == nil {
 		t.Errorf("got nil JSONSchema, want non-nil")
+	}
+}
+
+// TestBuildMessageRequest_ResponseJsonSchemaFromStruct verifies that a
+// *jsonschema.Schema passed via ResponseJsonSchema is normalized and forwarded
+// to output_config.json_schema.
+func TestBuildMessageRequest_ResponseJsonSchemaFromStruct(t *testing.T) {
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"name": {Type: "string"},
+		},
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "Extract info"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			ResponseJsonSchema: schema,
+		},
+	}
+	msgReq, err := buildMessageRequest(req, "claude-opus-4", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msgReq.OutputConfig == nil {
+		t.Fatal("got nil OutputConfig, want non-nil")
+	}
+	if msgReq.OutputConfig.Format != "json" {
+		t.Errorf("format: got %q, want %q", msgReq.OutputConfig.Format, "json")
+	}
+	s := msgReq.OutputConfig.JSONSchema
+	if s["type"] != "object" {
+		t.Errorf("type: got %v, want %q", s["type"], "object")
 	}
 }
 

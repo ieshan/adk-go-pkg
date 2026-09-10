@@ -267,8 +267,8 @@ if err := emitter.TextMessageContent(msgID, delta); err != nil {
 | `RunStarted(threadID, runID string) error` | Emits `RUN_STARTED` |
 | `RunFinishedWithOptions(threadID, runID string, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with optional configuration (e.g., `events.WithSuccessOutcome`, `events.WithInterruptOutcome`) |
 | `RunErrorWithOptions(message string, opts ...events.RunErrorOption) error` | Emits `RUN_ERROR` with optional configuration (e.g., `events.WithRunID`, `events.WithErrorCode`) |
-| `RunFinishedWithUsage(threadID, runID string, usage []TokenUsage, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with aggregated token usage telemetry; falls back to `RunFinishedWithOptions` when `usage` is empty/nil. See [Token Usage Telemetry](#token-usage-telemetry). |
-| `RunErrorWithUsage(message string, usage []TokenUsage, opts ...events.RunErrorOption) error` | Emits `RUN_ERROR` with aggregated token usage telemetry; falls back to `RunErrorWithOptions` when `usage` is empty/nil. See [Token Usage Telemetry](#token-usage-telemetry). |
+| `RunFinishedWithUsage(threadID, runID string, usage []events.TokenUsage, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with aggregated token usage telemetry; falls back to `RunFinishedWithOptions` when `usage` is empty/nil. See [Token Usage Telemetry](#token-usage-telemetry). |
+| `RunErrorWithUsage(message string, usage []events.TokenUsage, opts ...events.RunErrorOption) error` | Emits `RUN_ERROR` with aggregated token usage telemetry; falls back to `RunErrorWithOptions` when `usage` is empty/nil. See [Token Usage Telemetry](#token-usage-telemetry). |
 
 ### Text Messages
 
@@ -942,12 +942,13 @@ func Handler(cfg Config) (http.Handler, error)
 1. On `GET /` (exact `r.URL.Path == "/"` match) or `GET /capabilities` (path suffix match — ending in `/capabilities` — so the handler works correctly when mounted at a sub-path via `http.ServeMux`), returns the configured `AgentCapabilities` as JSON (404 if `Config.Capabilities` is nil)
 2. Returns `405 Method Not Allowed` for any other HTTP method that is not `GET` or `POST`
 3. Accepts `POST` requests with a JSON `RunAgentInput` body, limited to `MaxBodySize` bytes (default 10 MB) via `http.MaxBytesReader`
-4. Sets SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`)
-5. Applies the middleware chain to the agent
-6. Starts a keepalive ping goroutine when `KeepaliveInterval > 0` (writes SSE pings on the configured interval until the request context is cancelled)
-7. Iterates the agent's event stream, writing each event as an SSE message
-8. On iterator error, emits a `RUN_ERROR` event (carrying `input.RunID`) and calls `OnError` if configured
-9. On SSE write error, calls `OnError` if configured and stops the stream
+4. Performs `Accept` header negotiation: rejects protobuf transport requests (`application/vnd.ag-ui.event+proto`, `application/x-protobuf`, `application/protobuf`, `application/vnd.google.protobuf`) with `406 Not Acceptable`; accepts all other `Accept` values (including `text/event-stream` and JSON) and serves SSE
+5. Sets SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`)
+6. Applies the middleware chain to the agent
+7. Starts a keepalive ping goroutine when `KeepaliveInterval > 0` (writes SSE pings on the configured interval until the request context is cancelled)
+8. Iterates the agent's event stream, writing each event as an SSE message
+9. On iterator error, emits a `RUN_ERROR` event (carrying `input.RunID`) and calls `OnError` if configured
+10. On SSE write error, calls `OnError` if configured and stops the stream
 
 > **Mounting / sub-paths:** `agui.Handler` matches capabilities discovery with
 > an exact `r.URL.Path == "/"` for the root endpoint and a path-suffix match
@@ -1059,25 +1060,26 @@ render sub-agent activity.
 ### Lifecycle Methods
 
 ```go
-func (e *EventEmitter) SubagentStarted(subagentRunID, name string, opts ...SubagentStartedOption) error
-func (e *EventEmitter) SubagentFinished(subagentRunID string, opts ...SubagentFinishedOption) error
-func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...SubagentErrorOption) error
+func (e *EventEmitter) SubagentStarted(subagentRunID, name string, opts ...events.SubagentStartedOption) error
+func (e *EventEmitter) SubagentFinished(subagentRunID string, opts ...events.SubagentFinishedOption) error
+func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...events.SubagentErrorOption) error
 ```
 
 ### Exported Event Types and Constructors
 
-The underlying exported types backing the lifecycle methods:
+The underlying exported types are the canonical SDK types in the `events`
+package:
 
 | Type / Constructor | Description |
 |--------------------|-------------|
-| `EventTypeSubagentStarted` / `EventTypeSubagentFinished` / `EventTypeSubagentError` | Event-type constants (`events.EventType`) |
-| `SubagentStartedEvent` / `NewSubagentStartedEvent(subagentRunID, name string, opts ...SubagentStartedOption) *SubagentStartedEvent` | Event + constructor for `SUBAGENT_STARTED` |
-| `SubagentFinishedEvent` / `NewSubagentFinishedEvent(subagentRunID string, opts ...SubagentFinishedOption) *SubagentFinishedEvent` | Event + constructor for `SUBAGENT_FINISHED` |
-| `SubagentErrorEvent` / `NewSubagentErrorEvent(subagentRunID, message string, opts ...SubagentErrorOption) *SubagentErrorEvent` | Event + constructor for `SUBAGENT_ERROR` |
-| `SubagentStartedOption` / `SubagentFinishedOption` / `SubagentErrorOption` | Option function types for each event |
-| `SubagentFinishedOutcome` | Discriminates success vs. suspended outcomes (carries `Type` and `Interrupts`) |
-| `SubagentFinishedOutcomeType` | String enum type for the outcome variant |
-| `SubagentFinishedOutcomeTypeSuccess` / `SubagentFinishedOutcomeTypeSuspended` | Outcome-type constants (`"success"` / `"suspended"`) |
+| `events.EventTypeSubagentStarted` / `events.EventTypeSubagentFinished` / `events.EventTypeSubagentError` | Event-type constants (`events.EventType`) |
+| `events.SubagentStartedEvent` / `events.NewSubagentStartedEvent(subagentRunID, name string, opts ...events.SubagentStartedOption) *events.SubagentStartedEvent` | Event + constructor for `SUBAGENT_STARTED` |
+| `events.SubagentFinishedEvent` / `events.NewSubagentFinishedEvent(subagentRunID string, opts ...events.SubagentFinishedOption) *events.SubagentFinishedEvent` | Event + constructor for `SUBAGENT_FINISHED` |
+| `events.SubagentErrorEvent` / `events.NewSubagentErrorEvent(subagentRunID, message string, opts ...events.SubagentErrorOption) *events.SubagentErrorEvent` | Event + constructor for `SUBAGENT_ERROR` |
+| `events.SubagentStartedOption` / `events.SubagentFinishedOption` / `events.SubagentErrorOption` | Option function types for each event |
+| `events.SubagentFinishedOutcome` | Discriminates success vs. suspended outcomes (carries `Type` and `InterruptIDs`) |
+| `events.SubagentFinishedOutcomeType` | String enum type for the outcome variant |
+| `events.SubagentFinishedOutcomeTypeSuccess` / `events.SubagentFinishedOutcomeTypeSuspended` | Outcome-type constants (`"success"` / `"suspended"`) |
 
 All three event types implement the `events.Event` interface and provide
 `Validate()` and `ToJSON()` methods.
@@ -1086,31 +1088,30 @@ All three event types implement the `events.Event` interface and provide
 
 | Option | Description |
 |--------|-------------|
-| `WithSubagentDescription(desc string)` | Sets the description on a `SUBAGENT_STARTED` event |
-| `WithParentSubagentRunID(id string)` | Sets the parent sub-agent run ID |
-| `WithParentToolCallID(id string)` | Sets the parent tool call ID |
-| `WithParentMessageID(id string)` | Sets the parent message ID |
+| `events.WithSubagentDescription(desc string)` | Sets the description on a `SUBAGENT_STARTED` event |
+| `events.WithParentSubagentRunID(id string)` | Sets the parent sub-agent run ID |
+| `events.WithParentToolCall(parentToolCallID, parentMessageID string)` | Sets the parent tool call ID and message ID |
 
 ### SubagentFinished Options
 
 | Option | Description |
 |--------|-------------|
-| `WithSubagentName(name string)` | Sets the sub-agent name |
-| `WithSubagentResult(result any)` | Sets the result payload |
-| `WithSubagentSuccessOutcome()` | Marks the outcome as `success` |
-| `WithSubagentSuspendedOutcome(interrupts []any)` | Marks the outcome as `suspended` with the given interrupts |
+| `events.WithSubagentResult(result any)` | Sets the result payload |
+| `events.WithSubagentSuccessOutcome()` | Marks the outcome as `success` |
+| `events.WithSubagentSuspendedOutcome(interruptIDs []string)` | Marks the outcome as `suspended` with the given interrupt IDs |
 
-`SubagentFinishedOutcome` discriminates between success and suspended
-outcomes. Use `WithSubagentSuccessOutcome()` for normal completion and
-`WithSubagentSuspendedOutcome(interrupts)` when the sub-agent paused on an
-interrupt.
+`events.SubagentFinishedOutcome` discriminates between success and suspended
+outcomes. Use `events.WithSubagentSuccessOutcome()` for normal completion and
+`events.WithSubagentSuspendedOutcome(interruptIDs)` when the sub-agent paused
+on an interrupt. The suspended outcome carries `interruptIds` (not
+`interrupts`) in the wire JSON; the success outcome omits the field entirely
+(the TypeScript schema parses the outcome as a strict discriminated union).
 
 ### SubagentError Options
 
 | Option | Description |
 |--------|-------------|
-| `WithSubagentErrorName(name string)` | Sets the sub-agent name |
-| `WithSubagentErrorCode(code string)` | Sets the error code |
+| `events.WithSubagentErrorCode(code string)` | Sets the error code |
 
 ### Stream Attribution with ForSubagent
 
@@ -1153,7 +1154,7 @@ func subagentAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[eve
 		// Delegate to a sub-agent.
 		subRunID := emitter.GenerateMessageID()
 		_ = emitter.SubagentStarted(subRunID, "researcher",
-			agui.WithSubagentDescription("Looks up facts"))
+			events.WithSubagentDescription("Looks up facts"))
 
 		// Stream the sub-agent's output through an attributed emitter.
 		subEmitter := emitter.ForSubagent(subRunID)
@@ -1165,8 +1166,7 @@ func subagentAgent(ctx context.Context, input types.RunAgentInput) iter.Seq2[eve
 
 		// Mark the sub-agent as complete (use the original emitter).
 		_ = emitter.SubagentFinished(subRunID,
-			agui.WithSubagentName("researcher"),
-			agui.WithSubagentSuccessOutcome())
+			events.WithSubagentSuccessOutcome())
 
 		// Continue with the root agent's response.
 		rootMsgID := emitter.GenerateMessageID()
@@ -1184,9 +1184,37 @@ func main() {
 }
 ```
 
+## CUSTOM Events for ADK Part Types
+
+The `aguiadk` bridge translates ADK `genai.Part` variants that have no
+built-in AG-UI event into `CUSTOM` events. Clients unaware of these custom
+events silently ignore them, which is intended AG-UI behavior.
+
+| ADK Part / Event Field | Custom Event Name | Payload |
+|------------------------|-------------------|---------|
+| `genai.ExecutableCode` | `executable_code` | `{code, language}` |
+| `genai.CodeExecutionResult` | `code_execution_result` | `{outcome, output}` |
+| `session.Event.CitationMetadata` | `citation_metadata` | The full `genai.CitationMetadata` struct |
+| `session.Event.GroundingMetadata` | `grounding_metadata` | The full `genai.GroundingMetadata` struct |
+| `session.Event` model error (root agent) | `model_error` | `{code, message}` |
+
+Server-side built-in tool calls (`genai.ToolCall` / `genai.ToolResponse`,
+e.g. Google Search, Code Execution) are translated to standard
+`TOOL_CALL_START` / `TOOL_CALL_ARGS` / `TOOL_CALL_END` / `TOOL_CALL_RESULT`
+events — not `CUSTOM` events. When `ClientTools` is configured and the
+built-in tool name is not in the client set, an `ACTIVITY_SNAPSHOT` is
+emitted instead (matching the behavior for server-side `FunctionCall`
+parts).
+
+Sub-agent model errors are emitted as `SUBAGENT_ERROR` (not `CUSTOM`) so the
+sub-agent lifecycle is balanced. Root-agent model errors are emitted as
+`CUSTOM` events rather than `RUN_ERROR` because the ADK runner may retry
+transient failures; if the runner eventually returns a Go error, the bridge's
+error path emits `RUN_ERROR` as before.
+
 ## Token Usage Telemetry
 
-`TokenUsage` mirrors the AG-UI `TokenUsageSchema`. `RunFinishedWithUsage` and
+`events.TokenUsage` mirrors the AG-UI `TokenUsageSchema`. `RunFinishedWithUsage` and
 `RunErrorWithUsage` emit `RUN_FINISHED` / `RUN_ERROR` events carrying aggregated
 token usage telemetry. When usage is empty or nil, they fall back to the plain
 event so the wire format stays canonical for runs without telemetry.
@@ -1198,39 +1226,24 @@ event so the wire format stays canonical for runs without telemetry.
 > `RunErrorWithOptions`.
 
 ```go
-type TokenUsage struct {
-    Provider          string `json:"provider,omitempty"`
-    Model             string `json:"model,omitempty"`
-    InputTokens       *int64 `json:"inputTokens,omitempty"`
-    OutputTokens      *int64 `json:"outputTokens,omitempty"`
-    TotalTokens       *int64 `json:"totalTokens,omitempty"`
-    ReasoningTokens   *int64 `json:"reasoningTokens,omitempty"`
-    CachedInputTokens *int64 `json:"cachedInputTokens,omitempty"`
-}
+// events.TokenUsage is the canonical SDK type (see events package for the
+// full struct definition). RunFinishedWithUsage and RunErrorWithUsage use
+// events.WithUsage / events.WithErrorUsage options on the canonical
+// RunFinishedEvent / RunErrorEvent types.
 
-// RunFinishedWithUsageEvent embeds *events.RunFinishedEvent and adds a "usage" field.
-type RunFinishedWithUsageEvent struct {
-    *events.RunFinishedEvent
-    Usage []TokenUsage `json:"usage,omitempty"`
-}
-
-// RunErrorWithUsageEvent embeds *events.RunErrorEvent and adds a "usage" field.
-type RunErrorWithUsageEvent struct {
-    *events.RunErrorEvent
-    Usage []TokenUsage `json:"usage,omitempty"`
-}
-
-func AggregateTokenUsage(entries []TokenUsage) []TokenUsage
-func (e *EventEmitter) RunFinishedWithUsage(threadID, runID string, usage []TokenUsage, opts ...events.RunFinishedOption) error
-func (e *EventEmitter) RunErrorWithUsage(message string, usage []TokenUsage, opts ...events.RunErrorOption) error
+func AggregateTokenUsage(entries []events.TokenUsage) []events.TokenUsage
+func (e *EventEmitter) RunFinishedWithUsage(threadID, runID string, usage []events.TokenUsage, opts ...events.RunFinishedOption) error
+func (e *EventEmitter) RunErrorWithUsage(message string, usage []events.TokenUsage, opts ...events.RunErrorOption) error
 ```
 
 `AggregateTokenUsage` merges entries by `(Provider, Model)`, summing each
 token-count field. Entries with nil counts contribute zero to the aggregate.
 
-> **Note:** `RunFinishedWithUsage` and `RunErrorWithUsage` embed the `[]TokenUsage`
-> slice as-is — they do **not** aggregate it. If you want aggregated totals,
-> call `AggregateTokenUsage` yourself before passing the slice to these methods.
+> **Note:** `RunFinishedWithUsage` and `RunErrorWithUsage` use the canonical
+> `events.WithUsage` / `events.WithErrorUsage` options on the canonical
+> `events.RunFinishedEvent` / `events.RunErrorEvent` types. They do **not**
+> aggregate the usage slice — if you want aggregated totals, call
+> `AggregateTokenUsage` yourself before passing the slice to these methods.
 
 ## CORS
 

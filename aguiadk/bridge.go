@@ -17,6 +17,7 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/ieshan/adk-go-pkg/agui"
 
@@ -445,89 +446,156 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			return
 		}
 
-		approvals := approvalsFromResume(input.Resume)
-		// Validate: every pending tool call needs an explicit decision.
-		undecided := 0
-		for _, p := range saved.Pending {
-			if _, decided := approvals[p.ID]; !decided {
-				undecided++
-			}
-		}
-		if undecided > 0 {
-			msg := "resume entries do not match any pending tool call for this run"
-			if undecided < len(saved.Pending) {
-				// Some but not all are undecided — identify the first one.
-				for _, p := range saved.Pending {
-					if _, decided := approvals[p.ID]; !decided {
-						msg = fmt.Sprintf("resume did not address pending tool call %q", p.ID)
-						break
-					}
+		if saved.RequestedInput != nil {
+			// RequestedInput resume: use the user's payload directly, not the
+			// approval-based mechanism.
+			ri := saved.RequestedInput
+			var responsePayload any
+			found := false
+			for _, e := range input.Resume {
+				if e.InterruptID == ri.InterruptID {
+					responsePayload = e.Payload
+					found = true
+					break
 				}
 			}
-			_ = emitter.RunErrorWithOptions(msg, events.WithRunID(input.RunID))
-			return
-		}
+			if !found {
+				_ = emitter.RunErrorWithOptions(
+					fmt.Sprintf("resume did not address requested input %q", ri.InterruptID),
+					events.WithRunID(input.RunID),
+				)
+				return
+			}
 
-		// Claim atomically so two concurrent resumes cannot both execute.
-		if _, claimed := store.LoadAndDelete(key); !claimed {
-			_ = emitter.RunErrorWithOptions(
-				"cannot resume: the paused run was claimed by a concurrent resume",
-				events.WithRunID(input.RunID),
-			)
-			return
-		}
-		savedState = saved.State
+			// Claim atomically so two concurrent resumes cannot both execute.
+			if _, claimed := store.LoadAndDelete(key); !claimed {
+				_ = emitter.RunErrorWithOptions(
+					"cannot resume: the paused run was claimed by a concurrent resume",
+					events.WithRunID(input.RunID),
+				)
+				return
+			}
+			savedState = saved.State
 
-		// Re-surface the proposals in this new stream so a client rendering
-		// tool cards has the call to attach the result to — the original
-		// proposal was emitted in the prior (interrupted) response.
-		for _, p := range saved.Pending {
-			argsJSON, _ := json.Marshal(p.Args)
-			_ = emitter.ToolCallStart(p.ID, p.Name, nil)
-			_ = emitter.ToolCallArgs(p.ID, string(argsJSON))
-			_ = emitter.ToolCallEnd(p.ID)
-			// For approved calls, emit a tool_use activity snapshot (matching
-			// the example server's settlePendingToolCalls.
-			// Denied calls get no tool_use snapshot — they don't execute.
-			if approvals[p.ID] {
+			// Re-emit the synthesised tool call proposal so a client rendering
+			// tool cards has the call to attach the result to.
+			for _, p := range saved.Pending {
+				argsJSON, _ := json.Marshal(p.Args)
+				_ = emitter.ToolCallStart(p.ID, p.Name, nil)
+				_ = emitter.ToolCallArgs(p.ID, string(argsJSON))
+				_ = emitter.ToolCallEnd(p.ID)
 				_ = emitter.ActivitySnapshot(
 					emitter.GenerateMessageID(), "tool_use",
-					map[string]any{"text": fmt.Sprintf("Running %s(%s)", p.Name, string(argsJSON))},
+					map[string]any{"text": fmt.Sprintf("Running %s", p.Name)},
 					nil,
 				)
+				payloadJSON, _ := json.Marshal(responsePayload)
+				_ = emitter.ToolCallResult("result-"+p.ID, p.ID, string(payloadJSON))
 			}
 
-			// Settle: emit TOOL_CALL_RESULT reflecting the user's decision.
-			msgID := "result-" + p.ID
-			if approvals[p.ID] {
-				_ = emitter.ToolCallResult(msgID, p.ID, string(argsJSON))
-			} else {
-				_ = emitter.ToolCallResult(msgID, p.ID,
-					`{"denied":true,"reason":"user did not approve this tool call"}`)
+			// Build FunctionResponse with the user's payload. The
+			// FunctionResponse.ID matches the pending interrupt in
+			// RunState.Interrupts (since RequestedInput.InterruptID was used
+			// as the FunctionCall.ID), triggering wf.Resume instead of wf.Run.
+			var resumeParts []*genai.Part
+			for _, p := range saved.Pending {
+				resumeParts = append(resumeParts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       p.ID,
+						Name:     p.Name,
+						Response: map[string]any{"result": responsePayload},
+					},
+				})
 			}
-		}
+			if msg == nil {
+				msg = &genai.Content{Role: "user"}
+			}
+			msg.Parts = append(resumeParts, msg.Parts...)
+		} else {
+			approvals := approvalsFromResume(input.Resume)
+			// Validate: every pending tool call needs an explicit decision.
+			undecided := 0
+			for _, p := range saved.Pending {
+				if _, decided := approvals[p.ID]; !decided {
+					undecided++
+				}
+			}
+			if undecided > 0 {
+				msg := "resume entries do not match any pending tool call for this run"
+				if undecided < len(saved.Pending) {
+					// Some but not all are undecided — identify the first one.
+					for _, p := range saved.Pending {
+						if _, decided := approvals[p.ID]; !decided {
+							msg = fmt.Sprintf("resume did not address pending tool call %q", p.ID)
+							break
+						}
+					}
+				}
+				_ = emitter.RunErrorWithOptions(msg, events.WithRunID(input.RunID))
+				return
+			}
 
-		// Build FunctionResponse parts so the ADK runner resumes the paused
-		// workflow. Approved calls carry the original args as the result so
-		// the tool can execute; denied calls carry a denial marker.
-		var resumeParts []*genai.Part
-		for _, p := range saved.Pending {
-			resp := map[string]any{"result": p.Args}
-			if !approvals[p.ID] {
-				resp = map[string]any{"denied": true, "reason": "user did not approve this tool call"}
+			// Claim atomically so two concurrent resumes cannot both execute.
+			if _, claimed := store.LoadAndDelete(key); !claimed {
+				_ = emitter.RunErrorWithOptions(
+					"cannot resume: the paused run was claimed by a concurrent resume",
+					events.WithRunID(input.RunID),
+				)
+				return
 			}
-			resumeParts = append(resumeParts, &genai.Part{
-				FunctionResponse: &genai.FunctionResponse{
-					ID:       p.ID,
-					Name:     p.Name,
-					Response: resp,
-				},
-			})
+			savedState = saved.State
+
+			// Re-surface the proposals in this new stream so a client rendering
+			// tool cards has the call to attach the result to — the original
+			// proposal was emitted in the prior (interrupted) response.
+			for _, p := range saved.Pending {
+				argsJSON, _ := json.Marshal(p.Args)
+				_ = emitter.ToolCallStart(p.ID, p.Name, nil)
+				_ = emitter.ToolCallArgs(p.ID, string(argsJSON))
+				_ = emitter.ToolCallEnd(p.ID)
+				// For approved calls, emit a tool_use activity snapshot (matching
+				// the example server's settlePendingToolCalls.
+				// Denied calls get no tool_use snapshot — they don't execute.
+				if approvals[p.ID] {
+					_ = emitter.ActivitySnapshot(
+						emitter.GenerateMessageID(), "tool_use",
+						map[string]any{"text": fmt.Sprintf("Running %s(%s)", p.Name, string(argsJSON))},
+						nil,
+					)
+				}
+
+				// Settle: emit TOOL_CALL_RESULT reflecting the user's decision.
+				msgID := "result-" + p.ID
+				if approvals[p.ID] {
+					_ = emitter.ToolCallResult(msgID, p.ID, string(argsJSON))
+				} else {
+					_ = emitter.ToolCallResult(msgID, p.ID,
+						`{"denied":true,"reason":"user did not approve this tool call"}`)
+				}
+			}
+
+			// Build FunctionResponse parts so the ADK runner resumes the paused
+			// workflow. Approved calls carry the original args as the result so
+			// the tool can execute; denied calls carry a denial marker.
+			var resumeParts []*genai.Part
+			for _, p := range saved.Pending {
+				resp := map[string]any{"result": p.Args}
+				if !approvals[p.ID] {
+					resp = map[string]any{"denied": true, "reason": "user did not approve this tool call"}
+				}
+				resumeParts = append(resumeParts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:       p.ID,
+						Name:     p.Name,
+						Response: resp,
+					},
+				})
+			}
+			if msg == nil {
+				msg = &genai.Content{Role: "user"}
+			}
+			msg.Parts = append(resumeParts, msg.Parts...)
 		}
-		if msg == nil {
-			msg = &genai.Content{Role: "user"}
-		}
-		msg.Parts = append(resumeParts, msg.Parts...)
 	}
 
 	// Build run options from input.State, merged with the paused run's
@@ -636,9 +704,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	for adkEvent, err := range b.runner.Run(ctx, userID, adkSession.ID(), msg, runCfg, runOpts...) {
 		if err != nil {
 			translator.closeOpenMessage()
-			translator.closeOpenSubagent()
-			translator.closeOpenStep()
 			translator.closeStreamedToolCalls()
+			translator.closeOpenStep()
+			translator.closeOpenSubagent()
 			b.emitStatusDelta(emitter, "error")
 			_ = emitter.RunErrorWithUsage(
 				fmt.Sprintf("agent error: %v", err),
@@ -657,9 +725,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			turnCount++
 			if b.cfg.MaxIterations > 0 && turnCount > b.cfg.MaxIterations {
 				translator.closeOpenMessage()
-				translator.closeOpenSubagent()
-				translator.closeOpenStep()
 				translator.closeStreamedToolCalls()
+				translator.closeOpenStep()
+				translator.closeOpenSubagent()
 				b.emitStatusDelta(emitter, "error")
 				if b.cfg.EmitMessagesSnapshot {
 					refreshed, rerr := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
@@ -683,8 +751,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			// no interrupt outcome, no RunStore save.
 			if b.cfg.ClientTools != nil && b.cfg.ClientTools.Mode == ClientToolModeHandBack {
 				translator.closeOpenMessage()
-				translator.closeOpenStep()
 				translator.closeStreamedToolCalls()
+				translator.closeOpenStep()
+				translator.closeOpenSubagent()
 				if b.cfg.EmitMessagesSnapshot {
 					refreshed, rerr := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
 					if rerr == nil {
@@ -697,6 +766,59 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				return
 			}
 
+			// RequestedInput: a workflow node is asking for free-form human input
+			// (not a tool approval). The event carries both LongRunningToolIDs and
+			// a synthesised FunctionCall, but the interrupt should present the
+			// RequestedInput's message and schema — not the approval schema. This
+			// check goes before the autoApprove check because free-form input
+			// cannot be auto-approved.
+			if adkEvent.RequestedInput != nil {
+				translator.closeOpenMessage()
+				translator.closeStreamedToolCalls()
+				translator.closeOpenStep()
+				translator.closeOpenSubagent()
+
+				ri := adkEvent.RequestedInput
+				interrupt := types.Interrupt{
+					ID:             ri.InterruptID,
+					Reason:         "requested_input",
+					Message:        ri.Message,
+					ResponseSchema: schemaToMap(ri.ResponseSchema),
+				}
+
+				store := b.runStoreFor()
+				store.Save(RunKey(input.ThreadID, input.RunID), &PausedRun{
+					ThreadID:  input.ThreadID,
+					RunID:     input.RunID,
+					SessionID: adkSession.ID(),
+					Pending:   extractPendingToolCalls(adkEvent),
+					RequestedInput: &RequestedInputSnapshot{
+						InterruptID:    ri.InterruptID,
+						Message:        ri.Message,
+						ResponseSchema: ri.ResponseSchema,
+						Payload:        ri.Payload,
+					},
+					State: sessionStateToMap(adkSession.State()),
+				})
+
+				b.emitStatusDelta(emitter, "awaiting_input")
+
+				if b.cfg.EmitMessagesSnapshot {
+					refreshed, rerr := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
+					if rerr == nil {
+						msgs := sessionEventsToMessages(refreshed.Events())
+						_ = emitter.MessagesSnapshot(msgs)
+					}
+				}
+
+				_ = emitter.RunFinishedWithUsage(
+					input.ThreadID, input.RunID,
+					translator.collectedUsage(),
+					events.WithInterruptOutcome([]types.Interrupt{interrupt}),
+				)
+				return
+			}
+
 			autoApprove := b.resolveApprovalMode(ctx)
 			if autoApprove {
 				// Auto-approve: skip the approval interrupt and finish the
@@ -704,8 +826,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				// the iterator ends here. The client executes the tool and
 				// starts a new run with the result (same as HandBack mode).
 				translator.closeOpenMessage()
-				translator.closeOpenStep()
 				translator.closeStreamedToolCalls()
+				translator.closeOpenStep()
+				translator.closeOpenSubagent()
 				if b.cfg.EmitMessagesSnapshot {
 					refreshed, rerr := b.sessMgr.Resolve(ctx, input.ThreadID, appName, userID)
 					if rerr == nil {
@@ -719,8 +842,9 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			}
 
 			translator.closeOpenMessage()
-			translator.closeOpenStep()
 			translator.closeStreamedToolCalls()
+			translator.closeOpenStep()
+			translator.closeOpenSubagent()
 
 			pending := extractPendingToolCalls(adkEvent)
 			approvalSchema := map[string]any{
@@ -777,10 +901,11 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	}
 
 	// Close any open text message, step, streamed tool calls, and sub-agent.
+	// Order: message (incl. reasoning) → tool calls → step → sub-agent.
 	translator.closeOpenMessage()
-	translator.closeOpenSubagent()
-	translator.closeOpenStep()
 	translator.closeStreamedToolCalls()
+	translator.closeOpenStep()
+	translator.closeOpenSubagent()
 	b.emitStatusDelta(emitter, "done")
 
 	// Emit custom events if configured.
@@ -827,7 +952,7 @@ type eventTranslator struct {
 	emitActivityDeltas bool                // whether to emit ACTIVITY_DELTA during streaming tool calls
 	activityMsgIDs     map[string]string   // tool call ID → activity message ID for deltas
 	clientTools        map[string]struct{} // when non-nil, only these tool names are client-delegated
-	usageEntries       []agui.TokenUsage   // collected token usage telemetry for terminal events
+	usageEntries       []events.TokenUsage // collected token usage telemetry for terminal events
 	currentAuthor      string              // ADK event author for the current sub-agent context
 	activeSubagentRun  string              // subagentRunId for the currently active sub-agent
 	subagentEmitted    bool                // whether SUBAGENT_STARTED has been emitted for currentAuthor
@@ -880,6 +1005,15 @@ func (t *eventTranslator) translate(ev *session.Event) {
 		t.recordUsage(ev.UsageMetadata, ev.ModelVersion)
 	}
 
+	// Track sub-agent author transitions and emit SUBAGENT_STARTED/FINISHED
+	// lifecycle events so frontends can attribute streamed events to the
+	// emitting sub-agent. This must run BEFORE state delta and step event
+	// handling so activeEmitter is set to the sub-agent emitter, giving
+	// those events correct subagentRunId attribution. It must also run
+	// before the model-error check so activeSubagentRun is set for
+	// contentless error events from sub-agents.
+	t.maybeEmitSubagentLifecycle(ev)
+
 	// Handle state delta.
 	if len(ev.Actions.StateDelta) > 0 {
 		t.emitStateDelta(ev.Actions.StateDelta)
@@ -919,16 +1053,55 @@ func (t *eventTranslator) translate(ev *session.Event) {
 		}
 	}
 
+	// Model error handling: events with ErrorCode/ErrorMessage. These may
+	// have Content == nil (the error is in the code/message fields), so
+	// this check must run BEFORE the nil-content early return.
+	if ev.ErrorCode != "" || ev.ErrorMessage != "" {
+		if !t.isRootAuthor(ev.Author) && t.activeSubagentRun != "" {
+			// Sub-agent model error: emit SUBAGENT_ERROR and close the
+			// sub-agent. Close all open resources on the sub-agent emitter
+			// (activeEmitter) first so they carry correct attribution.
+			errMsg := ev.ErrorMessage
+			if errMsg == "" {
+				errMsg = fmt.Sprintf("model error (code: %s)", ev.ErrorCode)
+			}
+			t.closeOpenMessage()
+			t.closeStreamedToolCalls()
+			t.closeOpenStep()
+			_ = t.emitter.SubagentError(t.activeSubagentRun, errMsg, events.WithSubagentErrorCode(ev.ErrorCode))
+			t.activeSubagentRun = ""
+			t.currentAuthor = ""
+			t.subagentEmitted = false
+			t.activeEmitter = t.emitter
+			return
+		}
+		// Root agent model error: surface as a CUSTOM event so the
+		// frontend is aware without prematurely terminating the run.
+		// The ADK runner may retry after a transient error; if it
+		// eventually returns a Go error, the bridge's error path emits
+		// RUN_ERROR as before.
+		_ = t.activeEmitter.Custom("model_error", map[string]any{
+			"code":    ev.ErrorCode,
+			"message": ev.ErrorMessage,
+		})
+	}
+
 	// No content means no message-level events.
 	if ev.Content == nil || len(ev.Content.Parts) == 0 {
 		return
 	}
 
-	// Track sub-agent author transitions and emit SUBAGENT_STARTED/FINISHED
-	// lifecycle events so frontends can attribute streamed events to the
-	// emitting sub-agent. The root agent author ("", "user", "model",
-	// or the configured agent name) does not trigger sub-agent events.
-	t.maybeEmitSubagentLifecycle(ev)
+	// Citation/grounding metadata: emitted as CUSTOM events so frontends
+	// that understand them can render citations/grounding. Placed after
+	// the nil-content check because these are metadata about content —
+	// only meaningful when content exists. Uses activeEmitter (set by
+	// maybeEmitSubagentLifecycle) for sub-agent attribution.
+	if ev.CitationMetadata != nil && len(ev.CitationMetadata.Citations) > 0 {
+		_ = t.activeEmitter.Custom("citation_metadata", ev.CitationMetadata)
+	}
+	if ev.GroundingMetadata != nil {
+		_ = t.activeEmitter.Custom("grounding_metadata", ev.GroundingMetadata)
+	}
 
 	for _, part := range ev.Content.Parts {
 		if part == nil {
@@ -947,6 +1120,14 @@ func (t *eventTranslator) translate(ev *session.Event) {
 			t.closeOpenMessage()
 			t.emitFunctionResponse(part.FunctionResponse)
 
+		case part.ToolCall != nil:
+			t.closeOpenMessage()
+			t.emitBuiltinToolCall(part.ToolCall)
+
+		case part.ToolResponse != nil:
+			t.closeOpenMessage()
+			t.emitBuiltinToolResponse(part.ToolResponse)
+
 		case part.Text != "":
 			t.emitText(part.Text, ev.Partial, ev.Author)
 
@@ -960,6 +1141,12 @@ func (t *eventTranslator) translate(ev *session.Event) {
 			// Non-text artifact fallback: surface inline binary
 			// data as a readable text summary.
 			t.emitText(fmt.Sprintf("[Binary data: %s, %d bytes]", part.InlineData.MIMEType, len(part.InlineData.Data)), ev.Partial, ev.Author)
+
+		case part.ExecutableCode != nil:
+			t.emitExecutableCode(part.ExecutableCode)
+
+		case part.CodeExecutionResult != nil:
+			t.emitCodeExecutionResult(part.CodeExecutionResult)
 		}
 	}
 }
@@ -974,7 +1161,7 @@ func (t *eventTranslator) maybeEmitSubagentLifecycle(ev *session.Event) {
 	author := ev.Author
 	if t.isRootAuthor(author) {
 		if t.activeSubagentRun != "" {
-			_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+			_ = t.emitter.SubagentFinished(t.activeSubagentRun, events.WithSubagentSuccessOutcome())
 			t.activeSubagentRun = ""
 			t.currentAuthor = ""
 			t.subagentEmitted = false
@@ -985,7 +1172,7 @@ func (t *eventTranslator) maybeEmitSubagentLifecycle(ev *session.Event) {
 	}
 	if author != t.currentAuthor {
 		if t.activeSubagentRun != "" {
-			_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+			_ = t.emitter.SubagentFinished(t.activeSubagentRun, events.WithSubagentSuccessOutcome())
 		}
 		t.currentAuthor = author
 		t.activeSubagentRun = t.emitter.GenerateToolCallID()
@@ -1090,13 +1277,14 @@ func (t *eventTranslator) closeOpenMessage() {
 		t.msgOpen = false
 		t.prevText = ""
 	}
+	t.closeOpenReasoning()
 }
 
 // closeOpenSubagent emits SUBAGENT_FINISHED for any active sub-agent. Called
 // at terminal run boundaries so the sub-agent lifecycle is balanced.
 func (t *eventTranslator) closeOpenSubagent() {
 	if t.activeSubagentRun != "" {
-		_ = t.emitter.SubagentFinished(t.activeSubagentRun, agui.WithSubagentName(t.currentAuthor), agui.WithSubagentSuccessOutcome())
+		_ = t.emitter.SubagentFinished(t.activeSubagentRun, events.WithSubagentSuccessOutcome())
 		t.activeSubagentRun = ""
 		t.currentAuthor = ""
 		t.subagentEmitted = false
@@ -1328,6 +1516,91 @@ func (t *eventTranslator) emitFunctionResponse(fr *genai.FunctionResponse) {
 	_ = t.activeEmitter.ToolCallResult(msgID, toolCallID, string(content))
 }
 
+// emitBuiltinToolCall translates a genai.ToolCall (a server-side built-in tool
+// like Google Search or Code Execution) to AG-UI tool call events. Built-in
+// tools are always server-side: when clientTools is configured and the tool
+// name is NOT in the client set, an ACTIVITY_SNAPSHOT is emitted instead of
+// TOOL_CALL_* events (matching emitFunctionCall's server-side behavior).
+// Otherwise TOOL_CALL_START + TOOL_CALL_ARGS + TOOL_CALL_END are emitted in one
+// shot since built-in tools don't stream partial args.
+func (t *eventTranslator) emitBuiltinToolCall(tc *genai.ToolCall) {
+	toolCallID := tc.ID
+	if toolCallID == "" {
+		toolCallID = t.activeEmitter.GenerateToolCallID()
+	}
+	toolName := string(tc.ToolType)
+	if toolName == "" {
+		toolName = "builtin_tool"
+	}
+
+	// Client/server tool disambiguation: built-in tools are server-side.
+	if t.clientTools != nil {
+		if _, isClient := t.clientTools[toolName]; !isClient {
+			if tc.ID != "" {
+				t.toolCallIDs[tc.ID] = toolCallID
+			}
+			t.toolCallIDs[toolName] = toolCallID
+			t.toolCallDetails[toolCallID] = toolCallDetail{name: toolName, args: tc.Args}
+			t.emitToolUseActivity(toolCallID, toolName, tc.Args)
+			return
+		}
+	}
+
+	if tc.ID != "" {
+		t.toolCallIDs[tc.ID] = toolCallID
+	}
+	t.toolCallIDs[toolName] = toolCallID
+	t.toolCallDetails[toolCallID] = toolCallDetail{name: toolName, args: tc.Args}
+
+	_ = t.activeEmitter.ToolCallStart(toolCallID, toolName, nil)
+	if tc.Args != nil {
+		if argsJSON, err := json.Marshal(tc.Args); err == nil {
+			_ = t.activeEmitter.ToolCallArgs(toolCallID, string(argsJSON))
+		}
+	}
+	_ = t.activeEmitter.ToolCallEnd(toolCallID)
+}
+
+// emitBuiltinToolResponse translates a genai.ToolResponse (the result of a
+// server-side built-in tool) to a TOOL_CALL_RESULT event, correlating it with
+// the earlier ToolCall via the toolCallIDs map. Also emits a tool_use
+// ACTIVITY_SNAPSHOT matching emitFunctionResponse's behavior.
+func (t *eventTranslator) emitBuiltinToolResponse(tr *genai.ToolResponse) {
+	toolCallID, ok := t.toolCallIDs[tr.ID]
+	if !ok {
+		toolCallID, ok = t.toolCallIDs[string(tr.ToolType)]
+	}
+	if !ok {
+		return // no matching tool call, skip
+	}
+	if detail, has := t.toolCallDetails[toolCallID]; has {
+		t.emitToolUseActivity(toolCallID, detail.name, detail.args)
+	}
+	content, _ := json.Marshal(tr.Response)
+	msgID := "result-" + toolCallID
+	_ = t.activeEmitter.ToolCallResult(msgID, toolCallID, string(content))
+}
+
+// emitExecutableCode translates a genai.ExecutableCode part to a CUSTOM event
+// carrying the code and its language. Uses activeEmitter so the event carries
+// subagentRunId when a sub-agent is active.
+func (t *eventTranslator) emitExecutableCode(ec *genai.ExecutableCode) {
+	_ = t.activeEmitter.Custom("executable_code", map[string]any{
+		"code":     ec.Code,
+		"language": string(ec.Language),
+	})
+}
+
+// emitCodeExecutionResult translates a genai.CodeExecutionResult part to a
+// CUSTOM event carrying the outcome and output. Uses activeEmitter so the
+// event carries subagentRunId when a sub-agent is active.
+func (t *eventTranslator) emitCodeExecutionResult(ce *genai.CodeExecutionResult) {
+	_ = t.activeEmitter.Custom("code_execution_result", map[string]any{
+		"outcome": string(ce.Outcome),
+		"output":  ce.Output,
+	})
+}
+
 // emitThought translates a thought part to AG-UI reasoning events.
 //
 // Across a streaming turn, ADK emits multiple partial events whose Thought
@@ -1399,7 +1672,7 @@ func (t *eventTranslator) emitStateDelta(delta map[string]any) {
 	}
 }
 
-// recordUsage converts a genai usage metadata block into an agui.TokenUsage
+// recordUsage converts a genai usage metadata block into an events.TokenUsage
 // entry and appends it to the translator's collection. The model version is
 // used as the Model field; the provider is inferred from the model prefix
 // when possible (e.g. "gemini-*" → "google") and left empty otherwise so the
@@ -1408,7 +1681,7 @@ func (t *eventTranslator) recordUsage(meta *genai.GenerateContentResponseUsageMe
 	if meta == nil {
 		return
 	}
-	u := agui.TokenUsage{
+	u := events.TokenUsage{
 		Provider: inferProviderFromModel(modelVersion),
 		Model:    modelVersion,
 	}
@@ -1439,7 +1712,7 @@ func (t *eventTranslator) recordUsage(meta *genai.GenerateContentResponseUsageMe
 // terminal events. Returns nil when no usage was recorded, so callers can
 // pass the slice directly to RunFinishedWithUsage / RunErrorWithUsage and
 // get the canonical plain event when there is no telemetry.
-func (t *eventTranslator) collectedUsage() []agui.TokenUsage {
+func (t *eventTranslator) collectedUsage() []events.TokenUsage {
 	return agui.AggregateTokenUsage(t.usageEntries)
 }
 
@@ -1547,6 +1820,25 @@ func sessionStateToMap(state session.State) map[string]any {
 	return m
 }
 
+// schemaToMap converts a jsonschema.Schema to a map[string]any suitable for
+// the types.Interrupt.ResponseSchema field (which is map[string]any, not
+// *jsonschema.Schema). Returns nil for a nil schema. Follows the same
+// JSON-marshal-then-unmarshal pattern as toJSONSchema in client_toolset.go.
+func schemaToMap(s *jsonschema.Schema) map[string]any {
+	if s == nil {
+		return nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
 // extractPendingToolCalls pulls the FunctionCall parts from an ADK event whose
 // IDs appear in LongRunningToolIDs, returning the pending tool calls for the
 // runstore. Calls not in LongRunningToolIDs are excluded.
@@ -1637,6 +1929,43 @@ func sessionEventsToMessages(evts session.Events) []types.Message {
 					Content:    content,
 					ToolCallID: fr.ID,
 					Name:       fr.Name,
+				})
+			}
+			if tc := part.ToolCall; tc != nil {
+				toolName := string(tc.ToolType)
+				if toolName == "" {
+					toolName = "builtin_tool"
+				}
+				argsJSON := "{}"
+				if tc.Args != nil {
+					if b, err := json.Marshal(tc.Args); err == nil {
+						argsJSON = string(b)
+					}
+				}
+				toolCalls = append(toolCalls, types.ToolCall{
+					ID:   tc.ID,
+					Type: types.ToolCallTypeFunction,
+					Function: types.FunctionCall{
+						Name:      toolName,
+						Arguments: argsJSON,
+					},
+				})
+			}
+			if tr := part.ToolResponse; tr != nil {
+				toolName := string(tr.ToolType)
+				if toolName == "" {
+					toolName = "builtin_tool"
+				}
+				content := "{}"
+				if b, err := json.Marshal(tr.Response); err == nil {
+					content = string(b)
+				}
+				msgs = append(msgs, types.Message{
+					ID:         "result-" + tr.ID,
+					Role:       types.RoleTool,
+					Content:    content,
+					ToolCallID: tr.ID,
+					Name:       toolName,
 				})
 			}
 		}

@@ -297,21 +297,25 @@ func (e *EventEmitter) Raw(event any, source *string) error {
 }
 
 // SubagentStarted emits a SUBAGENT_STARTED event marking the beginning of a
-// sub-agent run.
-func (e *EventEmitter) SubagentStarted(subagentRunID, name string, opts ...SubagentStartedOption) error {
-	return e.emit(NewSubagentStartedEvent(subagentRunID, name, opts...))
+// sub-agent run. Options are the canonical events.SubagentStartedOption values
+// (e.g. events.WithSubagentDescription, events.WithParentSubagentRunID).
+func (e *EventEmitter) SubagentStarted(subagentRunID, name string, opts ...events.SubagentStartedOption) error {
+	return e.emit(events.NewSubagentStartedEvent(subagentRunID, name, opts...))
 }
 
 // SubagentFinished emits a SUBAGENT_FINISHED event marking the completion of a
-// sub-agent run.
-func (e *EventEmitter) SubagentFinished(subagentRunID string, opts ...SubagentFinishedOption) error {
-	return e.emit(NewSubagentFinishedEvent(subagentRunID, opts...))
+// sub-agent run. Options are the canonical events.SubagentFinishedOption
+// values (e.g. events.WithSubagentResult, events.WithSubagentSuccessOutcome,
+// events.WithSubagentSuspendedOutcome).
+func (e *EventEmitter) SubagentFinished(subagentRunID string, opts ...events.SubagentFinishedOption) error {
+	return e.emit(events.NewSubagentFinishedEvent(subagentRunID, opts...))
 }
 
 // SubagentError emits a SUBAGENT_ERROR event marking the failure of a
-// sub-agent run.
-func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...SubagentErrorOption) error {
-	return e.emit(NewSubagentErrorEvent(subagentRunID, message, opts...))
+// sub-agent run. Options are the canonical events.SubagentErrorOption values
+// (e.g. events.WithSubagentErrorCode).
+func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...events.SubagentErrorOption) error {
+	return e.emit(events.NewSubagentErrorEvent(subagentRunID, message, opts...))
 }
 
 // ForSubagent returns a new EventEmitter sharing the same output channel and

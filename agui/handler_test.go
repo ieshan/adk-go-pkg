@@ -697,3 +697,55 @@ func TestHandler_DisconnectCancelsAgent(t *testing.T) {
 
 	_ = resp.Body.Close()
 }
+
+func TestHandler_AcceptNegotiation(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {}
+	})
+
+	h, err := agui.Handler(agui.Config{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	tests := []struct {
+		name       string
+		accept     string
+		wantStatus int
+	}{
+		{"protobuf rejected", "application/vnd.ag-ui.event+proto", http.StatusNotAcceptable},
+		{"x-protobuf rejected", "application/x-protobuf", http.StatusNotAcceptable},
+		{"google protobuf rejected", "application/vnd.google.protobuf", http.StatusNotAcceptable},
+		{"SSE accepted", "text/event-stream", http.StatusOK},
+		{"JSON accepted", "application/json", http.StatusOK},
+		{"empty accepted", "", http.StatusOK},
+		{"wildcard accepted", "*/*", http.StatusOK},
+	}
+
+	body, _ := json.Marshal(types.RunAgentInput{
+		ThreadID: "t1",
+		RunID:    "r1",
+		Messages: []types.Message{{ID: "m1", Role: types.RoleUser, Content: "hi"}},
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+			if tt.accept != "" {
+				req.Header.Set("Accept", tt.accept)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = resp.Body.Close() })
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("got %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}

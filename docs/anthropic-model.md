@@ -126,11 +126,12 @@ sentinel; the stream ends naturally at `message_stop`.
 ### Tool Calling
 
 Tools declared in `model.LLMRequest` are automatically translated to Anthropic's
-`tools` array with `input_schema`. When the genai `Schema` on a
-`FunctionDeclaration` is not available (nil), the adapter falls back to the
-declaration's `ParametersJsonSchema` field (`map[string]any`) for the tool's
-`input_schema`. When the model calls a tool, the response
-carries `FunctionCall` parts:
+`tools` array with `input_schema`. Both `Parameters` (`*genai.Schema`) and
+`ParametersJsonSchema` (`*jsonschema.Schema`, `map[string]any`, or any
+JSON-serializable struct) are supported for the tool's `input_schema`.
+`Parameters` takes precedence when both are set. When neither is specified,
+`input_schema` is omitted (it is optional in Anthropic's API). When the model
+calls a tool, the response carries `FunctionCall` parts:
 
 ```go
 req := &model.LLMRequest{
@@ -232,9 +233,10 @@ This sends `output_config: { format: "json", json_schema: { ... } }` to the
 API. For unstructured JSON, set `ResponseMIMEType: "application/json"` instead
 (sends `output_config: { format: "json" }`).
 
-You can also pass a pre-built schema map via `ResponseJsonSchema`. The value
-must be of type `map[string]any` — a typed struct will not be accepted and will
-not be serialized correctly.
+You can also pass a pre-built schema via `ResponseJsonSchema`. The value
+can be any JSON-serializable schema type (such as `*jsonschema.Schema` from
+`jsonschema-go` or `map[string]any`); it is normalized to a JSON Schema map
+before being sent.
 
 ### Thinking Blocks
 

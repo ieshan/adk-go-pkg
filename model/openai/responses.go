@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -35,8 +36,11 @@ var (
 	ErrFunctionCallMissingName        = errors.New("openai: function call missing name")
 	ErrFunctionResponseMissingCallID  = errors.New("openai: function response missing call id and no pending calls")
 	ErrFunctionResponseUnknownCallID  = errors.New("openai: function response references unknown call id")
-	ErrEmptyJSONSchema                = errors.New("openai: empty json schema")
 )
+
+// ErrEmptyJSONSchema is an alias for [jsonutil.ErrEmptyJSONSchema], preserved
+// for backward compatibility.
+var ErrEmptyJSONSchema = jsonutil.ErrEmptyJSONSchema
 
 // responsesRequest is the request body for the OpenAI /v1/responses endpoint.
 type responsesRequest struct {
@@ -237,15 +241,22 @@ func buildResponsesRequest(req *model.LLMRequest, modelName string, stream bool)
 				},
 			}
 		} else if cfg.ResponseJsonSchema != nil {
-			schemaMap, err := normalizeSchema(cfg.ResponseJsonSchema)
+			schemaMap, err := jsonutil.NormalizeSchema(cfg.ResponseJsonSchema)
 			if err != nil {
 				return rr, err
 			}
+			if schemaMap == nil {
+				schemaMap = map[string]any{}
+			}
 			enforceStrictOpenAISchema(schemaMap)
+			name := "response"
+			if title, ok := schemaMap["title"].(string); ok && title != "" {
+				name = title
+			}
 			rr.Text = &responsesTextConfig{
 				Format: map[string]any{
 					"type":   "json_schema",
-					"name":   "response",
+					"name":   name,
 					"strict": true,
 					"schema": schemaMap,
 				},
@@ -430,11 +441,11 @@ func translateToolDeclarationsResponses(tools []*genai.Tool) ([]map[string]any, 
 			if decl.Description != "" {
 				fn["description"] = decl.Description
 			}
-			if decl.Parameters != nil {
-				fn["parameters"] = schemaToJSONSchema(decl.Parameters)
-			} else {
-				fn["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
+			params, err := resolveToolParameters(decl)
+			if err != nil {
+				return nil, fmt.Errorf("openai: tool %q: %w", decl.Name, err)
 			}
+			fn["parameters"] = params
 			result = append(result, fn)
 		}
 	}
@@ -606,27 +617,6 @@ func safeInt32(n int64) int32 {
 		return -int32(^uint32(0)>>1) - 1
 	}
 	return int32(n)
-}
-
-// normalizeSchema converts an arbitrary schema value (any) into a
-// map[string]any suitable for enforceStrictOpenAISchema. Returns
-// ErrEmptyJSONSchema when the input is nil.
-func normalizeSchema(schema any) (map[string]any, error) {
-	if schema == nil {
-		return nil, ErrEmptyJSONSchema
-	}
-	if m, ok := schema.(map[string]any); ok {
-		return m, nil
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal schema: %w", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("openai: unmarshal schema: %w", err)
-	}
-	return m, nil
 }
 
 // enforceStrictOpenAISchema recursively modifies a JSON Schema map to comply

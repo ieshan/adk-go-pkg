@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -488,6 +489,80 @@ func TestBuildResponsesRequest_ToolDeclarationNoParameters(t *testing.T) {
 	params, ok := rr.Tools[0]["parameters"].(map[string]any)
 	if !ok {
 		t.Fatalf("parameters: got %T, want map[string]any", rr.Tools[0]["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
+	}
+}
+
+func TestBuildResponsesRequest_ToolDeclarationParametersJsonSchema(t *testing.T) {
+	t.Parallel()
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "weather?"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{
+				FunctionDeclarations: []*genai.FunctionDeclaration{{
+					Name:        "get_weather",
+					Description: "Returns the weather.",
+					ParametersJsonSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"city": map[string]any{"type": "string"},
+						},
+					},
+				}},
+			}},
+		},
+	}
+	rr, err := buildResponsesRequest(req, "gpt-4o", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rr.Tools) != 1 {
+		t.Fatalf("got %d tools, want 1", len(rr.Tools))
+	}
+	tool := rr.Tools[0]
+	params, ok := tool["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters: got %T, want map[string]any", tool["parameters"])
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
+	}
+}
+
+func TestBuildResponsesRequest_ToolDeclarationParametersJsonSchemaFromStruct(t *testing.T) {
+	t.Parallel()
+	schema := &jsonschema.Schema{
+		Type: "object",
+		Properties: map[string]*jsonschema.Schema{
+			"city": {Type: "string"},
+		},
+	}
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "weather?"}}},
+		},
+		Config: &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{{
+				FunctionDeclarations: []*genai.FunctionDeclaration{{
+					Name:                 "get_weather",
+					Description:          "Returns the weather.",
+					ParametersJsonSchema: schema,
+				}},
+			}},
+		},
+	}
+	rr, err := buildResponsesRequest(req, "gpt-4o", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tool := rr.Tools[0]
+	params, ok := tool["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters: got %T, want map[string]any", tool["parameters"])
 	}
 	if params["type"] != "object" {
 		t.Errorf("parameters.type: got %v, want %q", params["type"], "object")
@@ -1290,45 +1365,6 @@ func TestEnforceStrictOpenAISchema_Nested(t *testing.T) {
 	}
 	if outer["additionalProperties"] != false {
 		t.Errorf("outer additionalProperties: got %v, want false", outer["additionalProperties"])
-	}
-}
-
-// --- normalizeSchema tests ---
-
-func TestNormalizeSchema_Map(t *testing.T) {
-	t.Parallel()
-	input := map[string]any{"type": "object"}
-	result, err := normalizeSchema(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result["type"] != "object" {
-		t.Errorf("type: got %v, want %q", result["type"], "object")
-	}
-}
-
-func TestNormalizeSchema_Nil(t *testing.T) {
-	t.Parallel()
-	_, err := normalizeSchema(nil)
-	if !errors.Is(err, ErrEmptyJSONSchema) {
-		t.Errorf("got %v, want ErrEmptyJSONSchema", err)
-	}
-}
-
-func TestNormalizeSchema_OtherType(t *testing.T) {
-	t.Parallel()
-	// A struct marshals to a JSON object.
-	type mySchema struct {
-		Type       string         `json:"type"`
-		Properties map[string]any `json:"properties,omitempty"`
-	}
-	input := mySchema{Type: "object"}
-	result, err := normalizeSchema(input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result["type"] != "object" {
-		t.Errorf("type: got %v, want %q", result["type"], "object")
 	}
 }
 

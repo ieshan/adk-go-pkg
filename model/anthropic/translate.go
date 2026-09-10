@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -97,11 +98,13 @@ func buildMessageRequest(req *model.LLMRequest, modelName string, stream bool, c
 				JSONSchema: schemaToJSONSchema(cfg.ResponseSchema),
 			}
 		} else if cfg.ResponseJsonSchema != nil {
-			if m, ok := cfg.ResponseJsonSchema.(map[string]any); ok {
-				mr.OutputConfig = &outputConfig{
-					Format:     "json",
-					JSONSchema: m,
-				}
+			schemaMap, err := jsonutil.NormalizeSchema(cfg.ResponseJsonSchema)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: response json schema: %w", err)
+			}
+			mr.OutputConfig = &outputConfig{
+				Format:     "json",
+				JSONSchema: schemaMap,
 			}
 		} else if cfg.ResponseMIMEType == "application/json" {
 			mr.OutputConfig = &outputConfig{Format: "json"}
@@ -109,7 +112,11 @@ func buildMessageRequest(req *model.LLMRequest, modelName string, stream bool, c
 
 		// Tools.
 		if len(cfg.Tools) > 0 {
-			mr.Tools = translateToolDeclarations(cfg.Tools)
+			tools, err := translateToolDeclarations(cfg.Tools)
+			if err != nil {
+				return nil, err
+			}
+			mr.Tools = tools
 		}
 
 		// Tool choice.

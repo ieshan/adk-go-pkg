@@ -132,7 +132,12 @@ before the `[DONE]` marker, which has `TurnComplete: true`.
 ### Tool Calling
 
 Tools declared in `model.LLMRequest` are automatically translated to the OpenAI
-`tools` array format. When the model calls a tool, the response carries
+`tools` array format. Both `Parameters` (`*genai.Schema`) and
+`ParametersJsonSchema` (`*jsonschema.Schema`, `map[string]any`, or any
+JSON-serializable struct) are supported for function declaration parameters.
+`Parameters` takes precedence when both are set. If neither is specified, an
+empty object schema `{"type": "object", "properties": {}}` is supplied to
+ensure OpenAI API compliance. When the model calls a tool, the response carries
 `FunctionCall` parts:
 
 ```go
@@ -211,6 +216,14 @@ This sends `response_format: { type: "json_schema", json_schema: { name: "respon
 the API. The `name` and `strict` fields are set automatically by the model adapter.
 For unstructured JSON, set `ResponseMIMEType: "application/json"`
 instead (sends `{ type: "json_object" }`).
+
+Structured outputs can also be specified via `ResponseJsonSchema`
+(`*jsonschema.Schema`, `map[string]any`, or any JSON-serializable struct) across
+both Chat Completions and Responses API paths. When `ResponseJsonSchema` is
+set, the schema is normalized and `enforceStrictOpenAISchema` is applied to
+comply with OpenAI's strict mode requirements (`additionalProperties: false`,
+all properties in `required`). The schema name comes from the schema's `title`
+field (or `"response"` when empty).
 
 > **Responses API note:** The Responses path uses `text.format` (not
 > `response_format`). The schema name comes from `ResponseSchema.Title` (or
@@ -309,7 +322,7 @@ m, err := openai.New(openai.Config{
 | `Config.Tools` | `tools` (flat format) | `{"type":"function","name":...}` (not nested) |
 | `Config.ToolConfig` | `tool_choice` | supports `allowed_tools` mode |
 | `Config.ResponseSchema` | `text.format = {type:"json_schema",name,strict:true,schema}` | name from `Title` or `"response"` |
-| `Config.ResponseJsonSchema` | `text.format = {type:"json_schema",name,strict:true,schema}` | `normalizeSchema` + `enforceStrictOpenAISchema` |
+| `Config.ResponseJsonSchema` | `text.format = {type:"json_schema",name,strict:true,schema}` | `jsonutil.NormalizeSchema` + `enforceStrictOpenAISchema` |
 | `Config.ResponseMIMEType == "application/json"` (no schema) | `text.format = {type:"json_object"}` | |
 | `Config.ThinkingConfig` | not mapped | v1 scope (matching ADK) |
 

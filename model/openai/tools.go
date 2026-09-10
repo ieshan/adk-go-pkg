@@ -2,7 +2,10 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 
+	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 	"google.golang.org/genai"
 )
 
@@ -22,7 +25,7 @@ import (
 //	}
 //
 // Returns nil when tools is nil or contains no function declarations.
-func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
+func translateToolDeclarations(tools []*genai.Tool) ([]map[string]any, error) {
 	var result []map[string]any
 
 	for _, tool := range tools {
@@ -39,9 +42,11 @@ func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
 			if decl.Description != "" {
 				fn["description"] = decl.Description
 			}
-			if params := schemaToJSONSchema(decl.Parameters); params != nil {
-				fn["parameters"] = params
+			params, err := resolveToolParameters(decl)
+			if err != nil {
+				return nil, fmt.Errorf("openai: tool %q: %w", decl.Name, err)
 			}
+			fn["parameters"] = params
 			result = append(result, map[string]any{
 				"type":     "function",
 				"function": fn,
@@ -49,10 +54,29 @@ func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
 		}
 	}
 
-	if len(result) == 0 {
-		return nil
+	return result, nil
+}
+
+// resolveToolParameters resolves the parameter schema for a function
+// declaration, handling both the genai.Schema (Parameters) and raw JSON
+// Schema (ParametersJsonSchema) fields. Parameters takes precedence when
+// both are set (they are mutually exclusive per the genai docs). Returns
+// an empty object schema when neither is set, matching the ADK's
+// openaimodel adapter (openaimodel/tools.go:78-94).
+func resolveToolParameters(decl *genai.FunctionDeclaration) (map[string]any, error) {
+	if params := schemaToJSONSchema(decl.Parameters); params != nil {
+		return params, nil
 	}
-	return result
+	if decl.ParametersJsonSchema != nil {
+		params, err := jsonutil.NormalizeSchema(decl.ParametersJsonSchema)
+		if err != nil && !errors.Is(err, jsonutil.ErrEmptyJSONSchema) {
+			return nil, err
+		}
+		if params != nil {
+			return params, nil
+		}
+	}
+	return map[string]any{"type": "object", "properties": map[string]any{}}, nil
 }
 
 // translateToolConfig converts a [genai.ToolConfig] to the OpenAI tool_choice

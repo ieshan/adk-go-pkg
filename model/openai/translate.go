@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -133,10 +134,39 @@ func buildChatRequest(req *model.LLMRequest, modelName string, stream bool) (*ch
 		if cfg.ResponseSchema != nil {
 			// Structured output via json_schema.
 			schemaMap := schemaToJSONSchema(cfg.ResponseSchema)
+			if schemaMap == nil {
+				schemaMap = map[string]any{}
+			}
+			enforceStrictOpenAISchema(schemaMap)
+			name := "response"
+			if cfg.ResponseSchema.Title != "" {
+				name = cfg.ResponseSchema.Title
+			}
 			cr.ResponseFormat = map[string]any{
 				"type": "json_schema",
 				"json_schema": map[string]any{
-					"name":   "response",
+					"name":   name,
+					"strict": true,
+					"schema": schemaMap,
+				},
+			}
+		} else if cfg.ResponseJsonSchema != nil {
+			schemaMap, err := jsonutil.NormalizeSchema(cfg.ResponseJsonSchema)
+			if err != nil {
+				return nil, fmt.Errorf("openai: response json schema: %w", err)
+			}
+			if schemaMap == nil {
+				schemaMap = map[string]any{}
+			}
+			enforceStrictOpenAISchema(schemaMap)
+			name := "response"
+			if title, ok := schemaMap["title"].(string); ok && title != "" {
+				name = title
+			}
+			cr.ResponseFormat = map[string]any{
+				"type": "json_schema",
+				"json_schema": map[string]any{
+					"name":   name,
 					"strict": true,
 					"schema": schemaMap,
 				},
@@ -150,7 +180,10 @@ func buildChatRequest(req *model.LLMRequest, modelName string, stream bool) (*ch
 
 		// Tool/function declarations.
 		if len(cfg.Tools) > 0 {
-			toolDefs := translateToolDeclarations(cfg.Tools)
+			toolDefs, err := translateToolDeclarations(cfg.Tools)
+			if err != nil {
+				return nil, err
+			}
 			if toolDefs != nil {
 				cr.Tools = make([]any, len(toolDefs))
 				for i, td := range toolDefs {

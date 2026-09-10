@@ -2,9 +2,11 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/ieshan/adk-go-pkg/internal/jsonutil"
 	"google.golang.org/genai"
 )
 
@@ -24,7 +26,7 @@ import (
 // GoogleSearch, etc.) are silently skipped.
 //
 // Returns nil when tools is nil or contains no function declarations.
-func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
+func translateToolDeclarations(tools []*genai.Tool) ([]map[string]any, error) {
 	var result []map[string]any
 
 	for _, tool := range tools {
@@ -41,14 +43,9 @@ func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
 			if decl.Description != "" {
 				td["description"] = decl.Description
 			}
-			var schema map[string]any
-			if decl.Parameters != nil {
-				schema = schemaToJSONSchema(decl.Parameters)
-			} else if decl.ParametersJsonSchema != nil {
-				// ParametersJsonSchema is `any`; if it's already a map, use it directly.
-				if m, ok := decl.ParametersJsonSchema.(map[string]any); ok {
-					schema = m
-				}
+			schema, err := resolveToolParameters(decl)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: tool %q: %w", decl.Name, err)
 			}
 			if schema != nil {
 				td["input_schema"] = schema
@@ -58,9 +55,28 @@ func translateToolDeclarations(tools []*genai.Tool) []map[string]any {
 	}
 
 	if len(result) == 0 {
-		return nil
+		return nil, nil
 	}
-	return result
+	return result, nil
+}
+
+// resolveToolParameters resolves the parameter schema for a function
+// declaration, handling both the genai.Schema (Parameters) and raw JSON
+// Schema (ParametersJsonSchema) fields. Parameters takes precedence when
+// both are set (they are mutually exclusive per the genai docs). Returns
+// nil when neither is set — Anthropic's input_schema is optional.
+func resolveToolParameters(decl *genai.FunctionDeclaration) (map[string]any, error) {
+	if params := schemaToJSONSchema(decl.Parameters); params != nil {
+		return params, nil
+	}
+	if decl.ParametersJsonSchema != nil {
+		params, err := jsonutil.NormalizeSchema(decl.ParametersJsonSchema)
+		if err != nil && !errors.Is(err, jsonutil.ErrEmptyJSONSchema) {
+			return nil, err
+		}
+		return params, nil
+	}
+	return nil, nil
 }
 
 // translateToolConfig converts a [genai.ToolConfig] to the Anthropic tool_choice

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 const (
@@ -21,13 +22,25 @@ type PendingToolCall struct {
 	Args map[string]any
 }
 
-// PausedRun is the state captured when a run pauses on a tool-approval interrupt.
+// RequestedInputSnapshot captures the RequestedInput fields at pause time so
+// the resume path can distinguish a free-form input request from a tool
+// approval interrupt and use the user's payload directly.
+type RequestedInputSnapshot struct {
+	InterruptID    string
+	Message        string
+	ResponseSchema *jsonschema.Schema
+	Payload        any
+}
+
+// PausedRun is the state captured when a run pauses on a tool-approval
+// interrupt or a RequestedInput prompt.
 type PausedRun struct {
-	ThreadID  string
-	RunID     string
-	SessionID string
-	Pending   []PendingToolCall
-	State     map[string]any
+	ThreadID       string
+	RunID          string
+	SessionID      string
+	Pending        []PendingToolCall
+	RequestedInput *RequestedInputSnapshot
+	State          map[string]any
 }
 
 type runEntry struct {
@@ -126,11 +139,12 @@ func (s *RunStore) Save(key string, run *PausedRun) {
 	}
 	pending := append([]PendingToolCall(nil), run.Pending...)
 	stored := &PausedRun{
-		ThreadID:  run.ThreadID,
-		RunID:     run.RunID,
-		SessionID: run.SessionID,
-		Pending:   pending,
-		State:     state,
+		ThreadID:       run.ThreadID,
+		RunID:          run.RunID,
+		SessionID:      run.SessionID,
+		Pending:        pending,
+		RequestedInput: run.RequestedInput,
+		State:          state,
 	}
 	s.runs[key] = &runEntry{run: stored, at: now}
 }

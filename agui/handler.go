@@ -56,6 +56,13 @@ func Handler(cfg Config) (http.Handler, error) {
 			return
 		}
 
+		// Accept header negotiation: this server only supports SSE
+		// (text/event-stream) and JSON. Reject protobuf transport requests.
+		if isProtobufAccept(r.Header.Get("Accept")) {
+			http.Error(w, "protobuf transport not supported", http.StatusNotAcceptable)
+			return
+		}
+
 		// Set SSE headers.
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -115,4 +122,24 @@ func Handler(cfg Config) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// isProtobufAccept reports whether the Accept header requests a protobuf
+// transport. The AG-UI protocol registers several protobuf media types
+// (application/vnd.ag-ui.event+proto, application/x-protobuf,
+// application/protobuf, application/vnd.google.protobuf); this server
+// only supports SSE (text/event-stream) and JSON.
+func isProtobufAccept(accept string) bool {
+	protobufTypes := []string{
+		"application/vnd.ag-ui.event+proto",
+		"application/x-protobuf",
+		"application/protobuf",
+		"application/vnd.google.protobuf",
+	}
+	for _, pt := range protobufTypes {
+		if strings.Contains(accept, pt) {
+			return true
+		}
+	}
+	return false
 }
