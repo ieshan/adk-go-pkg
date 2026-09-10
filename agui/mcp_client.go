@@ -21,13 +21,7 @@ func BuildMCPTransport(config MCPClientConfig) (mcp.Transport, error) {
 		return nil, fmt.Errorf("agui: MCP server URL is required")
 	}
 
-	httpClient := &http.Client{}
-	if len(config.Headers) > 0 {
-		httpClient.Transport = &headerRoundTripper{
-			base:    http.DefaultTransport,
-			headers: config.Headers,
-		}
-	}
+	httpClient := newMCPHTTPClient(config.Headers)
 
 	switch config.Type {
 	case "http", "streamable", "":
@@ -42,6 +36,30 @@ func BuildMCPTransport(config MCPClientConfig) (mcp.Transport, error) {
 		}, nil
 	default:
 		return nil, fmt.Errorf("agui: unsupported MCP transport type %q (use \"http\" or \"sse\")", config.Type)
+	}
+}
+
+// newMCPHTTPClient creates an *http.Client with a dedicated *http.Transport
+// cloned from http.DefaultTransport. This prevents concurrent callers of
+// http.DefaultTransport.CloseIdleConnections() (notably httptest.Server.Close
+// in parallel tests) from severing idle connections that the MCP client is
+// about to reuse during the initialize/notifications/initialized handshake.
+//
+// If http.DefaultTransport is not a *http.Transport (extremely unlikely),
+// the fallback uses http.DefaultTransport directly.
+func newMCPHTTPClient(headers map[string]string) *http.Client {
+	base := http.DefaultTransport
+	if t, ok := base.(*http.Transport); ok {
+		base = t.Clone()
+	}
+	if len(headers) == 0 {
+		return &http.Client{Transport: base}
+	}
+	return &http.Client{
+		Transport: &headerRoundTripper{
+			base:    base,
+			headers: headers,
+		},
 	}
 }
 
