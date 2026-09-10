@@ -2351,9 +2351,10 @@ func TestBridge_StepEvents(t *testing.T) {
 		events.EventTypeTextMessageStart,
 		events.EventTypeTextMessageContent,
 		// ev2: non-partial, has FunctionCall → STEP_STARTED("tools") (first non-partial
-		// with FunctionCall goes directly to tools step)
+		// with FunctionCall goes directly to tools step). The final text equals the
+		// accumulated partial text, so the delta is empty and no content event is
+		// emitted — only the message end.
 		events.EventTypeStepStarted, // "tools"
-		events.EventTypeTextMessageContent,
 		events.EventTypeTextMessageEnd,
 		events.EventTypeToolCallStart,
 		events.EventTypeToolCallArgs,

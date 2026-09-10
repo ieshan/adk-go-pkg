@@ -1059,17 +1059,17 @@ func (t *eventTranslator) emitText(text string, partial bool, author string) {
 	if partial {
 		// Streaming mode: compute delta from previous accumulated text.
 		delta := text
-		if len(text) > len(t.prevText) && text[:len(t.prevText)] == t.prevText {
+		if strings.HasPrefix(text, t.prevText) {
 			delta = text[len(t.prevText):]
 		}
 		if delta != "" {
 			_ = t.activeEmitter.TextMessageContent(t.currentMsgID, delta)
 		}
-		t.prevText = text
+		t.prevText += delta
 	} else {
 		// Final (non-partial) event: emit remaining content and close.
 		delta := text
-		if len(text) > len(t.prevText) && text[:len(t.prevText)] == t.prevText {
+		if strings.HasPrefix(text, t.prevText) {
 			delta = text[len(t.prevText):]
 		}
 		if delta != "" {
@@ -1362,13 +1362,13 @@ func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
 
 	// Compute incremental delta from the accumulated thought text.
 	delta := part.Text
-	if len(part.Text) > len(t.prevThoughtText) && strings.HasPrefix(part.Text, t.prevThoughtText) {
+	if strings.HasPrefix(part.Text, t.prevThoughtText) {
 		delta = part.Text[len(t.prevThoughtText):]
 	}
 	if delta != "" {
 		_ = t.activeEmitter.ReasoningMessageContent(t.currentReasoningID, delta)
 	}
-	t.prevThoughtText = part.Text
+	t.prevThoughtText += delta
 
 	// Emit encrypted reasoning value if the part carries a thought signature.
 	if len(part.ThoughtSignature) > 0 {

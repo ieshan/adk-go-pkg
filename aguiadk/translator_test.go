@@ -330,3 +330,122 @@ func TestSessionEventsToMessages_CompleteFidelity(t *testing.T) {
 		t.Errorf("msgs[1].Name = %q, want get_weather", msgs[1].Name)
 	}
 }
+
+// TestStreamingTextNoDuplicate verifies that the final non-partial event
+// never re-emits text already streamed by partials, for both the
+// single-partial-equals-final case and the multi-raw-delta case.
+func TestStreamingTextNoDuplicate(t *testing.T) {
+	tests := []struct {
+		name       string
+		partials   []string
+		final      string
+		wantDeltas []string
+	}{
+		{
+			name:       "final_equals_last_partial",
+			partials:   []string{"Hello, world!"},
+			final:      "Hello, world!",
+			wantDeltas: []string{"Hello, world!"},
+		},
+		{
+			name:       "raw_deltas",
+			partials:   []string{"Hello", " world"},
+			final:      "Hello world",
+			wantDeltas: []string{"Hello", " world"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator, ch := newTestTranslator(32)
+			for _, p := range tt.partials {
+				translator.translate(&session.Event{
+					LLMResponse: model.LLMResponse{
+						Partial: true,
+						Content: &genai.Content{Parts: []*genai.Part{{Text: p}}},
+					},
+				})
+			}
+			translator.translate(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Partial: false,
+					Content: &genai.Content{Parts: []*genai.Part{{Text: tt.final}}},
+				},
+			})
+			close(ch)
+
+			var deltas []string
+			for _, ev := range drainEvents(ch) {
+				if c, ok := ev.(*events.TextMessageContentEvent); ok {
+					deltas = append(deltas, c.Delta)
+				}
+			}
+			if len(deltas) != len(tt.wantDeltas) {
+				t.Fatalf("got %d TEXT_MESSAGE_CONTENT deltas %v, want %d (%v)", len(deltas), deltas, len(tt.wantDeltas), tt.wantDeltas)
+			}
+			for i, d := range deltas {
+				if d != tt.wantDeltas[i] {
+					t.Errorf("deltas[%d] = %q, want %q", i, d, tt.wantDeltas[i])
+				}
+			}
+		})
+	}
+}
+
+// TestStreamingThoughtNoDuplicate verifies that the final non-partial thought
+// event never re-emits reasoning text already streamed by partials.
+func TestStreamingThoughtNoDuplicate(t *testing.T) {
+	tests := []struct {
+		name       string
+		partials   []string
+		final      string
+		wantDeltas []string
+	}{
+		{
+			name:       "final_equals_last_partial",
+			partials:   []string{"reasoning complete"},
+			final:      "reasoning complete",
+			wantDeltas: []string{"reasoning complete"},
+		},
+		{
+			name:       "raw_deltas",
+			partials:   []string{"Thinking", " step 1"},
+			final:      "Thinking step 1",
+			wantDeltas: []string{"Thinking", " step 1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator, ch := newTestTranslator(32)
+			for _, p := range tt.partials {
+				translator.translate(&session.Event{
+					LLMResponse: model.LLMResponse{
+						Partial: true,
+						Content: &genai.Content{Parts: []*genai.Part{{Thought: true, Text: p}}},
+					},
+				})
+			}
+			translator.translate(&session.Event{
+				LLMResponse: model.LLMResponse{
+					Partial: false,
+					Content: &genai.Content{Parts: []*genai.Part{{Thought: true, Text: tt.final}}},
+				},
+			})
+			close(ch)
+
+			var deltas []string
+			for _, ev := range drainEvents(ch) {
+				if c, ok := ev.(*events.ReasoningMessageContentEvent); ok {
+					deltas = append(deltas, c.Delta)
+				}
+			}
+			if len(deltas) != len(tt.wantDeltas) {
+				t.Fatalf("got %d REASONING_MESSAGE_CONTENT deltas %v, want %d (%v)", len(deltas), deltas, len(tt.wantDeltas), tt.wantDeltas)
+			}
+			for i, d := range deltas {
+				if d != tt.wantDeltas[i] {
+					t.Errorf("deltas[%d] = %q, want %q", i, d, tt.wantDeltas[i])
+				}
+			}
+		})
+	}
+}

@@ -336,7 +336,7 @@ The bridge translates ADK session events into AG-UI events as follows:
 
 | ADK Event | AG-UI Event(s) | Notes |
 |-----------|---------------|-------|
-| Text part (partial) | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` | Delta computed from accumulated text |
+| Text part (partial) | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` | Delta computed from accumulated emitted text (handles both raw-delta and accumulated-text providers) |
 | Text part (final) | `TEXT_MESSAGE_CONTENT` + `TEXT_MESSAGE_END` | Closes the message |
 | Thought part | `REASONING_START` + `REASONING_MESSAGE_START` + `REASONING_MESSAGE_CONTENT` + `REASONING_MESSAGE_END` + `REASONING_END` | Full reasoning sequence per thought. When a thought part carries a `ThoughtSignature`, a `REASONING_ENCRYPTED_VALUE` event is also emitted. |
 | FunctionCall part (partial) | `TOOL_CALL_START` + one `TOOL_CALL_ARGS` per `PartialArgs[].StringValue` | Streaming deltas; AG-UI clients concatenate deltas |
@@ -358,10 +358,16 @@ The bridge translates ADK session events into AG-UI events as follows:
 
 ### Text Delta Computation
 
-For streaming (partial) text events, the bridge computes deltas by comparing
-each new text with the previously accumulated text. If the new text starts with
-the old text, only the new suffix is emitted as `TEXT_MESSAGE_CONTENT`. This
-avoids duplicate content when the ADK runner sends cumulative text.
+For streaming (partial) text events, the bridge tracks the accumulated
+**emitted** text and computes each delta by checking whether the incoming text
+starts with that accumulated text. If it does (the accumulated-text or
+full-text contract used by some providers), only the new suffix is emitted as
+`TEXT_MESSAGE_CONTENT`. If it does not (the raw-delta contract used by OpenAI,
+Gemini, and ADK's openaimodel, where partials carry incremental fragments), the
+incoming text is emitted verbatim. In both cases the accumulated emitted text is
+updated by appending the delta, so the final non-partial event (which carries
+the full text) yields an empty delta and emits no duplicate `TEXT_MESSAGE_CONTENT`.
+The same logic applies to thought parts via `prevThoughtText`.
 
 ### Streaming Tool Call Delta Computation
 
