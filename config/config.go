@@ -1,11 +1,16 @@
-// Package config provides types and utilities for loading, parsing, and translating
+// Package config provides types and utilities for loading, parsing, and building
 // agent configuration files in JSON or YAML format.
 //
 // # Overview
 //
-// An [AgentConfig] describes the shape of a single agent (or a hierarchy of sub-agents).
-// Configuration files can be stored as .json, .yaml, or .yml files and loaded with [Load],
-// or parsed directly from byte slices with [Parse].
+// An [AgentConfig] describes the shape of a single agent (or a hierarchy of
+// sub-agents). Configuration files can be stored as .json, .yaml, or .yml files
+// and loaded with [Load], or parsed directly from byte slices with [Parse].
+//
+// Parsing is strict: unknown fields are reported as [ErrUnknownField], and
+// fields that exist in the adk-python spec but have no adk-go equivalent are
+// reported as [ErrUnsupportedField]. This makes typos and non-portable
+// constructs fail fast instead of being silently dropped.
 //
 // # Agent Skills
 //
@@ -26,8 +31,6 @@
 // The built-in "filesystem" skill factory reads skills from disk. Register custom
 // factories via [Registry.RegisterSkill] for cloud storage or other sources.
 //
-// See [SkillsetRef] for configuration details and [SkillFactory] for creating custom sources.
-//
 // # Loading a file
 //
 //	appCfg, err := config.Load(root, "agents/my-agent.yaml")
@@ -40,39 +43,54 @@
 //
 //	appCfg, err := config.Parse([]byte(`{"name":"bot","agent_class":"LlmAgent"}`), "json")
 //
-// # Translating generation config
+// # Generation config
 //
-//	gc, err := config.TranslateGenerateConfig(map[string]any{
-//	    "temperature": 0.7,
-//	    "maxOutputTokens": float64(1024),
-//	})
+// The generate_content_config section is decoded directly into a
+// [google.golang.org/genai.GenerateContentConfig]. Keys may be written in
+// snake_case (recommended, matches adk-python), camelCase, or all-lowercase; the
+// decoder normalizes them.
 package config
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	jsonv2 "encoding/json/v2"
 
 	"github.com/ieshan/adk-go-pkg/prompt"
 	"go.yaml.in/yaml/v4"
 	"google.golang.org/genai"
 )
 
-// ErrMaxLLMCallsInvalid is returned when LiveRunConfig.MaxLLMCalls is not positive.
-var ErrMaxLLMCallsInvalid = errors.New("live_run_config.max_llm_calls must be > 0")
+// Sentinel errors for configuration parsing. Wrap them with errors.Is.
+var (
+	// ErrUnknownField reports a key that is not part of the schema for the
+	// agent class (or section) that contains it.
+	ErrUnknownField = errors.New("unknown config field")
+	// ErrUnsupportedField reports a real adk-python field that has no adk-go
+	// equivalent and therefore cannot be honored.
+	ErrUnsupportedField = errors.New("config field has no adk-go equivalent")
+	// ErrCallbackArgs reports args on a callback code config, which adk-python
+	// forbids (callback references are name-only).
+	ErrCallbackArgs = errors.New("callback code configs do not take args")
+	// ErrAmbiguousField reports two keys that normalize to the same field.
+	ErrAmbiguousField = errors.New("config keys normalize to the same field")
+	// ErrNoDefaultModel reports that a model reference needs the default model
+	// factory but none was registered.
+	ErrNoDefaultModel = errors.New("no default model factory registered")
+)
 
 // AgentConfig is the sealed interface for all declarative agent configurations.
 // Only types defined in this package can implement it.
 type AgentConfig interface {
-	Type() string
 	Name() string
 	Description() string
-	SubAgents() []AgentConfig
 	SubAgentEntries() []SubAgentEntry
 	isAgentConfig() // sealed
 }
@@ -87,29 +105,30 @@ type BaseAgentConfig struct {
 	AfterAgentCallbacks  []CodeConfig    `json:"after_agent_callbacks,omitempty" yaml:"after_agent_callbacks,omitempty"`
 }
 
-// LLMAgentConfig is the typed config for "llm" agents.
+// LLMAgentConfig is the typed config for "LlmAgent" agents.
 type LLMAgentConfig struct {
 	BaseAgentConfig          `json:",inline" yaml:",inline"`
-	Model                    string              `json:"model,omitempty" yaml:"model,omitempty"`
-	ModelCode                *CodeConfig         `json:"model_code,omitempty" yaml:"model_code,omitempty"`
-	Instruction              string              `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-	InstructionTemplate      *prompt.TemplateRef `json:"instruction_template,omitempty" yaml:"instruction_template,omitempty"`
-	StaticInstruction        string              `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
-	InputSchema              *SchemaRef          `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
-	OutputSchema             *SchemaRef          `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
-	OutputKey                string              `json:"output_key,omitempty" yaml:"output_key,omitempty"`
-	IncludeContents          string              `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
-	Tools                    []ToolRef           `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Skillsets                []SkillsetRef       `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
-	GenerateConfig           map[string]any      `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
-	DisallowTransferToParent bool                `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
-	DisallowTransferToPeers  bool                `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
-	BeforeModelCallbacks     []CodeConfig        `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
-	AfterModelCallbacks      []CodeConfig        `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
-	OnModelErrorCallbacks    []CodeConfig        `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
-	BeforeToolCallbacks      []CodeConfig        `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
-	AfterToolCallbacks       []CodeConfig        `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
-	OnToolErrorCallbacks     []CodeConfig        `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
+	Model                    string                       `json:"model,omitempty" yaml:"model,omitempty"`
+	ModelCode                *CodeConfig                  `json:"model_code,omitempty" yaml:"model_code,omitempty"`
+	ModelArgs                map[string]any               `json:"model_args,omitempty" yaml:"model_args,omitempty"`
+	Instruction              string                       `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	InstructionTemplate      *prompt.TemplateRef          `json:"instruction_template,omitempty" yaml:"instruction_template,omitempty"`
+	GlobalInstruction        string                       `json:"global_instruction,omitempty" yaml:"global_instruction,omitempty"`
+	InputSchema              *SchemaRef                   `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
+	OutputSchema             *SchemaRef                   `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
+	OutputKey                string                       `json:"output_key,omitempty" yaml:"output_key,omitempty"`
+	IncludeContents          string                       `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
+	Tools                    []ToolRef                    `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Skillsets                []SkillsetRef                `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
+	GenerateContentConfig    *genai.GenerateContentConfig `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
+	DisallowTransferToParent bool                         `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
+	DisallowTransferToPeers  bool                         `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
+	BeforeModelCallbacks     []CodeConfig                 `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
+	AfterModelCallbacks      []CodeConfig                 `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
+	OnModelErrorCallbacks    []CodeConfig                 `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
+	BeforeToolCallbacks      []CodeConfig                 `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
+	AfterToolCallbacks       []CodeConfig                 `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
+	OnToolErrorCallbacks     []CodeConfig                 `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
 }
 
 // Name returns the agent name.
@@ -118,19 +137,12 @@ func (c *LLMAgentConfig) Name() string { return c.BaseAgentConfig.Name }
 // Description returns the agent description.
 func (c *LLMAgentConfig) Description() string { return c.BaseAgentConfig.Description }
 
-// SubAgents returns the inline sub-agent configs.
-func (c *LLMAgentConfig) SubAgents() []AgentConfig {
-	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
-}
-
 // SubAgentEntries returns the sub-agent entries for the LLM agent.
 func (c *LLMAgentConfig) SubAgentEntries() []SubAgentEntry { return c.BaseAgentConfig.SubAgentEntries }
 
-// Type returns the agent type identifier.
-func (*LLMAgentConfig) Type() string   { return "llm" }
 func (*LLMAgentConfig) isAgentConfig() {}
 
-// SequentialAgentConfig is the typed config for "sequential" agents.
+// SequentialAgentConfig is the typed config for "SequentialAgent" agents.
 type SequentialAgentConfig struct {
 	BaseAgentConfig `json:",inline" yaml:",inline"`
 }
@@ -141,21 +153,14 @@ func (c *SequentialAgentConfig) Name() string { return c.BaseAgentConfig.Name }
 // Description returns the agent description.
 func (c *SequentialAgentConfig) Description() string { return c.BaseAgentConfig.Description }
 
-// SubAgents returns the inline sub-agent configs.
-func (c *SequentialAgentConfig) SubAgents() []AgentConfig {
-	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
-}
-
 // SubAgentEntries returns the sub-agent entries for the sequential agent.
 func (c *SequentialAgentConfig) SubAgentEntries() []SubAgentEntry {
 	return c.BaseAgentConfig.SubAgentEntries
 }
 
-// Type returns the agent type identifier.
-func (*SequentialAgentConfig) Type() string   { return "sequential" }
 func (*SequentialAgentConfig) isAgentConfig() {}
 
-// ParallelAgentConfig is the typed config for "parallel" agents.
+// ParallelAgentConfig is the typed config for "ParallelAgent" agents.
 type ParallelAgentConfig struct {
 	BaseAgentConfig `json:",inline" yaml:",inline"`
 }
@@ -166,21 +171,14 @@ func (c *ParallelAgentConfig) Name() string { return c.BaseAgentConfig.Name }
 // Description returns the agent description.
 func (c *ParallelAgentConfig) Description() string { return c.BaseAgentConfig.Description }
 
-// SubAgents returns the inline sub-agent configs.
-func (c *ParallelAgentConfig) SubAgents() []AgentConfig {
-	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
-}
-
 // SubAgentEntries returns the sub-agent entries for the parallel agent.
 func (c *ParallelAgentConfig) SubAgentEntries() []SubAgentEntry {
 	return c.BaseAgentConfig.SubAgentEntries
 }
 
-// Type returns the agent type identifier.
-func (*ParallelAgentConfig) Type() string   { return "parallel" }
 func (*ParallelAgentConfig) isAgentConfig() {}
 
-// LoopAgentConfig is the typed config for "loop" agents.
+// LoopAgentConfig is the typed config for "LoopAgent" agents.
 type LoopAgentConfig struct {
 	BaseAgentConfig `json:",inline" yaml:",inline"`
 	MaxIterations   int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
@@ -192,27 +190,35 @@ func (c *LoopAgentConfig) Name() string { return c.BaseAgentConfig.Name }
 // Description returns the agent description.
 func (c *LoopAgentConfig) Description() string { return c.BaseAgentConfig.Description }
 
-// SubAgents returns the inline sub-agent configs.
-func (c *LoopAgentConfig) SubAgents() []AgentConfig {
-	return inlineSubAgents(c.BaseAgentConfig.SubAgentEntries)
-}
-
 // SubAgentEntries returns the sub-agent entries for the loop agent.
 func (c *LoopAgentConfig) SubAgentEntries() []SubAgentEntry { return c.BaseAgentConfig.SubAgentEntries }
 
-// Type returns the agent type identifier.
-func (*LoopAgentConfig) Type() string   { return "loop" }
 func (*LoopAgentConfig) isAgentConfig() {}
 
-func inlineSubAgents(entries []SubAgentEntry) []AgentConfig {
-	var agents []AgentConfig
-	for _, e := range entries {
-		if e.Inline != nil {
-			agents = append(agents, e.Inline)
-		}
-	}
-	return agents
+// WorkflowAgentConfig is the typed config for "Workflow" agents.
+//
+// A workflow declares its graph through edges rather than sub_agents. Each
+// edges entry is a chain: a sequence whose items are node references (scalar
+// names, START, or .yaml/.yml file references) and/or route maps.
+type WorkflowAgentConfig struct {
+	BaseAgentConfig `json:",inline" yaml:",inline"`
+	Edges           []any `json:"edges,omitempty" yaml:"edges,omitempty"`
+	MaxConcurrency  int   `json:"max_concurrency,omitempty" yaml:"max_concurrency,omitempty"`
 }
+
+// Name returns the workflow name.
+func (c *WorkflowAgentConfig) Name() string { return c.BaseAgentConfig.Name }
+
+// Description returns the workflow description.
+func (c *WorkflowAgentConfig) Description() string { return c.BaseAgentConfig.Description }
+
+// SubAgentEntries returns the sub-agent entries for the workflow (programmatic
+// construction only; sub_agents is not accepted in a Workflow config file).
+func (c *WorkflowAgentConfig) SubAgentEntries() []SubAgentEntry {
+	return c.BaseAgentConfig.SubAgentEntries
+}
+
+func (*WorkflowAgentConfig) isAgentConfig() {}
 
 // ToolRef identifies a tool by name and carries optional per-instance configuration.
 //
@@ -222,6 +228,9 @@ func inlineSubAgents(entries []SubAgentEntry) []AgentConfig {
 //	  - name: search
 //	    args:
 //	      maxResults: 5
+//
+// A bare string is shorthand for a name-only reference: "search" means
+// {name: search}.
 type ToolRef struct {
 	// Name is the registered tool identifier.
 	Name string `json:"name" yaml:"name"`
@@ -334,9 +343,12 @@ type SkillsetRef struct {
 
 // AgentRefConfig references another agent by config file path or code name.
 type AgentRefConfig struct {
-	// ConfigPath is a root-relative path to an agent config file.
-	// It is resolved relative to the parent config's directory inside the
-	// *os.Root passed to BuildWithPath/LoadAndBuild.
+	// ConfigPath is a root-relative path to an agent config file. It is
+	// resolved relative to the referencing config file's own directory inside
+	// the *os.Root passed to BuildWithPath/LoadAndBuild.
+	//
+	// A referenced file's own run_config/context_cache_config sections are
+	// ignored; only its agent tree is used.
 	ConfigPath string `json:"config_path,omitempty" yaml:"config_path,omitempty"`
 	// Code is a registered agent name in the Registry, resolved at Build time.
 	Code string `json:"code,omitempty" yaml:"code,omitempty"`
@@ -371,78 +383,70 @@ type SchemaRef struct {
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for SchemaRef.
-// Strings are treated as CodeConfig name references. Objects with a
-// "type" key are parsed as inline genai.Schema. Objects with a "name"
-// key are parsed as CodeConfig references.
 func (s *SchemaRef) UnmarshalJSON(data []byte) error {
-	var str string
-	if err := json.Unmarshal(data, &str); err == nil {
-		s.Ref = &CodeConfig{Name: str}
-		return nil
-	}
-
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	var v any
+	if err := jsonv2.Unmarshal(data, &v); err != nil {
 		return err
 	}
-
-	if _, hasType := m["type"]; hasType {
-		var schema genai.Schema
-		if err := json.Unmarshal(data, &schema); err != nil {
-			return fmt.Errorf("schemaRef: invalid inline schema: %w", err)
-		}
-		s.Inline = &schema
-		return nil
+	ref, err := schemaRefFromValue(v)
+	if err != nil {
+		return err
 	}
-
-	if _, hasName := m["name"]; hasName {
-		var ref CodeConfig
-		if err := json.Unmarshal(data, &ref); err != nil {
-			return fmt.Errorf("schemaRef: invalid named ref: %w", err)
-		}
-		s.Ref = &ref
-		return nil
-	}
-
-	return fmt.Errorf("schemaRef: must have 'type' (inline schema) or 'name' (reference) key")
+	*s = *ref
+	return nil
 }
 
-// UnmarshalYAML implements custom YAML unmarshaling for SchemaRef using the
-// yaml/v4 *yaml.Node interface.
+// UnmarshalYAML implements custom YAML unmarshaling for SchemaRef.
 func (s *SchemaRef) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		s.Ref = &CodeConfig{Name: node.Value}
-		return nil
-	case yaml.MappingNode:
-		var hasType, hasName bool
-		for i := 0; i < len(node.Content); i += 2 {
-			switch node.Content[i].Value {
-			case "type":
-				hasType = true
-			case "name":
-				hasName = true
-			}
+	var v any
+	if err := node.Decode(&v); err != nil {
+		return err
+	}
+	ref, err := schemaRefFromValue(normalizeValue(v))
+	if err != nil {
+		return err
+	}
+	*s = *ref
+	return nil
+}
+
+// schemaRefFromValue tri-classifies a schema value:
+//   - scalar string → named reference;
+//   - map containing "name" → named reference (with optional args);
+//   - other map → inline genai.Schema decoded with the normalizing decoder.
+func schemaRefFromValue(v any) (*SchemaRef, error) {
+	switch t := v.(type) {
+	case string:
+		if t == "" {
+			return nil, fmt.Errorf("schema: %q must be a non-empty string", "name")
 		}
-		if hasType {
-			var schema genai.Schema
-			if err := node.Decode(&schema); err != nil {
-				return fmt.Errorf("schemaRef: invalid inline schema: %w", err)
+		return &SchemaRef{Ref: &CodeConfig{Name: t}}, nil
+	case map[string]any:
+		if _, hasName := t["name"]; hasName {
+			if err := checkKeys(t, keySet("name", "args"), nil, "schema"); err != nil {
+				return nil, err
 			}
-			s.Inline = &schema
-			return nil
-		}
-		if hasName {
-			var ref CodeConfig
-			if err := node.Decode(&ref); err != nil {
-				return fmt.Errorf("schemaRef: invalid named ref: %w", err)
+			name, _ := asString(t["name"])
+			if name == "" {
+				return nil, fmt.Errorf("schema: %q must be a non-empty string", "name")
 			}
-			s.Ref = &ref
-			return nil
+			ref := &CodeConfig{Name: name}
+			if a, ok := t["args"]; ok {
+				args, ok := asMap(a)
+				if !ok {
+					return nil, fmt.Errorf("schema: args: expected map, got %T", a)
+				}
+				ref.Args = args
+			}
+			return &SchemaRef{Ref: ref}, nil
 		}
-		return fmt.Errorf("schemaRef: must have type (inline schema) or name (reference) key")
+		sch, err := decodeGenai[genai.Schema](t, "schema")
+		if err != nil {
+			return nil, err
+		}
+		return &SchemaRef{Inline: sch}, nil
 	default:
-		return fmt.Errorf("schemaRef: expected scalar or mapping, got kind %d", node.Kind)
+		return nil, fmt.Errorf("schema: expected string or map, got %T", v)
 	}
 }
 
@@ -460,51 +464,36 @@ const (
 	StreamingModeNone StreamingMode = "none"
 	// StreamingModeSSE enables server-sent events streaming.
 	StreamingModeSSE StreamingMode = "sse"
-	// StreamingModeBIDI enables bidirectional streaming.
+	// StreamingModeBIDI enables bidirectional streaming. It is accepted at parse
+	// time but rejected by BuildAppWithPath because agent.StreamingMode has no
+	// bidi constant.
 	StreamingModeBIDI StreamingMode = "bidi"
 )
 
-// RunConfig configures runtime agent behavior.
+// RunConfig mirrors the adk-python RunConfig fields that have adk-go targets.
+//
+// It is a spec-aligned extension: adk-python passes RunConfig programmatically
+// to the Runner rather than declaring it in agent YAML. The field names match
+// google.adk.agents.run_config.RunConfig so values mean the same thing.
 type RunConfig struct {
-	StreamingMode  StreamingMode  `json:"streaming_mode,omitempty" yaml:"streaming_mode,omitempty"`
-	SaveLiveBlob   bool           `json:"save_live_blob,omitempty" yaml:"save_live_blob,omitempty"`
-	CustomMetadata map[string]any `json:"custom_metadata,omitempty" yaml:"custom_metadata,omitempty"`
-}
-
-// SetDefaults applies Python-equivalent defaults.
-func (r *RunConfig) SetDefaults() {
-	if r.StreamingMode == "" {
-		r.StreamingMode = StreamingModeNone
-	}
-}
-
-// Validate currently enforces no constraints for RunConfig.
-// It exists to satisfy the config validation pattern used by other types.
-func (r *RunConfig) Validate() error {
-	return nil
-}
-
-// LiveRunConfig configures live-session runtime behavior.
-type LiveRunConfig struct {
-	MaxLLMCalls int `json:"max_llm_calls,omitempty" yaml:"max_llm_calls,omitempty"`
-}
-
-// SetDefaults applies Python-equivalent defaults.
-func (r *LiveRunConfig) SetDefaults() {
-	if r.MaxLLMCalls == 0 {
-		r.MaxLLMCalls = 500
-	}
-}
-
-// Validate enforces Python-equivalent constraints.
-func (r *LiveRunConfig) Validate() error {
-	if r.MaxLLMCalls <= 0 {
-		return ErrMaxLLMCallsInvalid
-	}
-	return nil
+	// StreamingMode is one of "", "none", "sse", or "bidi".
+	StreamingMode StreamingMode `json:"streaming_mode,omitempty" yaml:"streaming_mode,omitempty"`
+	// SaveInputBlobsAsArtifacts maps to agent.RunConfig.SaveInputBlobsAsArtifacts.
+	SaveInputBlobsAsArtifacts bool `json:"save_input_blobs_as_artifacts,omitempty" yaml:"save_input_blobs_as_artifacts,omitempty"`
+	// SaveLiveBlob maps to agent.LiveRunConfig.SaveLiveBlob.
+	SaveLiveBlob bool `json:"save_live_blob,omitempty" yaml:"save_live_blob,omitempty"`
+	// MaxLLMCalls is a pointer so "unset" is distinguishable from an explicit
+	// value. Mapping to adk-go semantics:
+	//   - nil  → 0 (adk-go default, 500 or ADK_MAX_LLM_CALLS);
+	//   - <= 0 → -1 (adk-go unbounded, matching adk-python's "<= 0 is unbounded");
+	//   - > 0  → the value.
+	MaxLLMCalls *int `json:"max_llm_calls,omitempty" yaml:"max_llm_calls,omitempty"`
 }
 
 // ContextCacheConfig controls context caching across agents.
+//
+// It is a spec-aligned extension mirroring adk-python's ContextCacheConfig; the
+// three supported fields match its programmatic field names.
 type ContextCacheConfig struct {
 	CacheIntervals int `json:"cache_intervals,omitempty" yaml:"cache_intervals,omitempty"`
 	TTLSeconds     int `json:"ttl_seconds,omitempty" yaml:"ttl_seconds,omitempty"`
@@ -538,10 +527,11 @@ func (c *ContextCacheConfig) Validate() error {
 // AppConfig is the top-level application configuration.
 // It holds the root agent tree plus optional runtime settings.
 type AppConfig struct {
-	AgentConfig        AgentConfig
-	RunConfig          *RunConfig          // nil when absent in source
-	LiveRunConfig      *LiveRunConfig      // nil when absent in source
-	ContextCacheConfig *ContextCacheConfig // nil when absent in source
+	AgentConfig AgentConfig
+	// RunConfig is nil when the run_config section is absent.
+	RunConfig *RunConfig
+	// ContextCacheConfig is nil when the context_cache_config section is absent.
+	ContextCacheConfig *ContextCacheConfig
 }
 
 // Load reads an agent configuration from a file at path beneath root.
@@ -580,244 +570,6 @@ func Load(root *os.Root, path string) (*AppConfig, error) {
 	return Parse(data, format)
 }
 
-// rawAgentConfig captures every possible field from JSON/YAML for polymorphic parsing.
-type rawAgentConfig struct {
-	Type        string           `json:"agent_class" yaml:"agent_class"`
-	Name        string           `json:"name" yaml:"name"`
-	Description string           `json:"description,omitempty" yaml:"description,omitempty"`
-	SubAgents   []map[string]any `json:"sub_agents,omitempty" yaml:"sub_agents,omitempty"`
-
-	// LLM-only fields
-	Model                    string              `json:"model,omitempty" yaml:"model,omitempty"`
-	ModelCode                *CodeConfig         `json:"model_code,omitempty" yaml:"model_code,omitempty"`
-	Instruction              string              `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-	InstructionTemplate      *prompt.TemplateRef `json:"instruction_template,omitempty" yaml:"instruction_template,omitempty"`
-	StaticInstruction        string              `json:"static_instruction,omitempty" yaml:"static_instruction,omitempty"`
-	InputSchema              *SchemaRef          `json:"input_schema,omitempty" yaml:"input_schema,omitempty"`
-	OutputSchema             *SchemaRef          `json:"output_schema,omitempty" yaml:"output_schema,omitempty"`
-	OutputKey                string              `json:"output_key,omitempty" yaml:"output_key,omitempty"`
-	IncludeContents          string              `json:"include_contents,omitempty" yaml:"include_contents,omitempty"`
-	Tools                    []ToolRef           `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Skillsets                []SkillsetRef       `json:"skill_sets,omitempty" yaml:"skill_sets,omitempty"`
-	GenerateConfig           map[string]any      `json:"generate_content_config,omitempty" yaml:"generate_content_config,omitempty"`
-	DisallowTransferToParent bool                `json:"disallow_transfer_to_parent,omitempty" yaml:"disallow_transfer_to_parent,omitempty"`
-	DisallowTransferToPeers  bool                `json:"disallow_transfer_to_peers,omitempty" yaml:"disallow_transfer_to_peers,omitempty"`
-	BeforeModelCallbacks     []CodeConfig        `json:"before_model_callbacks,omitempty" yaml:"before_model_callbacks,omitempty"`
-	AfterModelCallbacks      []CodeConfig        `json:"after_model_callbacks,omitempty" yaml:"after_model_callbacks,omitempty"`
-	OnModelErrorCallbacks    []CodeConfig        `json:"on_model_error_callbacks,omitempty" yaml:"on_model_error_callbacks,omitempty"`
-	BeforeToolCallbacks      []CodeConfig        `json:"before_tool_callbacks,omitempty" yaml:"before_tool_callbacks,omitempty"`
-	AfterToolCallbacks       []CodeConfig        `json:"after_tool_callbacks,omitempty" yaml:"after_tool_callbacks,omitempty"`
-	OnToolErrorCallbacks     []CodeConfig        `json:"on_tool_error_callbacks,omitempty" yaml:"on_tool_error_callbacks,omitempty"`
-	BeforeAgentCallbacks     []CodeConfig        `json:"before_agent_callbacks,omitempty" yaml:"before_agent_callbacks,omitempty"`
-	AfterAgentCallbacks      []CodeConfig        `json:"after_agent_callbacks,omitempty" yaml:"after_agent_callbacks,omitempty"`
-
-	// Loop-only fields
-	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
-
-	// Runtime-only fields
-	RunConfig          *RunConfig          `json:"run_config,omitempty" yaml:"run_config,omitempty"`
-	LiveRunConfig      *LiveRunConfig      `json:"live_run_config,omitempty" yaml:"live_run_config,omitempty"`
-	ContextCacheConfig *ContextCacheConfig `json:"context_cache_config,omitempty" yaml:"context_cache_config,omitempty"`
-}
-
-// toAgentConfig converts a raw config to its typed AgentConfig, validating type-specific restrictions.
-func toAgentConfig(raw rawAgentConfig) (AgentConfig, error) {
-	entries, err := parseSubAgentEntries(raw.SubAgents)
-	if err != nil {
-		return nil, err
-	}
-
-	base := BaseAgentConfig{
-		Name:                 raw.Name,
-		Description:          raw.Description,
-		SubAgentEntries:      entries,
-		BeforeAgentCallbacks: raw.BeforeAgentCallbacks,
-		AfterAgentCallbacks:  raw.AfterAgentCallbacks,
-	}
-
-	switch raw.Type {
-	case "LlmAgent":
-		if raw.MaxIterations != 0 {
-			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "max_iterations")
-		}
-		if raw.Model != "" && raw.ModelCode != nil {
-			return nil, fmt.Errorf("config.Parse [%s %q]: only one of model or model_code may be set", raw.Type, raw.Name)
-		}
-		return &LLMAgentConfig{
-			BaseAgentConfig:          base,
-			Model:                    raw.Model,
-			ModelCode:                raw.ModelCode,
-			Instruction:              raw.Instruction,
-			InstructionTemplate:      raw.InstructionTemplate,
-			StaticInstruction:        raw.StaticInstruction,
-			InputSchema:              raw.InputSchema,
-			OutputSchema:             raw.OutputSchema,
-			OutputKey:                raw.OutputKey,
-			IncludeContents:          raw.IncludeContents,
-			Tools:                    raw.Tools,
-			Skillsets:                raw.Skillsets,
-			GenerateConfig:           raw.GenerateConfig,
-			DisallowTransferToParent: raw.DisallowTransferToParent,
-			DisallowTransferToPeers:  raw.DisallowTransferToPeers,
-			BeforeModelCallbacks:     raw.BeforeModelCallbacks,
-			AfterModelCallbacks:      raw.AfterModelCallbacks,
-			OnModelErrorCallbacks:    raw.OnModelErrorCallbacks,
-			BeforeToolCallbacks:      raw.BeforeToolCallbacks,
-			AfterToolCallbacks:       raw.AfterToolCallbacks,
-			OnToolErrorCallbacks:     raw.OnToolErrorCallbacks,
-		}, nil
-	case "SequentialAgent":
-		if err := validateNoLLMFields(raw, "sequential"); err != nil {
-			return nil, err
-		}
-		if raw.MaxIterations != 0 {
-			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "max_iterations")
-		}
-		return &SequentialAgentConfig{BaseAgentConfig: base}, nil
-	case "ParallelAgent":
-		if err := validateNoLLMFields(raw, "parallel"); err != nil {
-			return nil, err
-		}
-		if raw.MaxIterations != 0 {
-			return nil, fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", raw.Type, raw.Name, "max_iterations")
-		}
-		return &ParallelAgentConfig{BaseAgentConfig: base}, nil
-	case "LoopAgent":
-		if err := validateNoLLMFields(raw, "loop"); err != nil {
-			return nil, err
-		}
-		return &LoopAgentConfig{
-			BaseAgentConfig: base,
-			MaxIterations:   raw.MaxIterations,
-		}, nil
-	default:
-		return nil, fmt.Errorf("config.Parse: unknown agent class %q", raw.Type)
-	}
-}
-
-func parseSubAgentEntries(maps []map[string]any) ([]SubAgentEntry, error) {
-	var entries []SubAgentEntry
-	for i, m := range maps {
-		if m == nil {
-			continue
-		}
-		// Check for reference keys
-		if _, hasPath := m["config_path"]; hasPath {
-			var ref AgentRefConfig
-			b, err := json.Marshal(m)
-			if err != nil {
-				return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
-			}
-			if err := json.Unmarshal(b, &ref); err != nil {
-				return nil, fmt.Errorf("sub-agent %d: invalid AgentRefConfig: %w", i, err)
-			}
-			if err := ref.Validate(); err != nil {
-				return nil, fmt.Errorf("sub-agent %d: %w", i, err)
-			}
-			entries = append(entries, SubAgentEntry{Ref: &ref})
-			continue
-		}
-		if _, hasCode := m["code"]; hasCode {
-			var ref AgentRefConfig
-			b, err := json.Marshal(m)
-			if err != nil {
-				return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
-			}
-			if err := json.Unmarshal(b, &ref); err != nil {
-				return nil, fmt.Errorf("sub-agent %d: invalid AgentRefConfig: %w", i, err)
-			}
-			if err := ref.Validate(); err != nil {
-				return nil, fmt.Errorf("sub-agent %d: %w", i, err)
-			}
-			entries = append(entries, SubAgentEntry{Ref: &ref})
-			continue
-		}
-		// Inline agent
-		b, err := json.Marshal(m)
-		if err != nil {
-			return nil, fmt.Errorf("sub-agent %d: marshal: %w", i, err)
-		}
-		var raw rawAgentConfig
-		if err = json.Unmarshal(b, &raw); err != nil {
-			return nil, fmt.Errorf("sub-agent %d: invalid inline agent: %w", i, err)
-		}
-		agent, err := toAgentConfig(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sub-agent %d: %w", i, err)
-		}
-		entries = append(entries, SubAgentEntry{Inline: agent})
-	}
-	return entries, nil
-}
-
-// validateNoLLMFields returns an error if any LLM-only field is set on a non-LLM agent.
-func validateNoLLMFields(raw rawAgentConfig, typ string) error {
-	if raw.Model != "" {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "model")
-	}
-	if raw.Instruction != "" {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "instruction")
-	}
-	if raw.InstructionTemplate != nil && raw.InstructionTemplate.IsSet() {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "instruction_template")
-	}
-	if len(raw.Tools) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "tools")
-	}
-	if len(raw.Skillsets) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "skill_sets")
-	}
-	if len(raw.GenerateConfig) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "generate_content_config")
-	}
-	if raw.DisallowTransferToParent {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "disallow_transfer_to_parent")
-	}
-	if raw.DisallowTransferToPeers {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "disallow_transfer_to_peers")
-	}
-	if raw.ModelCode != nil {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "model_code")
-	}
-	if raw.StaticInstruction != "" {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "static_instruction")
-	}
-	if raw.InputSchema != nil {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "input_schema")
-	}
-	if raw.OutputSchema != nil {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "output_schema")
-	}
-	if raw.OutputKey != "" {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "output_key")
-	}
-	if raw.IncludeContents != "" && raw.IncludeContents != "default" {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "include_contents")
-	}
-	if len(raw.BeforeModelCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "before_model_callbacks")
-	}
-	if len(raw.AfterModelCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "after_model_callbacks")
-	}
-	if len(raw.BeforeToolCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "before_tool_callbacks")
-	}
-	if len(raw.AfterToolCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "after_tool_callbacks")
-	}
-	if len(raw.OnModelErrorCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "on_model_error_callbacks")
-	}
-	if len(raw.OnToolErrorCallbacks) > 0 {
-		return fmt.Errorf("config.Parse [%s %q]: field %q is not allowed for this agent type", typ, raw.Name, "on_tool_error_callbacks")
-	}
-	// BeforeAgentCallbacks and AfterAgentCallbacks are BaseAgentConfig fields
-	// supported by all agent types (LLM, Sequential, Parallel, Loop) via
-	// agent.Config and workflowagent.Config. They are not LLM-only.
-	return nil
-}
-
 // Parse decodes raw bytes into an [*AppConfig].
 // The format parameter must be "json" or "yaml" (case-insensitive).
 //
@@ -829,472 +581,796 @@ func validateNoLLMFields(raw rawAgentConfig, typ string) error {
 //
 //	appCfg, err := config.Parse([]byte("name: bot\nagent_class: LlmAgent\n"), "yaml")
 func Parse(data []byte, format string) (*AppConfig, error) {
-	var raw rawAgentConfig
-	switch strings.ToLower(format) {
-	case "json":
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, fmt.Errorf("config.Parse JSON: %w", err)
-		}
-	case "yaml":
-		dec := yaml.NewDecoder(bytes.NewReader(data))
-		if err := dec.Decode(&raw); err != nil {
-			return nil, fmt.Errorf("config.Parse YAML: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("config.Parse: unsupported format %q (use \"json\" or \"yaml\")", format)
-	}
-
-	agentCfg, err := toAgentConfig(raw)
+	m, err := decodeMap(data, format)
 	if err != nil {
 		return nil, err
 	}
 
-	appCfg := &AppConfig{
-		AgentConfig:        agentCfg,
-		RunConfig:          raw.RunConfig,
-		LiveRunConfig:      raw.LiveRunConfig,
-		ContextCacheConfig: raw.ContextCacheConfig,
-	}
+	appCfg := &AppConfig{}
 
-	if appCfg.RunConfig != nil {
-		appCfg.RunConfig.SetDefaults()
-		if err := appCfg.RunConfig.Validate(); err != nil {
-			return nil, fmt.Errorf("config.Parse: %w", err)
+	if v, ok := m["run_config"]; ok {
+		appCfg.RunConfig, err = parseRunConfig(v, "config.Parse: run_config")
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	if appCfg.LiveRunConfig != nil {
-		appCfg.LiveRunConfig.SetDefaults()
-		if err := appCfg.LiveRunConfig.Validate(); err != nil {
-			return nil, fmt.Errorf("config.Parse: %w", err)
+	if v, ok := m["context_cache_config"]; ok {
+		appCfg.ContextCacheConfig, err = parseContextCacheConfig(v, "config.Parse: context_cache_config")
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	if appCfg.ContextCacheConfig != nil {
 		appCfg.ContextCacheConfig.SetDefaults()
-		if err := appCfg.ContextCacheConfig.Validate(); err != nil {
+		if err = appCfg.ContextCacheConfig.Validate(); err != nil {
 			return nil, fmt.Errorf("config.Parse: %w", err)
 		}
+	}
+
+	appCfg.AgentConfig, err = parseAgentMap(m, "config.Parse", true)
+	if err != nil {
+		return nil, err
 	}
 
 	return appCfg, nil
 }
 
-// TranslateGenerateConfig converts a generic key–value map into a
-// [*genai.GenerateContentConfig].
-//
-// Scalars:
-//
-//	"temperature"                → Temperature  (*float32)
-//	"topP"                       → TopP         (*float32)
-//	"topK"                       → TopK         (*float32)
-//	"maxOutputTokens"            → MaxOutputTokens (*int32)
-//	"candidateCount"             → CandidateCount  (*int32)
-//	"responseLogprobs"           → ResponseLogprobs (bool)
-//	"logprobs"                   → Logprobs     (*int32)
-//	"presencePenalty"            → PresencePenalty (*float32)
-//	"frequencyPenalty"           → FrequencyPenalty (*float32)
-//	"seed"                       → Seed         (*int32)
-//	"audioTimestamp"             → AudioTimestamp (bool)
-//	"cachedContent"              → CachedContent (string)
-//	"enableEnhancedCivicAnswers" → EnableEnhancedCivicAnswers (*bool)
-//	"serviceTier"                → ServiceTier (ServiceTier)
-//	"mediaResolution"            → MediaResolution (MediaResolution)
-//	"responseMimeType"           → ResponseMIMEType (string)
-//
-// Slices and maps:
-//
-//	"stopSequences"      → StopSequences ([]string)
-//	"responseModalities" → ResponseModalities ([]string)
-//	"labels"             → Labels (map[string]string)
-//
-// Complex / nested:
-//
-//	"responseSchema"      → ResponseSchema (*Schema)
-//	"responseJsonSchema"  → ResponseJsonSchema (any)
-//	"safetySettings"      → SafetySettings ([]*SafetySetting)
-//	"tools"               → Tools ([]*Tool)
-//	"toolConfig"          → ToolConfig (*ToolConfig)
-//	"thinkingConfig"      → ThinkingConfig (*ThinkingConfig)
-//	"speechConfig"        → SpeechConfig (*SpeechConfig)
-//	"imageConfig"         → ImageConfig (*ImageConfig)
-//	"routingConfig"       → RoutingConfig (*GenerationConfigRoutingConfig)
-//	"modelSelectionConfig"→ ModelSelectionConfig (*ModelSelectionConfig)
-//	"modelArmorConfig"    → ModelArmorConfig (*ModelArmorConfig)
-//	"httpOptions"         → HTTPOptions (*HTTPOptions)
-//	"systemInstruction"   → SystemInstruction (*Content)
-//
-// Unknown keys are silently ignored. A nil map returns an empty config without error.
-//
-// Example:
-//
-//	gc, err := config.TranslateGenerateConfig(map[string]any{
-//	    "temperature":     0.7,
-//	    "maxOutputTokens": float64(1024),
-//	})
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func TranslateGenerateConfig(m map[string]any) (*genai.GenerateContentConfig, error) {
-	gc := &genai.GenerateContentConfig{}
-	if m == nil {
-		return gc, nil
-	}
-
-	if v, ok := m["temperature"]; ok {
-		f, err := toFloat32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig temperature: %w", err)
+func decodeMap(data []byte, format string) (map[string]any, error) {
+	switch strings.ToLower(format) {
+	case "json":
+		var m map[string]any
+		if err := jsonv2.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("config.Parse JSON: %w", err)
 		}
-		gc.Temperature = &f
-	}
-
-	if v, ok := m["topP"]; ok {
-		f, err := toFloat32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig topP: %w", err)
+		if m == nil {
+			return nil, errors.New("config.Parse JSON: empty document")
 		}
-		gc.TopP = &f
-	}
-
-	if v, ok := m["topK"]; ok {
-		f, err := toFloat32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig topK: %w", err)
+		return normalizeValue(m).(map[string]any), nil
+	case "yaml":
+		var m map[string]any
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		if err := dec.Decode(&m); err != nil {
+			return nil, fmt.Errorf("config.Parse YAML: %w", err)
 		}
-		gc.TopK = &f
-	}
-
-	if v, ok := m["maxOutputTokens"]; ok {
-		i, err := toInt32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig maxOutputTokens: %w", err)
+		if m == nil {
+			return nil, errors.New("config.Parse YAML: empty document")
 		}
-		gc.MaxOutputTokens = i
-	}
-
-	if v, ok := m["candidateCount"]; ok {
-		i, err := toInt32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig candidateCount: %w", err)
-		}
-		gc.CandidateCount = i
-	}
-
-	if v, ok := m["stopSequences"]; ok {
-		ss, err := toStringSlice(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig stopSequences: %w", err)
-		}
-		gc.StopSequences = ss
-	}
-
-	if v, ok := m["responseMimeType"]; ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig responseMimeType: expected string, got %T", v)
-		}
-		gc.ResponseMIMEType = s
-	}
-
-	if v, ok := m["responseLogprobs"]; ok {
-		b, err := toBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig responseLogprobs: %w", err)
-		}
-		gc.ResponseLogprobs = b
-	}
-
-	if v, ok := m["logprobs"]; ok {
-		i, err := toInt32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig logprobs: %w", err)
-		}
-		gc.Logprobs = &i
-	}
-
-	if v, ok := m["presencePenalty"]; ok {
-		f, err := toFloat32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig presencePenalty: %w", err)
-		}
-		gc.PresencePenalty = &f
-	}
-
-	if v, ok := m["frequencyPenalty"]; ok {
-		f, err := toFloat32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig frequencyPenalty: %w", err)
-		}
-		gc.FrequencyPenalty = &f
-	}
-
-	if v, ok := m["seed"]; ok {
-		i, err := toInt32(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig seed: %w", err)
-		}
-		gc.Seed = &i
-	}
-
-	if v, ok := m["audioTimestamp"]; ok {
-		b, err := toBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig audioTimestamp: %w", err)
-		}
-		gc.AudioTimestamp = b
-	}
-
-	if v, ok := m["cachedContent"]; ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig cachedContent: expected string, got %T", v)
-		}
-		gc.CachedContent = s
-	}
-
-	if v, ok := m["enableEnhancedCivicAnswers"]; ok {
-		b, err := toBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig enableEnhancedCivicAnswers: %w", err)
-		}
-		gc.EnableEnhancedCivicAnswers = &b
-	}
-
-	if v, ok := m["serviceTier"]; ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig serviceTier: expected string, got %T", v)
-		}
-		gc.ServiceTier = genai.ServiceTier(s)
-	}
-
-	if v, ok := m["mediaResolution"]; ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig mediaResolution: expected string, got %T", v)
-		}
-		gc.MediaResolution = genai.MediaResolution(s)
-	}
-
-	if v, ok := m["responseModalities"]; ok {
-		ss, err := toStringSlice(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig responseModalities: %w", err)
-		}
-		gc.ResponseModalities = ss
-	}
-
-	if v, ok := m["labels"]; ok {
-		m, err := toStringMap(v)
-		if err != nil {
-			return nil, fmt.Errorf("config.TranslateGenerateConfig labels: %w", err)
-		}
-		gc.Labels = m
-	}
-
-	if v, ok := m["responseSchema"]; ok {
-		if err := toStruct("responseSchema", v, &gc.ResponseSchema); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["responseJsonSchema"]; ok {
-		gc.ResponseJsonSchema = v
-	}
-
-	if v, ok := m["safetySettings"]; ok {
-		if err := toStruct("safetySettings", v, &gc.SafetySettings); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["tools"]; ok {
-		if err := toStruct("tools", v, &gc.Tools); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["toolConfig"]; ok {
-		if err := toStruct("toolConfig", v, &gc.ToolConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["thinkingConfig"]; ok {
-		if err := toStruct("thinkingConfig", v, &gc.ThinkingConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["speechConfig"]; ok {
-		if err := toStruct("speechConfig", v, &gc.SpeechConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["imageConfig"]; ok {
-		if err := toStruct("imageConfig", v, &gc.ImageConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["routingConfig"]; ok {
-		if err := toStruct("routingConfig", v, &gc.RoutingConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["modelSelectionConfig"]; ok {
-		if err := toStruct("modelSelectionConfig", v, &gc.ModelSelectionConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["modelArmorConfig"]; ok {
-		if err := toStruct("modelArmorConfig", v, &gc.ModelArmorConfig); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["httpOptions"]; ok {
-		if err := toStruct("httpOptions", v, &gc.HTTPOptions); err != nil {
-			return nil, err
-		}
-	}
-
-	if v, ok := m["systemInstruction"]; ok {
-		c, err := toContent(v)
-		if err != nil {
-			return nil, err
-		}
-		gc.SystemInstruction = c
-	}
-
-	return gc, nil
-}
-
-// toFloat32 converts numeric values to float32.
-func toFloat32(v any) (float32, error) {
-	switch t := v.(type) {
-	case float32:
-		return t, nil
-	case float64:
-		return float32(t), nil
-	case int:
-		return float32(t), nil
-	case int32:
-		return float32(t), nil
-	case int64:
-		return float32(t), nil
+		return normalizeValue(m).(map[string]any), nil
 	default:
-		return 0, fmt.Errorf("cannot convert %T to float32", v)
+		return nil, fmt.Errorf("config.Parse: unsupported format %q (use \"json\" or \"yaml\")", format)
 	}
 }
 
-// toInt32 converts numeric values to int32.
-func toInt32(v any) (int32, error) {
+// normalizeValue converts map[any]any (which YAML may produce for non-string
+// keys) into map[string]any recursively. String maps and slices are traversed
+// in place only when needed.
+func normalizeValue(v any) any {
 	switch t := v.(type) {
-	case int32:
-		return t, nil
-	case int:
-		if t > math.MaxInt32 || t < math.MinInt32 {
-			return 0, fmt.Errorf("cannot convert %d to int32: overflow", t)
-		}
-		return int32(t), nil
-	case int64:
-		if t > math.MaxInt32 || t < math.MinInt32 {
-			return 0, fmt.Errorf("cannot convert %d to int32: overflow", t)
-		}
-		return int32(t), nil
-	case float32:
-		return int32(t), nil
-	case float64:
-		return int32(t), nil
-	default:
-		return 0, fmt.Errorf("cannot convert %T to int32", v)
-	}
-}
-
-// toStringSlice converts []any (where each element is a string) to []string.
-func toStringSlice(v any) ([]string, error) {
-	switch t := v.(type) {
-	case []string:
-		return t, nil
-	case []any:
-		ss := make([]string, 0, len(t))
-		for i, elem := range t {
-			s, ok := elem.(string)
-			if !ok {
-				return nil, fmt.Errorf("element %d is %T, want string", i, elem)
-			}
-			ss = append(ss, s)
-		}
-		return ss, nil
-	default:
-		return nil, fmt.Errorf("cannot convert %T to []string", v)
-	}
-}
-
-// toBool converts a value to bool.
-func toBool(v any) (bool, error) {
-	b, ok := v.(bool)
-	if !ok {
-		return false, fmt.Errorf("expected bool, got %T", v)
-	}
-	return b, nil
-}
-
-// toStringMap converts a value to map[string]string.
-func toStringMap(v any) (map[string]string, error) {
-	switch t := v.(type) {
-	case map[string]string:
-		return t, nil
 	case map[string]any:
-		m := make(map[string]string, len(t))
 		for k, val := range t {
-			s, ok := val.(string)
-			if !ok {
-				return nil, fmt.Errorf("key %q is %T, want string", k, val)
-			}
-			m[k] = s
+			t[k] = normalizeValue(val)
 		}
-		return m, nil
+		return t
+	case map[any]any:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			m[fmt.Sprint(k)] = normalizeValue(val)
+		}
+		return m
+	case []any:
+		for i, val := range t {
+			t[i] = normalizeValue(val)
+		}
+		return t
 	default:
-		return nil, fmt.Errorf("expected map[string]string, got %T", v)
+		return v
 	}
 }
 
-// toStruct unmarshals a generic value into a typed struct via JSON round-trip.
-func toStruct(key string, v any, dest any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("config.TranslateGenerateConfig %s: %w", key, err)
+// --- Key validation helpers ---
+
+func keySet(keys ...string) map[string]bool {
+	s := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		s[k] = true
 	}
-	if err := json.Unmarshal(b, dest); err != nil {
-		return fmt.Errorf("config.TranslateGenerateConfig %s: %w", key, err)
+	return s
+}
+
+// checkKeys reports keys in m that are neither allowed nor unsupported.
+// Unsupported keys produce ErrUnsupportedField; everything else ErrUnknownField.
+func checkKeys(m map[string]any, allowed, unsupported map[string]bool, ctx string) error {
+	for k := range m {
+		if allowed[k] {
+			continue
+		}
+		if unsupported != nil && unsupported[k] {
+			return fmt.Errorf("%s: %w: %q", ctx, ErrUnsupportedField, k)
+		}
+		return fmt.Errorf("%s: %w %q (valid: %s)", ctx, ErrUnknownField, k, strings.Join(slices.Sorted(maps.Keys(allowed)), ", "))
 	}
 	return nil
 }
 
-// toContent converts a string, map, or array of parts into a *genai.Content.
-func toContent(v any) (*genai.Content, error) {
-	switch t := v.(type) {
-	case string:
-		return genai.NewContentFromText(t, "system"), nil
-	case map[string]any:
-		var c genai.Content
-		if err := toStruct("systemInstruction", t, &c); err != nil {
-			return nil, err
-		}
-		return &c, nil
-	case []any:
-		var parts []*genai.Part
-		if err := toStruct("systemInstruction", t, &parts); err != nil {
-			return nil, err
-		}
-		return &genai.Content{Role: "system", Parts: parts}, nil
-	default:
-		return nil, fmt.Errorf("config.TranslateGenerateConfig systemInstruction: expected string, map, or array, got %T", v)
+func asMap(v any) (map[string]any, bool) {
+	m, ok := v.(map[string]any)
+	return m, ok
+}
+
+func asString(v any) (string, bool) {
+	s, ok := v.(string)
+	return s, ok
+}
+
+func asStringSlice(v any) ([]string, bool) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, false
 	}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		s, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+func asInt(v any) (int, bool) {
+	switch t := v.(type) {
+	case int:
+		return t, true
+	case int32:
+		return int(t), true
+	case int64:
+		return int(t), true
+	case float64:
+		if t != float64(int(t)) {
+			return 0, false
+		}
+		return int(t), true
+	case float32:
+		if t != float32(int(t)) {
+			return 0, false
+		}
+		return int(t), true
+	default:
+		return 0, false
+	}
+}
+
+func asBool(v any) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
+}
+
+// mustString assigns m[key] to dst, erroring on a non-string value.
+// A missing key leaves dst untouched.
+func mustString(m map[string]any, key, ctx string, dst *string) error {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	s, ok := asString(v)
+	if !ok {
+		return fmt.Errorf("%s: %s: expected string, got %T", ctx, key, v)
+	}
+	*dst = s
+	return nil
+}
+
+// mustBool assigns m[key] to dst, erroring on a non-bool value.
+// A missing key leaves dst untouched.
+func mustBool(m map[string]any, key, ctx string, dst *bool) error {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	b, ok := asBool(v)
+	if !ok {
+		return fmt.Errorf("%s: %s: expected bool, got %T", ctx, key, v)
+	}
+	*dst = b
+	return nil
+}
+
+// --- Agent parsing ---
+
+var (
+	commonAgentKeys = keySet(
+		"agent_class", "name", "description", "sub_agents",
+		"before_agent_callbacks", "after_agent_callbacks",
+	)
+	llmAgentKeys = keySet(
+		"model", "model_code", "model_args", "instruction", "global_instruction",
+		"instruction_template", "input_schema", "output_schema", "output_key",
+		"include_contents", "tools", "skill_sets", "generate_content_config",
+		"disallow_transfer_to_parent", "disallow_transfer_to_peers",
+		"before_model_callbacks", "after_model_callbacks", "on_model_error_callbacks",
+		"before_tool_callbacks", "after_tool_callbacks", "on_tool_error_callbacks",
+	)
+	workflowAgentKeys = keySet(
+		"agent_class", "name", "description",
+		"before_agent_callbacks", "after_agent_callbacks",
+		"edges", "max_concurrency",
+	)
+	agentUnsupportedKeys = keySet("static_instruction")
+)
+
+func agentKeys(class string, topLevel bool) map[string]bool {
+	allowed := make(map[string]bool)
+	var base map[string]bool
+	switch class {
+	case "LlmAgent":
+		base = commonAgentKeys
+		for k := range llmAgentKeys {
+			allowed[k] = true
+		}
+	case "Workflow":
+		base = workflowAgentKeys
+	case "SequentialAgent", "ParallelAgent":
+		base = commonAgentKeys
+	case "LoopAgent":
+		base = commonAgentKeys
+		allowed["max_iterations"] = true
+	}
+	for k := range base {
+		allowed[k] = true
+	}
+	if topLevel {
+		allowed["run_config"] = true
+		allowed["context_cache_config"] = true
+	}
+	return allowed
+}
+
+func agentCtx(class, name string) string {
+	if name == "" {
+		return fmt.Sprintf("config.Parse [%s]", class)
+	}
+	return fmt.Sprintf("config.Parse [%s %q]", class, name)
+}
+
+// parseAgentMap validates and converts a raw agent map into its typed config.
+func parseAgentMap(m map[string]any, ctx string, topLevel bool) (AgentConfig, error) {
+	class := "LlmAgent"
+	if v, ok := m["agent_class"]; ok {
+		s, ok := asString(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: agent_class: expected string, got %T", ctx, v)
+		}
+		if s != "" {
+			class = s
+		}
+	}
+	switch class {
+	case "LlmAgent", "SequentialAgent", "ParallelAgent", "LoopAgent", "Workflow":
+	default:
+		return nil, fmt.Errorf("%s: unknown agent class %q", ctx, class)
+	}
+
+	name, _ := asString(m["name"])
+	if name == "" {
+		return nil, fmt.Errorf("%s: %q is required", ctx, "name")
+	}
+	actx := agentCtx(class, name)
+
+	if err := checkKeys(m, agentKeys(class, topLevel), agentUnsupportedKeys, actx); err != nil {
+		return nil, err
+	}
+
+	base, err := parseBase(m, actx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch class {
+	case "SequentialAgent":
+		return &SequentialAgentConfig{BaseAgentConfig: *base}, nil
+	case "ParallelAgent":
+		return &ParallelAgentConfig{BaseAgentConfig: *base}, nil
+	case "LoopAgent":
+		return parseLoopAgent(m, actx, base)
+	case "Workflow":
+		return parseWorkflowAgent(m, actx, base)
+	default:
+		return parseLLMAgent(m, actx, base)
+	}
+}
+
+func parseBase(m map[string]any, ctx string) (*BaseAgentConfig, error) {
+	base := &BaseAgentConfig{}
+	base.Name, _ = asString(m["name"])
+	if err := mustString(m, "description", ctx, &base.Description); err != nil {
+		return nil, err
+	}
+
+	if v, ok := m["sub_agents"]; ok {
+		entries, err := parseSubAgentEntries(v, ctx)
+		if err != nil {
+			return nil, err
+		}
+		base.SubAgentEntries = entries
+	}
+	if v, ok := m["before_agent_callbacks"]; ok {
+		cbs, err := parseCallbacks(v, ctx+".before_agent_callbacks")
+		if err != nil {
+			return nil, err
+		}
+		base.BeforeAgentCallbacks = cbs
+	}
+	if v, ok := m["after_agent_callbacks"]; ok {
+		cbs, err := parseCallbacks(v, ctx+".after_agent_callbacks")
+		if err != nil {
+			return nil, err
+		}
+		base.AfterAgentCallbacks = cbs
+	}
+	return base, nil
+}
+
+func parseLLMAgent(m map[string]any, ctx string, base *BaseAgentConfig) (*LLMAgentConfig, error) {
+	c := &LLMAgentConfig{BaseAgentConfig: *base}
+
+	if err := mustString(m, "model", ctx, &c.Model); err != nil {
+		return nil, err
+	}
+
+	if v, ok := m["model_code"]; ok {
+		cc, err := parseCodeConfig(v, ctx+".model_code")
+		if err != nil {
+			return nil, err
+		}
+		c.ModelCode = cc
+	}
+	if c.Model != "" && c.ModelCode != nil {
+		return nil, fmt.Errorf("%s: only one of model or model_code may be set", ctx)
+	}
+	if v, ok := m["model_args"]; ok {
+		args, ok := asMap(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: model_args: expected map, got %T", ctx, v)
+		}
+		if c.ModelCode != nil {
+			return nil, fmt.Errorf("%s: model_args cannot be combined with model_code", ctx)
+		}
+		c.ModelArgs = args
+	}
+
+	if err := mustString(m, "instruction", ctx, &c.Instruction); err != nil {
+		return nil, err
+	}
+	if err := mustString(m, "global_instruction", ctx, &c.GlobalInstruction); err != nil {
+		return nil, err
+	}
+	if err := mustString(m, "output_key", ctx, &c.OutputKey); err != nil {
+		return nil, err
+	}
+
+	if v, ok := m["instruction_template"]; ok {
+		ref, err := parseTemplateRef(v, ctx+".instruction_template")
+		if err != nil {
+			return nil, err
+		}
+		c.InstructionTemplate = ref
+	}
+	if v, ok := m["input_schema"]; ok {
+		ref, err := schemaRefFromValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: input_schema: %w", ctx, err)
+		}
+		c.InputSchema = ref
+	}
+	if v, ok := m["output_schema"]; ok {
+		ref, err := schemaRefFromValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: output_schema: %w", ctx, err)
+		}
+		c.OutputSchema = ref
+	}
+
+	if v, ok := m["include_contents"]; ok {
+		s, ok := asString(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: include_contents: expected string, got %T", ctx, v)
+		}
+		switch s {
+		case "", "none", "default":
+		default:
+			return nil, fmt.Errorf("%s: include_contents must be one of \"default\" or \"none\", got %q", ctx, s)
+		}
+		c.IncludeContents = s
+	}
+
+	if v, ok := m["tools"]; ok {
+		tools, err := parseTools(v, ctx+".tools")
+		if err != nil {
+			return nil, err
+		}
+		c.Tools = tools
+	}
+	if v, ok := m["skill_sets"]; ok {
+		skills, err := parseSkillsets(v, ctx+".skill_sets")
+		if err != nil {
+			return nil, err
+		}
+		c.Skillsets = skills
+	}
+	if v, ok := m["generate_content_config"]; ok {
+		gm, ok := asMap(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: generate_content_config: expected map, got %T", ctx, v)
+		}
+		gc, err := decodeGenerateConfig(gm)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ctx, err)
+		}
+		c.GenerateContentConfig = gc
+	}
+
+	if err := mustBool(m, "disallow_transfer_to_parent", ctx, &c.DisallowTransferToParent); err != nil {
+		return nil, err
+	}
+	if err := mustBool(m, "disallow_transfer_to_peers", ctx, &c.DisallowTransferToPeers); err != nil {
+		return nil, err
+	}
+
+	callbackFields := []struct {
+		key  string
+		dest *[]CodeConfig
+	}{
+		{"before_model_callbacks", &c.BeforeModelCallbacks},
+		{"after_model_callbacks", &c.AfterModelCallbacks},
+		{"on_model_error_callbacks", &c.OnModelErrorCallbacks},
+		{"before_tool_callbacks", &c.BeforeToolCallbacks},
+		{"after_tool_callbacks", &c.AfterToolCallbacks},
+		{"on_tool_error_callbacks", &c.OnToolErrorCallbacks},
+	}
+	for _, f := range callbackFields {
+		if v, ok := m[f.key]; ok {
+			cbs, err := parseCallbacks(v, ctx+"."+f.key)
+			if err != nil {
+				return nil, err
+			}
+			*f.dest = cbs
+		}
+	}
+
+	return c, nil
+}
+
+func parseLoopAgent(m map[string]any, ctx string, base *BaseAgentConfig) (*LoopAgentConfig, error) {
+	c := &LoopAgentConfig{BaseAgentConfig: *base}
+	if v, ok := m["max_iterations"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: max_iterations: expected integer, got %T", ctx, v)
+		}
+		if i < 0 {
+			return nil, fmt.Errorf("%s: max_iterations must be >= 0, got %d", ctx, i)
+		}
+		c.MaxIterations = i
+	}
+	return c, nil
+}
+
+func parseWorkflowAgent(m map[string]any, ctx string, base *BaseAgentConfig) (*WorkflowAgentConfig, error) {
+	c := &WorkflowAgentConfig{BaseAgentConfig: *base}
+	if v, ok := m["edges"]; ok {
+		edges, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: edges: expected list, got %T", ctx, v)
+		}
+		c.Edges = edges
+	}
+	if v, ok := m["max_concurrency"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: max_concurrency: expected integer, got %T", ctx, v)
+		}
+		c.MaxConcurrency = i
+	}
+	return c, nil
+}
+
+func parseSubAgentEntries(v any, ctx string) ([]SubAgentEntry, error) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: sub_agents: expected list, got %T", ctx, v)
+	}
+	entries := make([]SubAgentEntry, 0, len(list))
+	for i, item := range list {
+		ectx := fmt.Sprintf("%s: sub_agents[%d]", ctx, i)
+		switch t := item.(type) {
+		case string:
+			ref := &AgentRefConfig{ConfigPath: t}
+			if err := ref.Validate(); err != nil {
+				return nil, fmt.Errorf("%s: %w", ectx, err)
+			}
+			entries = append(entries, SubAgentEntry{Ref: ref})
+		case map[string]any:
+			_, hasPath := t["config_path"]
+			_, hasCode := t["code"]
+			if hasPath || hasCode {
+				if err := checkKeys(t, keySet("config_path", "code"), nil, ectx); err != nil {
+					return nil, err
+				}
+				ref := &AgentRefConfig{}
+				if err := mustString(t, "config_path", ectx, &ref.ConfigPath); err != nil {
+					return nil, err
+				}
+				if err := mustString(t, "code", ectx, &ref.Code); err != nil {
+					return nil, err
+				}
+				if err := ref.Validate(); err != nil {
+					return nil, fmt.Errorf("%s: %w", ectx, err)
+				}
+				entries = append(entries, SubAgentEntry{Ref: ref})
+				continue
+			}
+			inline, err := parseAgentMap(t, ectx, false)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, SubAgentEntry{Inline: inline})
+		default:
+			return nil, fmt.Errorf("%s: expected string or map, got %T", ectx, item)
+		}
+	}
+	return entries, nil
+}
+
+func parseTools(v any, ctx string) ([]ToolRef, error) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected list, got %T", ctx, v)
+	}
+	tools := make([]ToolRef, 0, len(list))
+	for i, item := range list {
+		ictx := fmt.Sprintf("%s[%d]", ctx, i)
+		switch t := item.(type) {
+		case string:
+			tools = append(tools, ToolRef{Name: t})
+		case map[string]any:
+			if err := checkKeys(t, keySet("name", "args"), nil, ictx); err != nil {
+				return nil, err
+			}
+			name, _ := asString(t["name"])
+			if name == "" {
+				return nil, fmt.Errorf("%s: %q is required", ictx, "name")
+			}
+			ref := ToolRef{Name: name}
+			if a, ok := t["args"]; ok {
+				args, ok := asMap(a)
+				if !ok {
+					return nil, fmt.Errorf("%s: args: expected map, got %T", ictx, a)
+				}
+				ref.Args = args
+			}
+			tools = append(tools, ref)
+		default:
+			return nil, fmt.Errorf("%s: expected string or map, got %T", ictx, item)
+		}
+	}
+	return tools, nil
+}
+
+func parseCallbacks(v any, ctx string) ([]CodeConfig, error) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected list, got %T", ctx, v)
+	}
+	cbs := make([]CodeConfig, 0, len(list))
+	for i, item := range list {
+		ictx := fmt.Sprintf("%s[%d]", ctx, i)
+		switch t := item.(type) {
+		case string:
+			cbs = append(cbs, CodeConfig{Name: t})
+		case map[string]any:
+			if _, hasArgs := t["args"]; hasArgs {
+				return nil, fmt.Errorf("%s: %w", ictx, ErrCallbackArgs)
+			}
+			if err := checkKeys(t, keySet("name"), nil, ictx); err != nil {
+				return nil, err
+			}
+			name, _ := asString(t["name"])
+			if name == "" {
+				return nil, fmt.Errorf("%s: %q is required", ictx, "name")
+			}
+			cbs = append(cbs, CodeConfig{Name: name})
+		default:
+			return nil, fmt.Errorf("%s: expected string or map, got %T", ictx, item)
+		}
+	}
+	return cbs, nil
+}
+
+func parseSkillsets(v any, ctx string) ([]SkillsetRef, error) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected list, got %T", ctx, v)
+	}
+	sets := make([]SkillsetRef, 0, len(list))
+	for i, item := range list {
+		ictx := fmt.Sprintf("%s[%d]", ctx, i)
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected map, got %T", ictx, item)
+		}
+		if err := checkKeys(m, keySet("name", "config", "preload", "names", "system_instruction"), nil, ictx); err != nil {
+			return nil, err
+		}
+		name, _ := asString(m["name"])
+		if name == "" {
+			return nil, fmt.Errorf("%s: %q is required", ictx, "name")
+		}
+		ref := SkillsetRef{Name: name}
+		if c, ok := m["config"]; ok {
+			cfg, ok := asMap(c)
+			if !ok {
+				return nil, fmt.Errorf("%s: config: expected map, got %T", ictx, c)
+			}
+			ref.Config = cfg
+		}
+		if err := mustString(m, "preload", ictx, &ref.Preload); err != nil {
+			return nil, err
+		}
+		if err := mustString(m, "system_instruction", ictx, &ref.SystemInstruction); err != nil {
+			return nil, err
+		}
+		if n, ok := m["names"]; ok {
+			names, ok := asStringSlice(n)
+			if !ok {
+				return nil, fmt.Errorf("%s: names: expected list of strings", ictx)
+			}
+			ref.Names = names
+		}
+		sets = append(sets, ref)
+	}
+	return sets, nil
+}
+
+// parseCodeConfig parses a {name, args?} factory reference (model_code).
+// Callback references are name-only and use parseCallbacks instead.
+func parseCodeConfig(v any, ctx string) (*CodeConfig, error) {
+	m, ok := asMap(v)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map, got %T", ctx, v)
+	}
+	if err := checkKeys(m, keySet("name", "args"), nil, ctx); err != nil {
+		return nil, err
+	}
+	name, _ := asString(m["name"])
+	if name == "" {
+		return nil, fmt.Errorf("%s: %q is required", ctx, "name")
+	}
+	cc := &CodeConfig{Name: name}
+	if a, ok := m["args"]; ok {
+		args, ok := asMap(a)
+		if !ok {
+			return nil, fmt.Errorf("%s: args: expected map, got %T", ctx, a)
+		}
+		cc.Args = args
+	}
+	return cc, nil
+}
+
+func parseTemplateRef(v any, ctx string) (*prompt.TemplateRef, error) {
+	m, ok := asMap(v)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map, got %T", ctx, v)
+	}
+	if err := checkKeys(m, keySet("name", "inline", "path"), nil, ctx); err != nil {
+		return nil, err
+	}
+	ref := &prompt.TemplateRef{}
+	for _, f := range []struct {
+		key string
+		dst *string
+	}{
+		{"name", &ref.Name},
+		{"inline", &ref.Inline},
+		{"path", &ref.Path},
+	} {
+		if err := mustString(m, f.key, ctx, f.dst); err != nil {
+			return nil, err
+		}
+	}
+	if err := ref.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", ctx, err)
+	}
+	return ref, nil
+}
+
+// --- Runtime section parsing ---
+
+var (
+	supportedRunConfigKeys = keySet(
+		"streaming_mode", "save_input_blobs_as_artifacts", "save_live_blob", "max_llm_calls",
+	)
+	unsupportedRunConfigKeys = keySet(
+		"custom_metadata", "save_live_audio", "speech_config", "http_options", "labels",
+		"service_tier", "response_modalities", "avatar_config", "support_cfc",
+		"output_audio_transcription", "input_audio_transcription", "realtime_input_config",
+		"explicit_vad_signal", "translation_config", "enable_affective_dialog", "proactivity",
+		"session_resumption", "history_config", "context_window_compression",
+		"tool_thread_pool_config", "telemetry", "get_session_config", "model_input_context",
+		"include_thoughts_from_other_agents",
+	)
+)
+
+func parseRunConfig(v any, ctx string) (*RunConfig, error) {
+	m, ok := asMap(v)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map, got %T", ctx, v)
+	}
+	if err := checkKeys(m, supportedRunConfigKeys, unsupportedRunConfigKeys, ctx); err != nil {
+		return nil, err
+	}
+	rc := &RunConfig{}
+	var sm string
+	if err := mustString(m, "streaming_mode", ctx, &sm); err != nil {
+		return nil, err
+	}
+	rc.StreamingMode = StreamingMode(sm)
+	if err := mustBool(m, "save_input_blobs_as_artifacts", ctx, &rc.SaveInputBlobsAsArtifacts); err != nil {
+		return nil, err
+	}
+	if err := mustBool(m, "save_live_blob", ctx, &rc.SaveLiveBlob); err != nil {
+		return nil, err
+	}
+	if v, ok := m["max_llm_calls"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: max_llm_calls: expected integer, got %T", ctx, v)
+		}
+		rc.MaxLLMCalls = &i
+	}
+	if err := validateRunConfig(rc); err != nil {
+		return nil, fmt.Errorf("%s: %w", ctx, err)
+	}
+	return rc, nil
+}
+
+func validateRunConfig(rc *RunConfig) error {
+	switch rc.StreamingMode {
+	case "", StreamingModeNone, StreamingModeSSE, StreamingModeBIDI:
+		return nil
+	default:
+		return fmt.Errorf("streaming_mode must be one of \"\", \"none\", \"sse\", or \"bidi\", got %q", rc.StreamingMode)
+	}
+}
+
+func parseContextCacheConfig(v any, ctx string) (*ContextCacheConfig, error) {
+	m, ok := asMap(v)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected map, got %T", ctx, v)
+	}
+	if err := checkKeys(m, keySet("cache_intervals", "ttl_seconds", "min_tokens"), keySet("create_http_options"), ctx); err != nil {
+		return nil, err
+	}
+	c := &ContextCacheConfig{}
+	if v, ok := m["cache_intervals"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: cache_intervals: expected integer, got %T", ctx, v)
+		}
+		c.CacheIntervals = i
+	}
+	if v, ok := m["ttl_seconds"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: ttl_seconds: expected integer, got %T", ctx, v)
+		}
+		c.TTLSeconds = i
+	}
+	if v, ok := m["min_tokens"]; ok {
+		i, ok := asInt(v)
+		if !ok {
+			return nil, fmt.Errorf("%s: min_tokens: expected integer, got %T", ctx, v)
+		}
+		c.MinTokens = i
+	}
+	return c, nil
 }

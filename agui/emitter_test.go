@@ -755,3 +755,64 @@ func TestForSubagent_BaseEmitterUntouched(t *testing.T) {
 		t.Errorf("sub emitter event should carry subagentRunId: %s", subJSON)
 	}
 }
+
+// TestRunStarted_DeclaresProtocolVersion verifies that the 1.0 producer
+// contract is satisfied: RUN_STARTED declares protocolVersion on the wire.
+func TestRunStarted_DeclaresProtocolVersion(t *testing.T) {
+	ch := make(chan events.Event, 1)
+	em := agui.NewEventEmitter(ch)
+	if err := em.RunStarted("thread-1", "run-1"); err != nil {
+		t.Fatalf("RunStarted: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	data, err := got[0].ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["protocolVersion"]; got != agui.ProtocolVersion {
+		t.Errorf("protocolVersion = %v, want %q", got, agui.ProtocolVersion)
+	}
+	if m["type"] != string(events.EventTypeRunStarted) {
+		t.Errorf("type = %v, want RUN_STARTED", m["type"])
+	}
+	if _, present := m["parentRunId"]; present {
+		t.Errorf("RunStarted should not emit parentRunId, got %v", m["parentRunId"])
+	}
+}
+
+// TestRunStartedWithParent_EmitsParentRunID verifies the parentRunId echo used
+// when the inbound RunAgentInput names a parent run.
+func TestRunStartedWithParent_EmitsParentRunID(t *testing.T) {
+	ch := make(chan events.Event, 1)
+	em := agui.NewEventEmitter(ch)
+	if err := em.RunStartedWithParent("thread-1", "run-1", "parent-run-9"); err != nil {
+		t.Fatalf("RunStartedWithParent: %v", err)
+	}
+
+	got := drain(ch)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	data, err := got[0].ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["protocolVersion"]; got != agui.ProtocolVersion {
+		t.Errorf("protocolVersion = %v, want %q", got, agui.ProtocolVersion)
+	}
+	if got := m["parentRunId"]; got != "parent-run-9" {
+		t.Errorf("parentRunId = %v, want %q", got, "parent-run-9")
+	}
+}

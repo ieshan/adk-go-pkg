@@ -112,7 +112,7 @@ If a `golangci-lint` config is needed, create `.golangci.yml` at the repo root. 
 gocheck gosec ./...
 ```
 
-**Suppressed findings**: None. Filesystem-owning services (`artifact/file.Service`, `eval.LocalEvalSetsManager`, `eval.LocalEvalSetResultsManager`) scope all I/O beneath an `*os.Root` opened from a base directory in their constructors. Standalone APIs (`config.Load`, `config.ResolveAgentRef`, `eval.LoadEvalSetFromFile`, `eval.GetEvaluationCriteriaOrDefault`, `prompt.NewLoader`, `prompt.TemplateRegistry.RegisterFile`) accept a `*os.Root` and use root-relative paths. The gosec count should be 0.
+**Suppressed findings**: None. Filesystem-owning services (`artifact/file.Service`, `eval.LocalEvalSetsManager`, `eval.LocalEvalSetResultsManager`) scope all I/O beneath an `*os.Root` opened from a base directory in their constructors. Standalone APIs (`config.Load`, `config.LoadAndBuild`, `eval.LoadEvalSetFromFile`, `eval.GetEvaluationCriteriaOrDefault`, `prompt.NewLoader`, `prompt.TemplateRegistry.RegisterFile`) accept a `*os.Root` and use root-relative paths. The gosec count should be 0.
 
 ### nilaway (nilability analyzer)
 

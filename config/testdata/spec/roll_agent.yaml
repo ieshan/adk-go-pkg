@@ -1,0 +1,7 @@
+name: roll_agent
+agent_class: LlmAgent
+model: gemini-2.5-flash
+description: "Rolls dice."
+instruction: "Roll a die and report the result."
+tools:
+  - roll_die

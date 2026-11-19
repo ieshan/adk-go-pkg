@@ -3,6 +3,7 @@ package agui
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -50,11 +51,24 @@ func Handler(cfg Config) (http.Handler, error) {
 
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodySize)
 
-		var input types.RunAgentInput
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		var input types.RunAgentInput
+		if err := json.Unmarshal(body, &input); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var probe struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		// Already-validated JSON; absence is legal. A wrong-typed value (e.g.
+		// "protocolVersion": 123) fails this second unmarshal and is treated as
+		// absent — the same "unknown/malformed → pre-1.0 peer" tolerance the
+		// schema gives the field.
+		_ = json.Unmarshal(body, &probe)
 
 		// Accept header negotiation: this server only supports SSE
 		// (text/event-stream) and JSON. Reject protobuf transport requests.
@@ -74,7 +88,8 @@ func Handler(cfg Config) (http.Handler, error) {
 			return
 		}
 
-		runCtx, cancel := context.WithCancel(r.Context())
+		runCtx, cancel := context.WithCancel(
+			WithClientProtocolVersion(r.Context(), probe.ProtocolVersion))
 		defer cancel()
 
 		session := newSSESession(w, flusher, sseWriter, cancel)

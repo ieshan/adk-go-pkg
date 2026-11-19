@@ -338,16 +338,16 @@ The bridge translates ADK session events into AG-UI events as follows:
 |-----------|---------------|-------|
 | Text part (partial) | `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` | Delta computed from accumulated emitted text (handles both raw-delta and accumulated-text providers) |
 | Text part (final) | `TEXT_MESSAGE_CONTENT` + `TEXT_MESSAGE_END` | Closes the message |
-| Thought part | `REASONING_START` + `REASONING_MESSAGE_START` + `REASONING_MESSAGE_CONTENT` + `REASONING_MESSAGE_END` + `REASONING_END` | Full reasoning sequence per thought. When a thought part carries a `ThoughtSignature`, a `REASONING_ENCRYPTED_VALUE` event is also emitted. |
+| Thought part | `REASONING_START` + `REASONING_MESSAGE_START` + `REASONING_MESSAGE_CONTENT` + `REASONING_MESSAGE_END` + `REASONING_END` | Full reasoning sequence per thought. Spans and reasoning messages use distinct IDs (`REASONING_START`/`END` carry the span ID, message events carry the message ID). When a thought part carries a `ThoughtSignature`, a `REASONING_ENCRYPTED_VALUE` event is also emitted. |
 | FunctionCall part (partial) | `TOOL_CALL_START` + one `TOOL_CALL_ARGS` per `PartialArgs[].StringValue` | Streaming deltas; AG-UI clients concatenate deltas |
 | FunctionCall part (final, streaming) | `TOOL_CALL_ARGS` (remaining accumulated `fc.Args`) + `TOOL_CALL_END` | Closes the streaming tool call |
 | FunctionCall part (non-streaming) | `TOOL_CALL_START` + `TOOL_CALL_ARGS` + `TOOL_CALL_END` | All-at-once with accumulated `fc.Args` |
 | FunctionCall part (malformed) | `TOOL_CALL_RESULT` with `{"error": "..."}` | Empty name or bad JSON args emit an error result instead of `TOOL_CALL_*`. Empty ID gets a synthetic ID via `GenerateToolCallID()` and proceeds normally. |
 | FunctionResponse part | `ACTIVITY_SNAPSHOT` (`tool_use`) + `TOOL_CALL_RESULT` | Activity snapshot content: `{"text": "Running <name>(<args>)"}`; snapshot emitted first, then the result |
-| State delta | `STATE_DELTA` | Each key becomes a `replace` operation at `/<key>` |
-| (run start) | `RUN_STARTED` | Emitted before the ADK runner starts |
+| State delta | `STATE_DELTA` | Each key becomes an `add` operation at `/<key>` (an upsert: ADK delta keys may be brand-new, and RFC 6902 `replace` fails on absent paths) |
+| (run start) | `RUN_STARTED` | Emitted before the ADK runner starts; declares `protocolVersion: "1.0"` and echoes `parentRunId` when the input supplies one |
 | (run end) | `RUN_FINISHED` | Emitted after the ADK runner completes; `closeStreamedToolCalls()` synthesizes `TOOL_CALL_END` for any streamed calls that never got a final event |
-| Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) + `ACTIVITY_SNAPSHOT` (`approval_request`) per pending call | Run ends with interrupts (each carrying `ResponseSchema` and `Message`); paused run saved to `RunStore`. Client resumes with `Resume` entries. Skipped when `ApprovalModeFunc` returns `true` (auto-approve). |
+| Long-running tool IDs | `RUN_FINISHED` (with `WithInterruptOutcome`) + `ACTIVITY_SNAPSHOT` per pending call | Run ends with interrupts carrying `ResponseSchema`, `Message`, `ExpiresAt`, and `SubagentRunID` (when raised inside a sub-agent); paused run saved to `RunStore`. Ordinary tools get reason `"tool_call"` plus an `approval_request` snapshot; `adk_request_credential` calls get reason `"auth"` plus an `auth_request` snapshot (see [Authentication Interrupts](#authentication-interrupts)). Client resumes with `Resume` entries. Skipped when `ApprovalModeFunc` returns `true` (auto-approve). |
 | Long-running tool IDs (hand-back mode) | `RUN_FINISHED` (plain, no interrupt) + optional `MESSAGES_SNAPSHOT` | When `ClientTools.Mode` is `ClientToolModeHandBack`, the run ends with a clean finish — no interrupt outcome, no `RunStore` entry. The client receives the tool call and starts a new run with the result. |
 | Sub-agent author transition | `SUBAGENT_STARTED` / `SUBAGENT_FINISHED` | Emitted when the ADK event author changes from the root agent to a sub-agent (or back). Streamed events between lifecycle boundaries carry `subagentRunId` for attribution. |
 | (suppressed tool mode) | `STATE_DELTA` | When `SuppressToolEvents` is true and `ToolToStateMapper` returns `suppress=true`, `TOOL_CALL_*` events are replaced with `STATE_DELTA` carrying the mapper's patch ops (if non-nil). Partial events are skipped. Suppressed calls never enter `toolCallIDs`, so their `FunctionResponse` is naturally skipped. Non-suppressed calls (`suppress=false`) get normal `TOOL_CALL_*` + `TOOL_CALL_RESULT`. |
@@ -445,6 +445,38 @@ human-in-the-loop approval:
 
 This allows human-in-the-loop workflows where a tool requires user confirmation
 or input before proceeding.
+
+### Authentication Interrupts
+
+ADK v2.8 surfaces a forced sign-in as a `FunctionCall` named
+`adk_request_credential` (constant
+`toolauth.RequestCredentialFunctionCallName`) whose ID lands in
+`LongRunningToolIDs`. The bridge treats it distinctly from a tool approval:
+
+- The interrupt has `reason: "auth"`, `toolCallId: <call ID>`, and
+  `metadata.authConfig` carrying the auth config (for OAuth2 this includes the
+  auth scheme and the authorization URI the client must drive). The
+  `auth_request` `ACTIVITY_SNAPSHOT` is emitted instead of `approval_request`.
+- **Credential-flow material.** `authConfig` (OAuth2 state, PKCE verifier,
+  client metadata) is also visible in the preceding `TOOL_CALL_ARGS`, and the
+  pending call's args are held in the process-local `RunStore` for the pause
+  TTL. Treat a paused auth run's `RunStore` as sensitive: it lives in process
+  memory and is exposed to clients in the interrupt metadata during the pause.
+- **Resume (resolved).** The resume payload must be a JSON object — ADK reads
+  it as a `toolauth.Config` with `exchangedAuthCredential` filled in (or a bare
+  credential). The bridge passes that object to ADK unwrapped. On the wire the
+  `TOOL_CALL_RESULT` carries a non-secret marker, `{"status":"resolved"}` —
+  never the credential itself, which the client already possesses.
+- **Resume (cancelled).** ADK has no denial shape for credentials, so a
+  cancelled auth interrupt cannot resume; the bridge emits a clean `RUN_ERROR`
+  (`"user did not complete sign-in"`) **before** invoking the runner and
+  leaves no `FunctionResponse` in session history.
+- The resume decision is driven by the entry's `status`, never by the payload:
+  a credential object that happens to contain `"approved": false` still
+  resumes.
+- Every interrupt kind (approval, auth, `requested_input`) carries `expiresAt`
+  (the `RunStore` TTL, ISO 8601) and `subagentRunId` when the long-running call
+  was raised inside a sub-agent.
 
 ## Session Management
 
@@ -764,7 +796,7 @@ type ToolToStateMapper func(toolName string, args map[string]any) ([]events.JSON
 mapper := func(toolName string, args map[string]any) ([]events.JSONPatchOperation, bool) {
 	if toolName == "set_theme" {
 		return []events.JSONPatchOperation{
-			{Op: "replace", Path: "/theme", Value: args["theme"]},
+			{Op: "add", Path: "/theme", Value: args["theme"]},
 		}, true
 	}
 	return nil, false // fall back to normal tool call events for other tools
@@ -962,18 +994,24 @@ configuration to produce an accurate capabilities snapshot. Pass the result to
 
 ### What It Sets
 
+The descriptor follows the 1.0 `AgentCapabilities` schema; integration-specific
+declarations go under `Custom`.
+
 | Capability | Always Set | Condition |
 |------------|------------|-----------|
 | `Identity` | yes — `Name`, `Type: "adk-go"`, `Description` from the agent | — |
 | `Transport` | yes — `Streaming: true` | — |
 | `State` | yes — `Snapshots: true`, `Deltas: true` | — |
-| `Messages` | yes — `Snapshots` mirrors `EmitMessagesSnapshot`, `StreamingText: true` | — |
-| `Tools` | yes — `Supported: true`, `ServerTools: true`, `Streaming: true` | `ClientTools: true` when `Config.ClientTools` is set |
+| `Tools` | yes — `Supported: true` | `ClientProvided: true` when `Config.ClientTools` is set |
 | `Reasoning` | yes — `Supported: true`, `Streaming: true`, `Encrypted: true` | — |
-| `HumanInTheLoop` | no | `Interrupts: true` when `ClientTools.Mode == ClientToolModeNextRun` |
-| `Activities` | no | `Snapshots: true`, `Deltas: EmitActivityDeltas` when the agent has sub-agents (`len(a.SubAgents()) > 0`) |
+| `Multimodal` | yes — input media flags | all of image/audio/video/pdf/file when `Provider` is `""` or `"openai"`; image only for other providers (audio/video/document degrade to text) |
+| `HumanInTheLoop` | no | `Supported: true`, `Interrupts: true`, `Approvals: true` when `ClientTools.Mode == ClientToolModeNextRun` |
+| `MultiAgent` | no | `Supported: true`, `Delegation: true`, `Subagents` populated when the agent has sub-agents |
+| `Custom` | yes | `messagesSnapshot` mirrors `EmitMessagesSnapshot`; `activities` (`{snapshots, deltas}`) is added in NextRun mode |
 
-Override the returned descriptor if you need finer control (e.g., to suppress a capability you don't want exposed).
+Intentionally undeclared (an omitted schema category means "unknown", not
+"unsupported"): `output`, `execution`, `multimodal.output`,
+`transport.websocket`/`httpBinary`/`resumable`.
 
 ```go
 caps := aguiadk.InferCapabilities(myAgent, bridgeCfg)
@@ -1018,6 +1056,15 @@ The envelope is persisted into session state under these keys (defined in
 | `_ag_ui_parent_run_id` | `string` | The `ParentRunID` from the envelope, if set |
 | `_ag_ui_context` | `[]types.Context` | The `Context` slice from the envelope |
 | `_ag_ui_forwarded_props` | `any` | The `ForwardedProps` from the envelope |
+| `_ag_ui_client_protocol_version` | `string` | The `protocolVersion` the client declared on `RunAgentInput`, when present |
+
+Read the client's declared protocol version (a pre-1.0 client returns
+`("", false)`) through the helper, which checks the request context first and
+falls back to the persisted state value:
+
+```go
+func ClientProtocolVersionFrom(ctx agent.ReadonlyContext) (string, bool)
+```
 
 ## Remote Agent
 

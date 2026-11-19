@@ -374,6 +374,39 @@ func TestReconstructMessages_ToolCalls(t *testing.T) {
 	}
 }
 
+func TestReconstructMessages_UnwrapsSubagentEvents(t *testing.T) {
+	// Events produced through a ForSubagent emitter arrive wrapped
+	// (augmentedEvent); reconstructMessages must unwrap them or sub-agent
+	// text and tool calls are silently dropped.
+	ch := make(chan events.Event, 16)
+	base := agui.NewEventEmitter(ch)
+	sub := base.ForSubagent("sub-1")
+	role := "assistant"
+	_ = sub.TextMessageStartWithID("m1", &role, "")
+	_ = sub.TextMessageContent("m1", "hi")
+	_ = sub.TextMessageEnd("m1")
+	_ = sub.ToolCallStart("tc1", "search", nil)
+	_ = sub.ToolCallArgs("tc1", `{"q":"cats"}`)
+	_ = sub.ToolCallEnd("tc1")
+	close(ch)
+
+	var evs []events.Event
+	for ev := range ch {
+		evs = append(evs, ev)
+	}
+
+	msgs := testReconstructMessages(nil, evs)
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2 (text + tool call)", len(msgs))
+	}
+	if msgs[0].Content != "hi" {
+		t.Errorf("message[0] content = %v, want hi", msgs[0].Content)
+	}
+	if len(msgs[1].ToolCalls) != 1 || msgs[1].ToolCalls[0].ID != "tc1" {
+		t.Errorf("message[1] tool calls = %+v, want tc1", msgs[1].ToolCalls)
+	}
+}
+
 func TestGetOpenToolCalls(t *testing.T) {
 	msgs := []types.Message{
 		{ID: "m0", Role: types.RoleUser, Content: "hello"},

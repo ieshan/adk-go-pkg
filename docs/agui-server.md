@@ -264,7 +264,8 @@ if err := emitter.TextMessageContent(msgID, delta); err != nil {
 
 | Method | Description |
 |--------|-------------|
-| `RunStarted(threadID, runID string) error` | Emits `RUN_STARTED` |
+| `RunStarted(threadID, runID string) error` | Emits `RUN_STARTED`. The event declares `protocolVersion` (`agui.ProtocolVersion`, currently `"1.0"`) automatically, as the 1.0 specification requires of producers. |
+| `RunStartedWithParent(threadID, runID, parentRunID string) error` | `RunStarted` plus a `parentRunId` attribution, used when the inbound `RunAgentInput` names a parent run. |
 | `RunFinishedWithOptions(threadID, runID string, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with optional configuration (e.g., `events.WithSuccessOutcome`, `events.WithInterruptOutcome`) |
 | `RunErrorWithOptions(message string, opts ...events.RunErrorOption) error` | Emits `RUN_ERROR` with optional configuration (e.g., `events.WithRunID`, `events.WithErrorCode`) |
 | `RunFinishedWithUsage(threadID, runID string, usage []events.TokenUsage, opts ...events.RunFinishedOption) error` | Emits `RUN_FINISHED` with aggregated token usage telemetry; falls back to `RunFinishedWithOptions` when `usage` is empty/nil. See [Token Usage Telemetry](#token-usage-telemetry). |
@@ -831,6 +832,12 @@ visibility. It manages the `REASONING_START` / `REASONING_MESSAGE_START` /
 `REASONING_MESSAGE_CONTENT` / `REASONING_MESSAGE_END` / `REASONING_END`
 lifecycle.
 
+The 1.0 specification keeps reasoning spans and reasoning messages in separate
+namespaces, so the tracker uses distinct IDs: the span ID is derived as
+`messageID + "-span"` and is carried by `REASONING_START`/`REASONING_END`, while
+the message events carry the caller-supplied `messageID`. The constructor
+signature is unchanged.
+
 | Method | Description |
 |--------|-------------|
 | `Start(role string) error` | Emits `REASONING_START` + `REASONING_MESSAGE_START` |
@@ -941,7 +948,7 @@ func Handler(cfg Config) (http.Handler, error)
 
 1. On `GET /` (exact `r.URL.Path == "/"` match) or `GET /capabilities` (path suffix match — ending in `/capabilities` — so the handler works correctly when mounted at a sub-path via `http.ServeMux`), returns the configured `AgentCapabilities` as JSON (404 if `Config.Capabilities` is nil)
 2. Returns `405 Method Not Allowed` for any other HTTP method that is not `GET` or `POST`
-3. Accepts `POST` requests with a JSON `RunAgentInput` body, limited to `MaxBodySize` bytes (default 10 MB) via `http.MaxBytesReader`
+3. Accepts `POST` requests with a JSON `RunAgentInput` body, limited to `MaxBodySize` bytes (default 10 MB) via `http.MaxBytesReader`. The body is read once and decoded twice: into `RunAgentInput`, and into a small probe that captures the client's `protocolVersion`, which is attached to the request context and readable in the agent via `ClientProtocolVersion(ctx)` — `("", false)` for a pre-1.0 client. Trailing garbage after the JSON value is rejected with `400 Bad Request`.
 4. Performs `Accept` header negotiation: rejects protobuf transport requests (`application/vnd.ag-ui.event+proto`, `application/x-protobuf`, `application/protobuf`, `application/vnd.google.protobuf`) with `406 Not Acceptable`; accepts all other `Accept` values (including `text/event-stream` and JSON) and serves SSE
 5. Sets SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`)
 6. Applies the middleware chain to the agent
@@ -964,34 +971,43 @@ The handler supports optional capabilities discovery via `GET /` or
 `GET /capabilities`. When `Config.Capabilities` is set, these endpoints return
 the configured `AgentCapabilities` as JSON. When nil, they return 404.
 
+The shape follows the AG-UI 1.0 `AgentCapabilities` schema. Categories with no
+schema equivalent belong under `Custom`, because 1.0 clients strip unknown
+top-level keys.
+
 ```go
 type AgentCapabilities struct {
     Identity       *IdentityCapabilities       `json:"identity,omitempty"`
     Transport      *TransportCapabilities      `json:"transport,omitempty"`
+    Tools          *ToolsCapabilities          `json:"tools,omitempty"`
+    Output         *OutputCapabilities         `json:"output,omitempty"`
     State          *StateCapabilities          `json:"state,omitempty"`
-    Messages       *MessageCapabilities        `json:"messages,omitempty"`
-    Tools          *ToolCapabilities           `json:"tools,omitempty"`
-    HumanInTheLoop *HumanInTheLoopCapabilities `json:"humanInTheLoop,omitempty"`
-    Activities     *ActivityCapabilities       `json:"activities,omitempty"`
+    MultiAgent     *MultiAgentCapabilities     `json:"multiAgent,omitempty"`
     Reasoning      *ReasoningCapabilities      `json:"reasoning,omitempty"`
+    Multimodal     *MultimodalCapabilities     `json:"multimodal,omitempty"`
+    Execution      *ExecutionCapabilities      `json:"execution,omitempty"`
+    HumanInTheLoop *HumanInTheLoopCapabilities `json:"humanInTheLoop,omitempty"`
+    Custom         map[string]any              `json:"custom,omitempty"`
 }
 ```
 
 All sub-capabilities are optional pointers so an agent can advertise only the
-capabilities it supports.
+categories it supports.
 
 ### Sub-capability Fields
 
 | Type | Fields |
 |------|--------|
-| `IdentityCapabilities` | `Name`, `Type`, `Description` |
-| `TransportCapabilities` | `Streaming`, `Binary`, `Protobuf` |
-| `StateCapabilities` | `Snapshots`, `Deltas` |
-| `MessageCapabilities` | `Snapshots`, `StreamingText` |
-| `ToolCapabilities` | `Supported`, `ClientTools`, `ServerTools`, `Streaming` |
-| `HumanInTheLoopCapabilities` | `Interrupts` |
-| `ActivityCapabilities` | `Snapshots`, `Deltas` |
+| `IdentityCapabilities` | `Name`, `Type`, `Description`, `Version`, `Provider`, `DocumentationURL`, `Metadata` |
+| `TransportCapabilities` | `Streaming`, `Websocket`, `HTTPBinary`, `PushNotifications`, `Resumable` |
+| `ToolsCapabilities` | `Supported`, `Items`, `ParallelCalls`, `ClientProvided` |
+| `OutputCapabilities` | `StructuredOutput`, `SupportedMimeTypes` |
+| `StateCapabilities` | `Snapshots`, `Deltas`, `Memory`, `PersistentState` |
+| `MultiAgentCapabilities` | `Supported`, `Delegation`, `Handoffs`, `Subagents` |
 | `ReasoningCapabilities` | `Supported`, `Streaming`, `Encrypted` |
+| `MultimodalCapabilities` | `Input`, `Output` |
+| `ExecutionCapabilities` | `CodeExecution`, `Sandboxed`, `MaxIterations`, `MaxExecutionTime` |
+| `HumanInTheLoopCapabilities` | `Supported`, `Approvals`, `Interventions`, `Feedback`, `Interrupts`, `ApproveWithEdits` |
 
 ### Example
 
@@ -1006,8 +1022,8 @@ handler, err := agui.Handler(agui.Config{
         },
         Transport: &agui.TransportCapabilities{Streaming: true},
         State:     &agui.StateCapabilities{Snapshots: true, Deltas: true},
-        Messages:  &agui.MessageCapabilities{Snapshots: false, StreamingText: true},
-        Tools:     &agui.ToolCapabilities{Supported: true, ClientTools: true},
+        Tools:     &agui.ToolsCapabilities{Supported: true, ClientProvided: true},
+        Custom:    map[string]any{"messagesSnapshot": true},
     },
 })
 ```
@@ -1017,7 +1033,9 @@ handler, err := agui.Handler(agui.Config{
 `ClientAgent` is an `agui.Agent` implementation that streams events from a
 remote AG-UI endpoint over HTTP/SSE. It implements the client side of the
 AG-UI protocol, decoding SSE frames into typed events and propagating context
-cancellation to release HTTP reader goroutines.
+cancellation to release HTTP reader goroutines. Each request declares
+`protocolVersion` on the outbound `RunAgentInput` body — the client half of the
+version-negotiation pair.
 
 ```go
 type ClientConfig struct {

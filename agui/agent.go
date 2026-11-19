@@ -15,7 +15,7 @@
 //	    emitter := agui.NewEventEmitter(ch)
 //	    go func() {
 //	        defer close(ch)
-//	        emitter.RunStarted(input.ThreadID, input.RunID)
+//	        emitter.RunStarted(input.ThreadID, input.RunID) // declares protocolVersion automatically
 //	        msgID := emitter.GenerateMessageID()
 //	        role := "assistant"
 //	        emitter.TextMessageStart(msgID, &role)

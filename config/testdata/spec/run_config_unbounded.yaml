@@ -1,0 +1,5 @@
+name: run_config_unbounded
+agent_class: LlmAgent
+model: gemini-2.5-flash
+run_config:
+  max_llm_calls: 0

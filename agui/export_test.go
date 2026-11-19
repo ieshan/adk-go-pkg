@@ -3,11 +3,17 @@ package agui
 import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // This file exports unexported functions and types for use in external test
 // files (package agui_test). It is only compiled during testing and does not
 // pollute the production binary.
+
+// ExtractResourceURIForTest exposes extractResourceURI for testing.
+func ExtractResourceURIForTest(tool *mcp.Tool) string {
+	return extractResourceURI(tool)
+}
 
 // UIToolInfoForTest exposes uiToolInfo for testing.
 type UIToolInfoForTest = uiToolInfo

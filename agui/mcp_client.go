@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,7 +22,14 @@ func BuildMCPTransport(config MCPClientConfig) (mcp.Transport, error) {
 		return nil, fmt.Errorf("agui: MCP server URL is required")
 	}
 
-	httpClient := newMCPHTTPClient(config.Headers)
+	endpoint, err := url.Parse(config.URL)
+	if err != nil {
+		return nil, fmt.Errorf("agui: invalid MCP server URL: %w", err)
+	}
+	if endpoint.Scheme == "" || endpoint.Host == "" {
+		return nil, fmt.Errorf("agui: MCP server URL %q must be absolute (scheme://host)", config.URL)
+	}
+	httpClient := newMCPHTTPClient(endpoint, config.Headers)
 
 	switch config.Type {
 	case "http", "streamable", "":
@@ -47,34 +55,68 @@ func BuildMCPTransport(config MCPClientConfig) (mcp.Transport, error) {
 //
 // If http.DefaultTransport is not a *http.Transport (extremely unlikely),
 // the fallback uses http.DefaultTransport directly.
-func newMCPHTTPClient(headers map[string]string) *http.Client {
+//
+// When headers are configured the client is pinned to the endpoint's origin:
+// cross-origin redirects are refused and headers are only injected on
+// same-origin requests, so credentials cannot leak to a redirect target.
+func newMCPHTTPClient(endpoint *url.URL, headers map[string]string) *http.Client {
 	base := http.DefaultTransport
 	if t, ok := base.(*http.Transport); ok {
 		base = t.Clone()
 	}
+	client := &http.Client{Transport: base}
 	if len(headers) == 0 {
-		return &http.Client{Transport: base}
+		return client
 	}
-	return &http.Client{
-		Transport: &headerRoundTripper{
-			base:    base,
-			headers: headers,
-		},
+	origin := originOf(endpoint)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL, origin) {
+			return fmt.Errorf("agui: refusing redirect to %q: different origin", req.URL)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("agui: too many redirects")
+		}
+		return nil
 	}
+	client.Transport = &headerRoundTripper{base: base, headers: headers, origin: origin}
+	return client
 }
 
-// headerRoundTripper injects custom headers into every request.
+// headerRoundTripper injects custom headers into same-origin requests only.
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
+	origin  string
 }
 
 func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
-	for k, v := range h.headers {
-		clone.Header.Set(k, v)
+	if sameOrigin(clone.URL, h.origin) {
+		for k, v := range h.headers {
+			clone.Header.Set(k, v)
+		}
 	}
 	return h.base.RoundTrip(clone)
+}
+
+// originOf normalizes a URL to its scheme://host[:port] origin (lowercase),
+// dropping default ports so https://x and https://x:443 compare equal — the
+// same normalization a browser applies to URL.origin.
+func originOf(u *url.URL) string {
+	if u == nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	host := u.Host
+	if (u.Scheme == "https" && u.Port() == "443") ||
+		(u.Scheme == "http" && u.Port() == "80") {
+		host = u.Hostname()
+	}
+	return strings.ToLower(u.Scheme + "://" + host)
+}
+
+// sameOrigin reports whether u shares the normalized origin.
+func sameOrigin(u *url.URL, origin string) bool {
+	return u != nil && originOf(u) == origin
 }
 
 // connectMCP creates an MCP client session from the config.

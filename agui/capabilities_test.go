@@ -3,47 +3,70 @@ package agui_test
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
-
-	"iter"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ieshan/adk-go-pkg/agui"
 )
 
-func TestAgentCapabilities_JSONSerialization(t *testing.T) {
+// schemaCapabilityKeys is the set of top-level AgentCapabilities keys defined
+// by the AG-UI 1.0 schema. Hardcoded so any drift fails the test.
+var schemaCapabilityKeys = []string{
+	"identity", "transport", "tools", "output", "state", "multiAgent",
+	"reasoning", "multimodal", "execution", "humanInTheLoop", "custom",
+}
+
+func TestAgentCapabilities_SchemaKeys(t *testing.T) {
 	caps := agui.AgentCapabilities{
-		Identity: &agui.IdentityCapabilities{
-			Name:        "ADK Assistant",
-			Type:        "adk-go",
-			Description: "ADK-Go Agent",
-		},
-		Transport: &agui.TransportCapabilities{
-			Streaming: true,
-		},
-		State: &agui.StateCapabilities{
-			Snapshots: true,
-			Deltas:    true,
-		},
+		Identity:   &agui.IdentityCapabilities{Name: "ADK Assistant", Type: "adk-go"},
+		Transport:  &agui.TransportCapabilities{Streaming: true},
+		Tools:      &agui.ToolsCapabilities{Supported: true, ClientProvided: true},
+		State:      &agui.StateCapabilities{Snapshots: true, Deltas: true},
+		MultiAgent: &agui.MultiAgentCapabilities{Supported: true, Subagents: []agui.SubagentInfo{{Name: "child"}}},
+		Reasoning:  &agui.ReasoningCapabilities{Supported: true},
+		Multimodal: &agui.MultimodalCapabilities{Input: &agui.MultimodalInputCapabilities{Image: true}},
 		HumanInTheLoop: &agui.HumanInTheLoopCapabilities{
-			Interrupts: true,
+			Supported: true, Interrupts: true,
 		},
+		Custom: map[string]any{"messagesSnapshot": true},
 	}
 
 	data, err := json.Marshal(caps)
 	if err != nil {
 		t.Fatalf("marshal error: %v", err)
 	}
-
 	var parsed map[string]any
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if parsed["identity"].(map[string]any)["type"] != "adk-go" {
-		t.Errorf("identity mismatch: %s", string(data))
+
+	for key := range parsed {
+		if !slices.Contains(schemaCapabilityKeys, key) {
+			t.Errorf("top-level key %q is not in the 1.0 schema set %v", key, schemaCapabilityKeys)
+		}
+	}
+
+	// Spot-check nested field names.
+	tools := parsed["tools"].(map[string]any)
+	if tools["clientProvided"] != true {
+		t.Errorf("tools.clientProvided = %v, want true", tools["clientProvided"])
+	}
+	transport := parsed["transport"].(map[string]any)
+	if _, ok := transport["httpBinary"]; ok {
+		t.Errorf("false httpBinary should be omitted, got %v", transport["httpBinary"])
+	}
+	ma := parsed["multiAgent"].(map[string]any)
+	subs, ok := ma["subagents"].([]any)
+	if !ok || len(subs) != 1 {
+		t.Fatalf("multiAgent.subagents = %v, want one entry", ma["subagents"])
+	}
+	if subs[0].(map[string]any)["name"] != "child" {
+		t.Errorf("multiAgent.subagents[0].name = %v, want child", subs[0])
 	}
 }
 

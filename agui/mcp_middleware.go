@@ -157,15 +157,15 @@ func (m *mcpMiddleware) runLoop(ctx context.Context, input types.RunAgentInput, 
 		// Collect events from next.Run
 		var collectedEvents []events.Event
 		var runErr error
-		var bufferedRunFinished *events.RunFinishedEvent
+		var bufferedRunFinished events.Event
 
 		for ev, err := range m.next.Run(ctx, currentInput) {
 			if err != nil {
 				runErr = err
 				break
 			}
-			switch e := ev.(type) {
-			case *events.RunStartedEvent:
+			switch {
+			case ev.Type() == events.EventTypeRunStarted:
 				if runStarted {
 					// Suppress continuation RUN_STARTED
 					continue
@@ -175,9 +175,9 @@ func (m *mcpMiddleware) runLoop(ctx context.Context, input types.RunAgentInput, 
 				if emitErr := emitter.emit(ev); emitErr != nil {
 					return
 				}
-			case *events.RunFinishedEvent:
-				bufferedRunFinished = e
-			case *events.RunErrorEvent:
+			case ev.Type() == events.EventTypeRunFinished:
+				bufferedRunFinished = ev
+			case ev.Type() == events.EventTypeRunError:
 				// Forward immediately, stop
 				if emitErr := emitter.emit(ev); emitErr != nil {
 					return
@@ -327,7 +327,7 @@ func reconstructMessages(original []types.Message, evs []events.Event) []types.M
 	var currentTextBuilder strings.Builder
 
 	for _, ev := range evs {
-		switch e := ev.(type) {
+		switch e := unwrapAugmented(ev).(type) {
 		case *events.TextMessageStartEvent:
 			currentAssistant = &types.Message{
 				ID:   e.MessageID,

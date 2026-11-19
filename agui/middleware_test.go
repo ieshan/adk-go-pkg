@@ -60,7 +60,10 @@ func TestChain_Single(t *testing.T) {
 	})
 
 	chained := agui.Chain(mw)(base)
-	for range chained.Run(context.Background(), types.RunAgentInput{}) {
+	for _, err := range chained.Run(context.Background(), types.RunAgentInput{}) {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
 	}
 
 	if len(order) != 3 {
@@ -101,7 +104,10 @@ func TestChain_Ordering(t *testing.T) {
 	// Chain(a, b, c)(agent) = a(b(c(agent)))
 	// Execution: a-before, b-before, c-before, base, c-after, b-after, a-after
 	chained := agui.Chain(makeMW("a"), makeMW("b"), makeMW("c"))(base)
-	for range chained.Run(context.Background(), types.RunAgentInput{}) {
+	for _, err := range chained.Run(context.Background(), types.RunAgentInput{}) {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
 	}
 
 	expected := []string{

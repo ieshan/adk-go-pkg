@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 )
+
+// ProtocolVersion is the AG-UI protocol version this implementation produces.
+// The 1.0 specification requires a producer to declare it on every
+// RUN_STARTED event; absence marks a pre-1.0 producer.
+const ProtocolVersion = "1.0"
 
 // ErrTransport indicates a transport-level error (e.g. the client disconnected
 // and the event channel is closed). Callers can use errors.Is to distinguish
@@ -86,9 +92,25 @@ func (e *EventEmitter) emit(ev events.Event) (err error) {
 	return nil
 }
 
-// RunStarted emits a RUN_STARTED event.
+// RunStarted emits a RUN_STARTED event declaring ProtocolVersion, as the 1.0
+// specification requires of producers.
 func (e *EventEmitter) RunStarted(threadID, runID string) error {
-	return e.emit(events.NewRunStartedEvent(threadID, runID))
+	return e.emit(&augmentedEvent{
+		Event:  events.NewRunStartedEvent(threadID, runID),
+		fields: map[string]any{"protocolVersion": ProtocolVersion},
+	})
+}
+
+// RunStartedWithParent is RunStarted with a parentRunId attribution, used
+// when the inbound RunAgentInput names a parent run.
+func (e *EventEmitter) RunStartedWithParent(threadID, runID, parentRunID string) error {
+	return e.emit(&augmentedEvent{
+		Event: events.NewRunStartedEvent(threadID, runID),
+		fields: map[string]any{
+			"protocolVersion": ProtocolVersion,
+			"parentRunId":     parentRunID,
+		},
+	})
 }
 
 // RunFinishedWithOptions emits a RUN_FINISHED event with optional configuration
@@ -328,41 +350,61 @@ func (e *EventEmitter) SubagentError(subagentRunID, message string, opts ...even
 // goroutine. Lifecycle events (SubagentStarted/Finished/Error) should be
 // emitted through the original emitter, not the sub-agent wrapper, since they
 // carry subagentRunId as their own dedicated field.
+//
+// Run-scoped events (RUN_STARTED, RUN_FINISHED, RUN_ERROR) and
+// MESSAGES_SNAPSHOT must go through the base emitter: the schema's
+// Attributable model explicitly excludes them, so this wrapper must never
+// inject subagentRunId into them. Emitting them via the base emitter is
+// enforced by convention at the call sites; this comment pins the contract so
+// a future emit site cannot violate it.
 func (e *EventEmitter) ForSubagent(subagentRunID string) *EventEmitter {
 	return &EventEmitter{
 		out: e.out,
 		ctx: e.ctx,
 		eventWrapper: func(ev events.Event) events.Event {
-			return &subagentAttributedEvent{Event: ev, subagentRunID: subagentRunID}
+			return &augmentedEvent{Event: ev, fields: map[string]any{"subagentRunId": subagentRunID}}
 		},
 	}
 }
 
-// subagentAttributedEvent wraps an events.Event and injects "subagentRunId"
-// into its JSON serialization. All interface methods delegate to the wrapped
-// event; only ToJSON is overridden to merge the attribution field.
-type subagentAttributedEvent struct {
+// augmentedEvent wraps an events.Event and merges extra top-level fields into
+// its JSON serialization. It carries wire fields the community Go SDK does
+// not model (subagentRunId, protocolVersion, parentRunId) without forking it.
+// All interface methods delegate to the wrapped event; only ToJSON is
+// overridden.
+type augmentedEvent struct {
 	events.Event
-	subagentRunID string
+	fields map[string]any
 }
 
-// ToJSON serializes the wrapped event and injects the subagentRunId field.
-func (e *subagentAttributedEvent) ToJSON() ([]byte, error) {
+// ToJSON serializes the wrapped event and merges the extra fields.
+func (e *augmentedEvent) ToJSON() ([]byte, error) {
 	data, err := e.Event.ToJSON()
 	if err != nil {
 		return nil, err
 	}
-	// Unmarshal into a map, add the field, re-marshal. This preserves all
-	// original fields and works for any event type without knowing its
-	// concrete struct.
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		// Can't augment — return the original JSON as-is.
 		return data, nil
 	}
-	m["subagentRunId"] = e.subagentRunID
+	maps.Copy(m, e.fields)
 	return json.Marshal(m)
 }
 
-// Compile-time check that subagentAttributedEvent satisfies events.Event.
-var _ events.Event = (*subagentAttributedEvent)(nil)
+// unwrapAugmented returns the innermost wrapped event when ev is an
+// augmentedEvent (marshal-time field merge), else ev itself. Event consumers
+// that switch on concrete types must unwrap first — the wrapper exists only
+// for wire serialization (ToJSON) and hides the concrete type.
+func unwrapAugmented(ev events.Event) events.Event {
+	for {
+		aw, ok := ev.(*augmentedEvent)
+		if !ok {
+			return ev
+		}
+		ev = aw.Event
+	}
+}
+
+// Compile-time check that augmentedEvent satisfies events.Event.
+var _ events.Event = (*augmentedEvent)(nil)

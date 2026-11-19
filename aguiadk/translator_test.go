@@ -87,6 +87,36 @@ func TestStreamingReasoningLifecycle(t *testing.T) {
 	if contents < 2 {
 		t.Fatalf("got %d content deltas, want at least 2", contents)
 	}
+
+	// Spans and reasoning messages carry distinct IDs; content/end pair with
+	// the reasoning-message ID.
+	var spanID, msgID string
+	for _, ev := range received {
+		switch e := ev.(type) {
+		case *events.ReasoningStartEvent:
+			spanID = e.MessageID
+		case *events.ReasoningMessageStartEvent:
+			msgID = e.MessageID
+		case *events.ReasoningMessageContentEvent:
+			if e.MessageID != msgID {
+				t.Errorf("content messageId = %q, want reasoning message ID %q", e.MessageID, msgID)
+			}
+		case *events.ReasoningMessageEndEvent:
+			if e.MessageID != msgID {
+				t.Errorf("message-end messageId = %q, want %q", e.MessageID, msgID)
+			}
+		case *events.ReasoningEndEvent:
+			if e.MessageID != spanID {
+				t.Errorf("span-end messageId = %q, want span ID %q", e.MessageID, spanID)
+			}
+		}
+	}
+	if spanID == "" || msgID == "" {
+		t.Fatal("missing reasoning span or message ID")
+	}
+	if spanID == msgID {
+		t.Errorf("span ID and reasoning-message ID are identical (%q), want distinct", spanID)
+	}
 }
 
 // TestReasoningClosesOnText verifies that an open reasoning block is closed

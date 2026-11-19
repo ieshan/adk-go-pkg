@@ -125,6 +125,146 @@ func TestHandler_BasicRun(t *testing.T) {
 	}
 }
 
+func TestHandler_CapturesClientProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantVer string
+		wantOK  bool
+	}{
+		{
+			name:    "declared version",
+			body:    `{"threadId":"t1","runId":"r1","messages":[],"tools":[],"context":[],"protocolVersion":"1.0"}`,
+			wantVer: "1.0",
+			wantOK:  true,
+		},
+		{
+			name:    "absent version",
+			body:    `{"threadId":"t1","runId":"r1","messages":[],"tools":[],"context":[]}`,
+			wantVer: "",
+			wantOK:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotVer string
+			var gotOK bool
+			agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+				gotVer, gotOK = agui.ClientProtocolVersion(ctx)
+				return func(yield func(events.Event, error) bool) {
+					if !yield(events.NewRunStartedEvent(input.ThreadID, input.RunID), nil) {
+						return
+					}
+					yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+				}
+			})
+
+			h, err := agui.Handler(agui.Config{Agent: agent})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(h)
+			t.Cleanup(srv.Close)
+
+			resp, err := http.Post(srv.URL, "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = resp.Body.Close() })
+			_, _ = io.Copy(io.Discard, resp.Body)
+
+			if gotVer != tc.wantVer || gotOK != tc.wantOK {
+				t.Errorf("ClientProtocolVersion = (%q, %v), want (%q, %v)", gotVer, gotOK, tc.wantVer, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestHandler_RejectsTrailingGarbage(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		return func(yield func(events.Event, error) bool) {
+			yield(events.NewRunFinishedEvent(input.ThreadID, input.RunID), nil)
+		}
+	})
+	h, err := agui.Handler(agui.Config{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	body := `{"threadId":"t1","runId":"r1","messages":[],"tools":[],"context":[]}garbage`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestHandler_RunStartedDeclaresProtocolVersionOnWire(t *testing.T) {
+	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
+		ch := make(chan events.Event, 8)
+		em := agui.NewEventEmitter(ch)
+		go func() {
+			defer close(ch)
+			_ = em.RunStarted(input.ThreadID, input.RunID)
+			_ = em.RunFinishedWithOptions(input.ThreadID, input.RunID)
+		}()
+		return agui.ChanToIter(ctx, ch)
+	})
+
+	h, err := agui.Handler(agui.Config{Agent: agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	body, _ := json.Marshal(types.RunAgentInput{ThreadID: "t1", RunID: "r1"})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	scanner := bufio.NewScanner(resp.Body)
+	var sawRunStarted bool
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var m map[string]any
+		if err := json.Unmarshal([]byte(data), &m); err != nil {
+			t.Fatalf("frame is not JSON: %s", data)
+		}
+		// Every frame must decode as a known canonical event type.
+		ev, err := events.EventFromJSON([]byte(data))
+		if err != nil {
+			t.Fatalf("EventFromJSON(%s): %v", data, err)
+		}
+		if ev.Type() == events.EventTypeRunStarted {
+			sawRunStarted = true
+			if m["protocolVersion"] != agui.ProtocolVersion {
+				t.Errorf("RUN_STARTED protocolVersion = %v, want %q", m["protocolVersion"], agui.ProtocolVersion)
+			}
+			if _, ok := m["subagentRunId"]; ok {
+				t.Errorf("RUN_STARTED carries subagentRunId, want none")
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+	if !sawRunStarted {
+		t.Fatal("no RUN_STARTED frame seen")
+	}
+}
+
 func TestHandler_StreamsTextMessage(t *testing.T) {
 	agent := agui.AgentFunc(func(ctx context.Context, input types.RunAgentInput) iter.Seq2[events.Event, error] {
 		return func(yield func(events.Event, error) bool) {

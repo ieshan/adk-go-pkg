@@ -1,0 +1,12 @@
+name: run_config_full
+agent_class: LlmAgent
+model: gemini-2.5-flash
+run_config:
+  streaming_mode: sse
+  save_live_blob: true
+  save_input_blobs_as_artifacts: true
+  max_llm_calls: 120
+context_cache_config:
+  cache_intervals: 5
+  ttl_seconds: 600
+  min_tokens: 100

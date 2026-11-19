@@ -26,6 +26,7 @@ import (
 	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/genai"
 )
 
@@ -315,7 +316,9 @@ func (b *bridge) resolveApprovalMode(ctx context.Context) bool {
 func (b *bridge) emitStatusDelta(emitter *agui.EventEmitter, status string) {
 	if b.cfg.EmitStateStatus {
 		_ = emitter.StateDelta([]events.JSONPatchOperation{
-			{Op: "replace", Path: "/status", Value: status},
+			// "add" upserts both new and existing paths; "replace" fails on a
+			// key the client has never seen.
+			{Op: "add", Path: "/status", Value: status},
 		})
 	}
 }
@@ -384,7 +387,12 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 	// RunFinished) check errors since they indicate structural problems.
 
 	// Emit RUN_STARTED.
-	if err = emitter.RunStarted(input.ThreadID, input.RunID); err != nil {
+	if input.ParentRunID != nil && *input.ParentRunID != "" {
+		err = emitter.RunStartedWithParent(input.ThreadID, input.RunID, *input.ParentRunID)
+	} else {
+		err = emitter.RunStarted(input.ThreadID, input.RunID)
+	}
+	if err != nil {
 		return
 	}
 	b.emitStatusDelta(emitter, "running")
@@ -512,11 +520,16 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			}
 			msg.Parts = append(resumeParts, msg.Parts...)
 		} else {
+			entries := make(map[string]types.ResumeEntry, len(input.Resume))
+			for _, e := range input.Resume {
+				entries[e.InterruptID] = e
+			}
 			approvals := approvalsFromResume(input.Resume)
-			// Validate: every pending tool call needs an explicit decision.
+			// Validate: every pending tool call (approval or auth) needs an
+			// explicit decision.
 			undecided := 0
 			for _, p := range saved.Pending {
-				if _, decided := approvals[p.ID]; !decided {
+				if _, decided := entries[p.ID]; !decided {
 					undecided++
 				}
 			}
@@ -525,7 +538,7 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				if undecided < len(saved.Pending) {
 					// Some but not all are undecided — identify the first one.
 					for _, p := range saved.Pending {
-						if _, decided := approvals[p.ID]; !decided {
+						if _, decided := entries[p.ID]; !decided {
 							msg = fmt.Sprintf("resume did not address pending tool call %q", p.ID)
 							break
 						}
@@ -549,14 +562,16 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			// tool cards has the call to attach the result to — the original
 			// proposal was emitted in the prior (interrupted) response.
 			for _, p := range saved.Pending {
+				isAuth := p.Name == toolauth.RequestCredentialFunctionCallName
 				argsJSON, _ := json.Marshal(p.Args)
 				_ = emitter.ToolCallStart(p.ID, p.Name, nil)
 				_ = emitter.ToolCallArgs(p.ID, string(argsJSON))
 				_ = emitter.ToolCallEnd(p.ID)
-				// For approved calls, emit a tool_use activity snapshot (matching
-				// the example server's settlePendingToolCalls.
-				// Denied calls get no tool_use snapshot — they don't execute.
-				if approvals[p.ID] {
+				// For approved non-auth calls, emit a tool_use activity
+				// snapshot (matching the example server's
+				// settlePendingToolCalls). Denied calls get no tool_use
+				// snapshot — they don't execute. Auth calls execute nothing.
+				if approvals[p.ID] && !isAuth {
 					_ = emitter.ActivitySnapshot(
 						emitter.GenerateMessageID(), "tool_use",
 						map[string]any{"text": fmt.Sprintf("Running %s(%s)", p.Name, string(argsJSON))},
@@ -565,20 +580,62 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				}
 
 				// Settle: emit TOOL_CALL_RESULT reflecting the user's decision.
+				// For auth calls, never echo the payload — it can carry tokens
+				// or auth codes the client already possesses.
 				msgID := "result-" + p.ID
-				if approvals[p.ID] {
+				switch {
+				case isAuth && entries[p.ID].Status == types.ResumeStatusResolved:
+					_ = emitter.ToolCallResult(msgID, p.ID, `{"status":"resolved"}`)
+				case isAuth:
+					_ = emitter.ToolCallResult(msgID, p.ID,
+						`{"denied":true,"reason":"user did not complete sign in"}`)
+				case approvals[p.ID]:
 					_ = emitter.ToolCallResult(msgID, p.ID, string(argsJSON))
-				} else {
+				default:
 					_ = emitter.ToolCallResult(msgID, p.ID,
 						`{"denied":true,"reason":"user did not approve this tool call"}`)
 				}
 			}
 
+			// A cancelled auth interrupt can never resume: ADK has no denial
+			// shape for credentials. Fail the run cleanly here rather than feed
+			// a payload ADK would reject with an unrelated-looking error.
+			for _, p := range saved.Pending {
+				if p.Name == toolauth.RequestCredentialFunctionCallName &&
+					entries[p.ID].Status == types.ResumeStatusCancelled {
+					_ = emitter.RunErrorWithOptions(
+						"user did not complete sign-in",
+						events.WithRunID(input.RunID),
+					)
+					return
+				}
+			}
+
 			// Build FunctionResponse parts so the ADK runner resumes the paused
 			// workflow. Approved calls carry the original args as the result so
-			// the tool can execute; denied calls carry a denial marker.
+			// the tool can execute; denied calls carry a denial marker. Auth
+			// calls carry the client-supplied credential payload unwrapped —
+			// exactly what ADK's parseAuthResponse accepts.
 			var resumeParts []*genai.Part
 			for _, p := range saved.Pending {
+				if p.Name == toolauth.RequestCredentialFunctionCallName {
+					payload, ok := entries[p.ID].Payload.(map[string]any)
+					if !ok {
+						_ = emitter.RunErrorWithOptions(
+							fmt.Sprintf("auth resume payload for interrupt %q must be a JSON object", p.ID),
+							events.WithRunID(input.RunID),
+						)
+						return
+					}
+					resumeParts = append(resumeParts, &genai.Part{
+						FunctionResponse: &genai.FunctionResponse{
+							ID:       p.ID,
+							Name:     p.Name,
+							Response: payload,
+						},
+					})
+					continue
+				}
 				resp := map[string]any{"result": p.Args}
 				if !approvals[p.ID] {
 					resp = map[string]any{"denied": true, "reason": "user did not approve this tool call"}
@@ -626,32 +683,41 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 			}
 		}
 	}
-	if len(mergedState) > 0 {
-		runOpts = append(runOpts, runner.WithStateDelta(mergedState))
-	}
 
 	// Propagate AG-UI protocol envelope fields (ParentRunID, Context,
-	// ForwardedProps) into the runner context and session state so downstream
-	// agents, tools, and callbacks can read them via RunEnvelopeFrom or the
-	// typed helpers.
+	// ForwardedProps) and the client's declared protocol version into the
+	// runner context and session state so downstream agents, tools, and
+	// callbacks can read them via RunEnvelopeFrom or the typed helpers.
 	envelope := RunEnvelope{
 		ParentRunID:    input.ParentRunID,
 		Context:        input.Context,
 		ForwardedProps: input.ForwardedProps,
 	}
+	envelopeState := map[string]any{}
+	if envelope.ParentRunID != nil {
+		envelopeState[stateKeyAGUIParentRunID] = *envelope.ParentRunID
+	}
+	if len(envelope.Context) > 0 {
+		envelopeState[stateKeyAGUIContext] = envelope.Context
+	}
+	if envelope.ForwardedProps != nil {
+		envelopeState[stateKeyAGUIForwardedProps] = envelope.ForwardedProps
+	}
+	if v, ok := agui.ClientProtocolVersion(ctx); ok {
+		envelopeState[stateKeyAGUIClientProtocolVersion] = v
+	}
+	// Fold into mergedState before the single WithStateDelta call — envelope
+	// keys are _ag_ui_* namespaced so they cannot collide with user state.
+	// runner.WithStateDelta is a setter, so a second call would silently
+	// discard input.State and the resumed savedState.
+	for k, v := range envelopeState {
+		mergedState[k] = v
+	}
+	if len(mergedState) > 0 {
+		runOpts = append(runOpts, runner.WithStateDelta(mergedState))
+	}
 	if envelope.ParentRunID != nil || len(envelope.Context) > 0 || envelope.ForwardedProps != nil {
 		ctx = WithRunEnvelope(ctx, envelope)
-		envelopeState := map[string]any{}
-		if envelope.ParentRunID != nil {
-			envelopeState[stateKeyAGUIParentRunID] = *envelope.ParentRunID
-		}
-		if len(envelope.Context) > 0 {
-			envelopeState[stateKeyAGUIContext] = envelope.Context
-		}
-		if envelope.ForwardedProps != nil {
-			envelopeState[stateKeyAGUIForwardedProps] = envelope.ForwardedProps
-		}
-		runOpts = append(runOpts, runner.WithStateDelta(envelopeState))
 	}
 
 	// Run the ADK agent.
@@ -747,6 +813,12 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 
 		// Check for long-running tool interrupts.
 		if len(adkEvent.LongRunningToolIDs) > 0 {
+			// Snapshot sub-agent attribution before any branch's close calls —
+			// closeOpenSubagent clears activeSubagentRun, and the interrupts
+			// built below must carry the sub-agent that was active when the
+			// long-running call was raised.
+			subagentRunID := translator.activeSubagentRun
+
 			// Hand-back mode: plain RUN_FINISHED with optional MESSAGES_SNAPSHOT,
 			// no interrupt outcome, no RunStore save.
 			if b.cfg.ClientTools != nil && b.cfg.ClientTools.Mode == ClientToolModeHandBack {
@@ -779,14 +851,17 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				translator.closeOpenSubagent()
 
 				ri := adkEvent.RequestedInput
+				store := b.runStoreFor()
+				expiresAt := store.ExpiresAt().UTC().Format(time.RFC3339)
 				interrupt := types.Interrupt{
 					ID:             ri.InterruptID,
 					Reason:         "requested_input",
 					Message:        ri.Message,
 					ResponseSchema: schemaToMap(ri.ResponseSchema),
+					SubagentRunID:  subagentRunID, // "" → omitted on wire
+					ExpiresAt:      expiresAt,
 				}
 
-				store := b.runStoreFor()
 				store.Save(RunKey(input.ThreadID, input.RunID), &PausedRun{
 					ThreadID:  input.ThreadID,
 					RunID:     input.RunID,
@@ -853,8 +928,20 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				"required":   []any{"approved"},
 			}
 
-			var interrupts []types.Interrupt
+			// Partition auth (sign-in) calls from ordinary tool approvals.
+			var approvals, authCalls []PendingToolCall
 			for _, p := range pending {
+				if p.Name == toolauth.RequestCredentialFunctionCallName {
+					authCalls = append(authCalls, p)
+				} else {
+					approvals = append(approvals, p)
+				}
+			}
+
+			expiresAt := b.runStoreFor().ExpiresAt().UTC().Format(time.RFC3339)
+
+			var interrupts []types.Interrupt
+			for _, p := range approvals {
 				argsJSON, _ := json.Marshal(p.Args)
 				_ = emitter.ActivitySnapshot(
 					emitter.GenerateMessageID(), "approval_request",
@@ -866,7 +953,30 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 					Reason:         "tool_call",
 					Message:        fmt.Sprintf("Approve %s(%s)?", p.Name, string(argsJSON)),
 					ToolCallID:     p.ID,
+					SubagentRunID:  subagentRunID, // "" → omitted on wire
+					ExpiresAt:      expiresAt,
 					ResponseSchema: approvalSchema,
+				})
+			}
+
+			// Auth calls (ADK v2.8 adk_request_credential): present a sign-in
+			// interrupt carrying the authConfig (authScheme + authUri) the
+			// client needs to drive the flow, rather than an approve/deny.
+			for _, p := range authCalls {
+				_ = emitter.ActivitySnapshot(
+					emitter.GenerateMessageID(), "auth_request",
+					map[string]any{"text": "The agent requires sign-in to continue."},
+					nil,
+				)
+				interrupts = append(interrupts, types.Interrupt{
+					ID:             p.ID,
+					Reason:         "auth",
+					Message:        "The agent requires sign-in to continue. Complete the flow described by authConfig and reply with the resulting credential.",
+					ToolCallID:     p.ID,
+					SubagentRunID:  subagentRunID, // "" → omitted on wire
+					ExpiresAt:      expiresAt,
+					ResponseSchema: map[string]any{"type": "object"},
+					Metadata:       types.Metadata{"authConfig": p.Args["authConfig"]},
 				})
 			}
 
@@ -891,10 +1001,15 @@ func (b *bridge) runInternal(ctx context.Context, input types.RunAgentInput, emi
 				}
 			}
 
+			// RunFinishedInterruptOutcome has minItems: 1 in the schema — only
+			// attach it when there is at least one interrupt.
+			var finishOpts []events.RunFinishedOption
+			if len(interrupts) > 0 {
+				finishOpts = append(finishOpts, events.WithInterruptOutcome(interrupts))
+			}
 			_ = emitter.RunFinishedWithUsage(
 				input.ThreadID, input.RunID,
-				translator.collectedUsage(),
-				events.WithInterruptOutcome(interrupts),
+				translator.collectedUsage(), finishOpts...,
 			)
 			return
 		}
@@ -935,28 +1050,32 @@ type eventTranslator struct {
 	activeEmitter      *agui.EventEmitter // current emitter for stream events (base or subagent-attributed)
 	currentMsgID       string
 	msgOpen            bool
-	prevText           string            // accumulated text for computing deltas
-	reasoningOpen      bool              // whether a reasoning block is currently open
-	currentReasoningID string            // message ID for the open reasoning block
-	prevThoughtText    string            // accumulated thought text for computing reasoning deltas
-	toolCallIDs        map[string]string // ADK function call ID/name → AG-UI tool call ID
-	toolCallDetails    map[string]toolCallDetail
-	startedTools       map[string]bool // tool call IDs that have emitted TOOL_CALL_START
-	openTools          map[string]bool // tool call IDs with START emitted but END pending
-	hadPartialArgs     map[string]bool // tool call IDs that received partial args deltas (skip final full-args re-send)
-	suppressTools      bool
-	toolToStateMapper  ToolToStateMapper
-	emitSteps          bool                // whether to emit STEP_STARTED/STEP_FINISHED events
-	stepOpen           bool                // whether a step is currently open
-	stepName           string              // name of the currently open step
-	emitActivityDeltas bool                // whether to emit ACTIVITY_DELTA during streaming tool calls
-	activityMsgIDs     map[string]string   // tool call ID → activity message ID for deltas
-	clientTools        map[string]struct{} // when non-nil, only these tool names are client-delegated
-	usageEntries       []events.TokenUsage // collected token usage telemetry for terminal events
-	currentAuthor      string              // ADK event author for the current sub-agent context
-	activeSubagentRun  string              // subagentRunId for the currently active sub-agent
-	subagentEmitted    bool                // whether SUBAGENT_STARTED has been emitted for currentAuthor
-	rootAgentName      string              // name of the root agent, excluded from sub-agent lifecycle
+	prevText           string // accumulated text for computing deltas
+	reasoningOpen      bool   // whether a reasoning block is currently open
+	currentReasoningID string // message ID for the open reasoning span
+	// currentReasoningMsgID is the reasoning-message ID, kept distinct from the
+	// reasoning-span ID above: 1.0 treats spans and reasoning messages as
+	// separate namespaces, so sharing one ID is ambiguous.
+	currentReasoningMsgID string
+	prevThoughtText       string            // accumulated thought text for computing reasoning deltas
+	toolCallIDs           map[string]string // ADK function call ID/name → AG-UI tool call ID
+	toolCallDetails       map[string]toolCallDetail
+	startedTools          map[string]bool // tool call IDs that have emitted TOOL_CALL_START
+	openTools             map[string]bool // tool call IDs with START emitted but END pending
+	hadPartialArgs        map[string]bool // tool call IDs that received partial args deltas (skip final full-args re-send)
+	suppressTools         bool
+	toolToStateMapper     ToolToStateMapper
+	emitSteps             bool                // whether to emit STEP_STARTED/STEP_FINISHED events
+	stepOpen              bool                // whether a step is currently open
+	stepName              string              // name of the currently open step
+	emitActivityDeltas    bool                // whether to emit ACTIVITY_DELTA during streaming tool calls
+	activityMsgIDs        map[string]string   // tool call ID → activity message ID for deltas
+	clientTools           map[string]struct{} // when non-nil, only these tool names are client-delegated
+	usageEntries          []events.TokenUsage // collected token usage telemetry for terminal events
+	currentAuthor         string              // ADK event author for the current sub-agent context
+	activeSubagentRun     string              // subagentRunId for the currently active sub-agent
+	subagentEmitted       bool                // whether SUBAGENT_STARTED has been emitted for currentAuthor
+	rootAgentName         string              // name of the root agent, excluded from sub-agent lifecycle
 }
 
 // toolCallDetail records the name and args of a tool call so the tool_use
@@ -1295,11 +1414,12 @@ func (t *eventTranslator) closeOpenSubagent() {
 // closeOpenReasoning ends an open reasoning block if one is active.
 func (t *eventTranslator) closeOpenReasoning() {
 	if t.reasoningOpen {
-		_ = t.activeEmitter.ReasoningMessageEnd(t.currentReasoningID)
+		_ = t.activeEmitter.ReasoningMessageEnd(t.currentReasoningMsgID)
 		_ = t.activeEmitter.ReasoningEnd(t.currentReasoningID)
 		t.reasoningOpen = false
 		t.prevThoughtText = ""
 		t.currentReasoningID = ""
+		t.currentReasoningMsgID = ""
 	}
 }
 
@@ -1626,9 +1746,12 @@ func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
 	}
 
 	if !t.reasoningOpen {
+		// Spans and reasoning messages live in separate namespaces in 1.0;
+		// give each its own ID.
 		t.currentReasoningID = t.activeEmitter.GenerateMessageID()
+		t.currentReasoningMsgID = t.activeEmitter.GenerateMessageID()
 		_ = t.activeEmitter.ReasoningStart(t.currentReasoningID)
-		_ = t.activeEmitter.ReasoningMessageStart(t.currentReasoningID, "reasoning")
+		_ = t.activeEmitter.ReasoningMessageStart(t.currentReasoningMsgID, "reasoning")
 		t.reasoningOpen = true
 		t.prevThoughtText = ""
 	}
@@ -1639,7 +1762,7 @@ func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
 		delta = part.Text[len(t.prevThoughtText):]
 	}
 	if delta != "" {
-		_ = t.activeEmitter.ReasoningMessageContent(t.currentReasoningID, delta)
+		_ = t.activeEmitter.ReasoningMessageContent(t.currentReasoningMsgID, delta)
 	}
 	t.prevThoughtText += delta
 
@@ -1647,7 +1770,7 @@ func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
 	if len(part.ThoughtSignature) > 0 {
 		_ = t.activeEmitter.ReasoningEncryptedValue(
 			events.ReasoningEncryptedValueSubtypeMessage,
-			t.currentReasoningID,
+			t.currentReasoningMsgID,
 			base64.StdEncoding.EncodeToString(part.ThoughtSignature),
 		)
 	}
@@ -1658,11 +1781,16 @@ func (t *eventTranslator) emitThought(part *genai.Part, partial bool) {
 }
 
 // emitStateDelta converts ADK state delta to AG-UI STATE_DELTA event.
+//
+// Each op uses "add" rather than "replace": ADK state deltas name changed
+// keys, including brand-new ones the client has never seen, and RFC 6902
+// "replace" fails when the target path is absent. "add" upserts both new and
+// existing paths.
 func (t *eventTranslator) emitStateDelta(delta map[string]any) {
 	var ops []events.JSONPatchOperation
 	for k, v := range delta {
 		ops = append(ops, events.JSONPatchOperation{
-			Op:    "replace",
+			Op:    "add",
 			Path:  "/" + k,
 			Value: v,
 		})
@@ -1741,26 +1869,16 @@ func inferProviderFromModel(model string) string {
 // other non-empty providers get text-only fallback for audio/video/document
 // content (images are always forwarded). An empty provider means no gating
 // (all content types forwarded).
-func inputContentsToGenaiParts(contents []types.InputContent, provider string) []*genai.Part {
+//
+// The retired {type:"binary"} part is rejected: 1.0 removed it from the
+// content-part union and conforming inputs never send it.
+func inputContentsToGenaiParts(contents []types.InputContent, provider string) ([]*genai.Part, error) {
 	var parts []*genai.Part
 	for _, c := range contents {
 		switch c.Type {
 		case types.InputContentTypeText:
 			if c.Text != "" {
 				parts = append(parts, &genai.Part{Text: c.Text})
-			}
-
-		case types.InputContentTypeBinary:
-			if c.Data != "" {
-				if data, err := base64.StdEncoding.DecodeString(c.Data); err == nil {
-					parts = append(parts, &genai.Part{
-						InlineData: &genai.Blob{Data: data, MIMEType: c.MimeType},
-					})
-				}
-			} else if c.URL != "" {
-				parts = append(parts, &genai.Part{
-					FileData: &genai.FileData{FileURI: c.URL, MIMEType: c.MimeType},
-				})
 			}
 
 		case types.InputContentTypeImage:
@@ -1803,9 +1921,11 @@ func inputContentsToGenaiParts(contents []types.InputContent, provider string) [
 					parts = append(parts, &genai.Part{Text: c.Text})
 				}
 			}
+		default:
+			return nil, fmt.Errorf("aguiadk: unsupported content part type %q (use text, image, audio, video, or document)", c.Type)
 		}
 	}
-	return parts
+	return parts, nil
 }
 
 // sessionStateToMap converts ADK session state to a plain map.

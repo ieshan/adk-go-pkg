@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/ieshan/adk-go-pkg/agui"
 	"github.com/ieshan/adk-go-pkg/testutil"
 
 	"google.golang.org/adk/v2/agent"
@@ -98,3 +99,38 @@ func TestForwardedPropsFrom_FallsBackToState(t *testing.T) {
 
 // Compile-time check that FakeReadonlyContext satisfies agent.ReadonlyContext.
 var _ agent.ReadonlyContext = (*testutil.FakeReadonlyContext)(nil)
+
+// TestClientProtocolVersionFrom_CtxPath verifies the request-context path.
+func TestClientProtocolVersionFrom_CtxPath(t *testing.T) {
+	ctx := agui.WithClientProtocolVersion(context.Background(), agui.ProtocolVersion)
+	rc := testutil.NewFakeReadonlyContext().WithContext(ctx)
+
+	got, ok := ClientProtocolVersionFrom(rc)
+	if !ok || got != agui.ProtocolVersion {
+		t.Errorf("ClientProtocolVersionFrom = (%q, %v), want (%q, true)", got, ok, agui.ProtocolVersion)
+	}
+}
+
+// TestClientProtocolVersionFrom_StateFallback verifies that the helper reads
+// the state value persisted by the bridge when the original request context is
+// not in scope.
+func TestClientProtocolVersionFrom_StateFallback(t *testing.T) {
+	rc := testutil.NewFakeReadonlyContext().WithReadonlyState(
+		testutil.NewFakeStateWithData(map[string]any{
+			stateKeyAGUIClientProtocolVersion: "1.0",
+		}),
+	)
+
+	got, ok := ClientProtocolVersionFrom(rc)
+	if !ok || got != "1.0" {
+		t.Errorf("ClientProtocolVersionFrom = (%q, %v), want (%q, true)", got, ok, "1.0")
+	}
+}
+
+// TestClientProtocolVersionFrom_Absent verifies the pre-1.0 peer case.
+func TestClientProtocolVersionFrom_Absent(t *testing.T) {
+	rc := testutil.NewFakeReadonlyContext()
+	if got, ok := ClientProtocolVersionFrom(rc); ok || got != "" {
+		t.Errorf("ClientProtocolVersionFrom = (%q, %v), want (\"\", false)", got, ok)
+	}
+}

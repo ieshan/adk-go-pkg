@@ -51,17 +51,24 @@ func convertInboundMessages(messages []types.Message, provider string) (currentU
 
 	for i := 0; i < priorEnd; i++ {
 		msg := messages[i]
+		content, cerr := messageToGenaiContent(msg, provider)
+		if cerr != nil {
+			return nil, nil, cerr
+		}
 		ev := session.NewEvent(ctx, "")
 		ev.Author = authorForRole(msg.Role)
 		ev.LLMResponse = model.LLMResponse{
-			Content: messageToGenaiContent(msg, provider),
+			Content: content,
 		}
 		priorEvents = append(priorEvents, ev)
 	}
 
 	// Build the current user content from the last user message.
 	if lastUserIdx >= 0 {
-		currentUserContent = userMessageToContent(messages[lastUserIdx], provider)
+		currentUserContent, err = userMessageToContent(messages[lastUserIdx], provider)
+		if err != nil {
+			return nil, nil, err
+		}
 		return currentUserContent, priorEvents, nil
 	}
 
@@ -100,14 +107,14 @@ func authorForRole(role types.Role) string {
 // messageToGenaiContent converts a single AG-UI message to genai.Content for
 // session seeding. Text, multimodal, tool calls, and tool responses are all
 // preserved so the ADK runner sees the full history.
-func messageToGenaiContent(msg types.Message, provider string) *genai.Content {
+func messageToGenaiContent(msg types.Message, provider string) (*genai.Content, error) {
 	role := genaiRoleForMessage(msg.Role)
 	content := &genai.Content{Role: role}
 
 	switch msg.Role {
 	case types.RoleTool:
 		content.Parts = []*genai.Part{toolMessageToFunctionResponsePart(msg)}
-		return content
+		return content, nil
 
 	case types.RoleAssistant:
 		// Text content.
@@ -128,15 +135,18 @@ func messageToGenaiContent(msg types.Message, provider string) *genai.Content {
 				},
 			})
 		}
-		return content
+		return content, nil
 
 	case types.RoleUser:
 		if text, ok := msg.ContentString(); ok {
 			content.Parts = []*genai.Part{{Text: text}}
-			return content
+			return content, nil
 		}
 		if contents, ok := msg.ContentInputContents(); ok {
-			parts := inputContentsToGenaiParts(contents, provider)
+			parts, err := inputContentsToGenaiParts(contents, provider)
+			if err != nil {
+				return nil, err
+			}
 			if len(parts) > 0 {
 				content.Parts = parts
 			}
@@ -144,33 +154,36 @@ func messageToGenaiContent(msg types.Message, provider string) *genai.Content {
 		if len(content.Parts) == 0 {
 			content.Parts = []*genai.Part{{Text: ""}}
 		}
-		return content
+		return content, nil
 
 	default:
 		// system, developer, etc.
 		if text, ok := msg.ContentString(); ok {
 			content.Parts = []*genai.Part{{Text: text}}
-			return content
+			return content, nil
 		}
 		content.Parts = []*genai.Part{{Text: ""}}
-		return content
+		return content, nil
 	}
 }
 
 // userMessageToContent converts a user-role AG-UI message to genai.Content
 // for the current runner input. Reuses the same multimodal logic as
 // messageToGenaiContent so provider gating is preserved.
-func userMessageToContent(msg types.Message, provider string) *genai.Content {
+func userMessageToContent(msg types.Message, provider string) (*genai.Content, error) {
 	if text, ok := msg.ContentString(); ok {
-		return &genai.Content{Role: "user", Parts: []*genai.Part{{Text: text}}}
+		return &genai.Content{Role: "user", Parts: []*genai.Part{{Text: text}}}, nil
 	}
 	if contents, ok := msg.ContentInputContents(); ok {
-		parts := inputContentsToGenaiParts(contents, provider)
+		parts, err := inputContentsToGenaiParts(contents, provider)
+		if err != nil {
+			return nil, err
+		}
 		if len(parts) > 0 {
-			return &genai.Content{Role: "user", Parts: parts}
+			return &genai.Content{Role: "user", Parts: parts}, nil
 		}
 	}
-	return &genai.Content{Role: "user", Parts: []*genai.Part{{Text: ""}}}
+	return &genai.Content{Role: "user", Parts: []*genai.Part{{Text: ""}}}, nil
 }
 
 // toolMessageToFunctionResponsePart converts a RoleTool AG-UI message to a

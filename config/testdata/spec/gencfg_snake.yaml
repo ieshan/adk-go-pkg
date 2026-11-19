@@ -1,0 +1,12 @@
+name: gencfg_snake
+agent_class: LlmAgent
+model: gemini-2.5-flash
+generate_content_config:
+  temperature: 0.4
+  max_output_tokens: 256
+  safety_settings:
+    - category: HARM_CATEGORY_HARASSMENT
+      threshold: BLOCK_MEDIUM_AND_ABOVE
+  thinking_config:
+    include_thoughts: true
+  system_instruction: "Be concise."

@@ -119,6 +119,12 @@ func RunKey(threadID, runID string) string {
 	return threadID + "|" + runID
 }
 
+// ExpiresAt returns the time a run saved now will expire, suitable for
+// stamping Interrupt.ExpiresAt.
+func (s *RunStore) ExpiresAt() time.Time {
+	return s.now().Add(s.ttl)
+}
+
 // Save records a paused run. It purges expired entries first, then evicts the
 // oldest entry if the store is still at capacity. The caller's Pending slice
 // and State map are shallow-copied: top-level containers are new, but nested

@@ -252,8 +252,9 @@ and more), see [ADK-Go AG-UI Bridge](aguiadk-bridge.md).
 ## UI-Enabled Tools with MCPAppsMiddleware
 
 `MCPAppsMiddleware` is similar to `MCPMiddleware` but targets a different
-use case: it injects **UI-enabled** MCP tools (tools with
-`_meta["ui/resourceUri"]`) and handles **proxied MCP requests** sent from
+use case: it injects **UI-enabled** MCP tools (tools declaring a resource URI
+under the MCP Apps `_meta.ui.resourceUri` shape or the legacy
+`_meta["ui/resourceUri"]` spelling) and handles **proxied MCP requests** sent from
 frontends via `ForwardedProps`. This enables frontend-driven MCP interactions
 where the UI directly calls MCP server methods (e.g., `tools/call`,
 `resources/read`) without going through the agent's LLM loop.
@@ -307,7 +308,7 @@ func main() {
 
 **Differences from `MCPMiddleware`:**
 
-- Injects only tools with `_meta["ui/resourceUri"]` (UI-enabled tools)
+- Injects only UI-enabled tools (`_meta.ui.resourceUri`, or the legacy `_meta["ui/resourceUri"]`)
 - Handles proxied MCP requests from frontends (see [Proxied MCP Requests](#proxied-mcp-requests))
 - Does not run an agentic tool execution loop
 - After the agent run, executes pending UI tool calls found in `input.Messages`, producing `TOOL_CALL_RESULT` + `ACTIVITY_SNAPSHOT` events
@@ -328,6 +329,24 @@ func main() {
 | `URL`     | `string`            | MCP server endpoint URL                          |
 | `Headers` | `map[string]string` | Optional HTTP headers for authentication         |
 | `ServerID`| `string`            | Optional. Server identifier for tool namespacing and proxied request routing (see [Proxied MCP Requests](#proxied-mcp-requests)). An empty `ServerID` produces a tool name like `mcp____tool` (with an empty sanitized segment, yielding four underscores between `mcp` and the tool name). |
+
+### Header Injection and Redirect Safety
+
+When `Headers` is non-empty, `BuildMCPTransport` pins the HTTP client to the
+endpoint's origin (scheme://host[:port], default ports normalized):
+
+- Custom headers are injected only into requests whose URL matches the pinned
+  origin. Go's default redirect policy protects only `Authorization`/`Cookie`,
+  so without this a redirect target would receive arbitrary custom headers —
+  including API keys.
+- Cross-origin redirects are refused outright (`CheckRedirect` returns an
+  error). Same-origin redirects (trailing-slash normalization, versioned paths)
+  are followed and still receive the headers.
+- With no custom headers there is nothing to leak, so the client is not pinned.
+
+The URL must be absolute (`scheme://host`); a relative URL is rejected. This
+mirrors upstream's `trusted-fetch`, except that upstream rejects *all*
+redirects — allowing same-origin redirects is a deliberate, safe deviation.
 
 ### MCPMiddlewareOptions
 

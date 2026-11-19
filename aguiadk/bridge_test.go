@@ -23,6 +23,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool/toolauth"
 	"google.golang.org/genai"
 )
 
@@ -147,6 +148,79 @@ func TestBridge_TextParts(t *testing.T) {
 		events.EventTypeRunFinished,
 	}
 	assertEventSequence(t, typeSeq, expected)
+}
+
+func TestBridge_RunStarted_ProtocolVersionAndParent(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: "Hi"}},
+		},
+	}
+
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			yield(ev, nil)
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	t.Run("no parent", func(t *testing.T) {
+		collected := collectEvents(t, bridgeAgent, defaultInput())
+		rs := findRunStarted(t, collected)
+		m := eventMap(t, rs)
+		if got := m["protocolVersion"]; got != agui.ProtocolVersion {
+			t.Errorf("protocolVersion = %v, want %q", got, agui.ProtocolVersion)
+		}
+		if _, present := m["parentRunId"]; present {
+			t.Errorf("parentRunId present = %v, want absent", m["parentRunId"])
+		}
+	})
+
+	t.Run("with parent", func(t *testing.T) {
+		input := defaultInput()
+		parent := "parent-run-7"
+		input.ParentRunID = &parent
+		collected := collectEvents(t, bridgeAgent, input)
+		rs := findRunStarted(t, collected)
+		m := eventMap(t, rs)
+		if got := m["protocolVersion"]; got != agui.ProtocolVersion {
+			t.Errorf("protocolVersion = %v, want %q", got, agui.ProtocolVersion)
+		}
+		if got := m["parentRunId"]; got != parent {
+			t.Errorf("parentRunId = %v, want %q", got, parent)
+		}
+	})
+}
+
+func findRunStarted(t *testing.T, evs []events.Event) events.Event {
+	t.Helper()
+	for _, ev := range evs {
+		if ev.Type() == events.EventTypeRunStarted {
+			return ev
+		}
+	}
+	t.Fatalf("no RUN_STARTED event found in %v", eventTypes(evs))
+	return nil
+}
+
+func eventMap(t *testing.T, ev events.Event) map[string]any {
+	t.Helper()
+	data, err := ev.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return m
 }
 
 func TestBridge_StreamingTextParts(t *testing.T) {
@@ -498,13 +572,28 @@ func TestBridge_StateDelta(t *testing.T) {
 	}
 
 	collected := collectEvents(t, bridgeAgent, defaultInput())
-	typeSeq := eventTypes(collected)
 
 	found := false
-	for _, et := range typeSeq {
-		if et == events.EventTypeStateDelta {
-			found = true
-			break
+	for _, ev := range collected {
+		if ev.Type() != events.EventTypeStateDelta {
+			continue
+		}
+		found = true
+		sd, ok := ev.(*events.StateDeltaEvent)
+		if !ok {
+			t.Fatalf("got %T, want *events.StateDeltaEvent", ev)
+		}
+		if len(sd.Delta) != 1 {
+			t.Fatalf("got %d ops, want 1", len(sd.Delta))
+		}
+		op := sd.Delta[0]
+		// A brand-new key must be written with "add" (upsert); "replace"
+		// fails client-side because the path does not yet exist.
+		if op.Op != "add" {
+			t.Errorf("op = %q, want %q", op.Op, "add")
+		}
+		if op.Path != "/key1" {
+			t.Errorf("path = %q, want %q", op.Path, "/key1")
 		}
 	}
 	if !found {
@@ -756,6 +845,95 @@ func TestBridge_InputState(t *testing.T) {
 	}
 	if v, ok := capturedState["custom_key"]; !ok || v != "custom_value" {
 		t.Errorf("capturedState[custom_key] = %v, want custom_value", v)
+	}
+}
+
+func TestBridge_ClientProtocolVersionInState(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "ok"}}},
+	}
+
+	var capturedState map[string]any
+	var helperVer string
+	var helperOK bool
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if capturedState == nil {
+				capturedState = make(map[string]any)
+			}
+			for k, v := range ctx.Session().State().All() {
+				capturedState[k] = v
+			}
+			helperVer, helperOK = aguiadk.ClientProtocolVersionFrom(
+				testutil.NewFakeReadonlyContext().WithContext(ctx))
+			yield(ev, nil)
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := agui.WithClientProtocolVersion(context.Background(), agui.ProtocolVersion)
+	var collected []events.Event
+	for e, rerr := range bridgeAgent.Run(ctx, defaultInput()) {
+		if rerr != nil {
+			t.Fatalf("unexpected error: %v", rerr)
+		}
+		collected = append(collected, e)
+	}
+	_ = collected
+
+	if got, ok := capturedState["_ag_ui_client_protocol_version"]; !ok || got != agui.ProtocolVersion {
+		t.Errorf("state[_ag_ui_client_protocol_version] = %v, want %q", got, agui.ProtocolVersion)
+	}
+	if helperVer != agui.ProtocolVersion || !helperOK {
+		t.Errorf("ClientProtocolVersionFrom = (%q, %v), want (%q, true)", helperVer, helperOK, agui.ProtocolVersion)
+	}
+}
+
+func TestBridge_UserStateAndEnvelopeBothPersisted(t *testing.T) {
+	ev := session.NewEvent(context.Background(), "inv-1")
+	ev.Author = "test-agent"
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "ok"}}},
+	}
+
+	var capturedState map[string]any
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if capturedState == nil {
+				capturedState = make(map[string]any)
+			}
+			for k, v := range ctx.Session().State().All() {
+				capturedState[k] = v
+			}
+			yield(ev, nil)
+		}
+	})
+
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := defaultInput()
+	parent := "parent-run-3"
+	input.ParentRunID = &parent
+	input.State = map[string]any{"custom_key": "custom_value"}
+
+	collectEvents(t, bridgeAgent, input)
+
+	// Before the WithStateDelta setter fix the envelope state (written in a
+	// second call) silently discarded input.State.
+	if v, ok := capturedState["custom_key"]; !ok || v != "custom_value" {
+		t.Errorf("state[custom_key] = %v, want custom_value", v)
+	}
+	if v, ok := capturedState["_ag_ui_parent_run_id"]; !ok || v != parent {
+		t.Errorf("state[_ag_ui_parent_run_id] = %v, want %q", v, parent)
 	}
 }
 
@@ -3104,32 +3282,13 @@ func TestBridge_MultimodalAudio(t *testing.T) {
 }
 
 func TestBridge_MultimodalBinary(t *testing.T) {
-	ev := session.NewEvent(context.Background(), "inv-1")
-	ev.Author = "test-agent"
-	ev.LLMResponse = model.LLMResponse{
-		Content: &genai.Content{
-			Role:  "model",
-			Parts: []*genai.Part{{Text: "received binary"}},
-		},
-		Partial: false,
-	}
-
-	var hasInlineData bool
-	var partCount int
+	// The retired {type:"binary"} part must fail the run before the agent
+	// executes.
+	agentRan := false
 	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		agentRan = true
 		return func(yield func(*session.Event, error) bool) {
-			content := ctx.UserContent()
-			if content != nil {
-				for _, p := range content.Parts {
-					partCount++
-					if p.InlineData != nil {
-						hasInlineData = true
-					}
-				}
-			}
-			if !yield(ev, nil) {
-				return
-			}
+			yield(session.NewEvent(context.Background(), "inv-1"), nil)
 		}
 	})
 
@@ -3142,9 +3301,6 @@ func TestBridge_MultimodalBinary(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Small base64 binary payload.
-	binBase64 := "SGVsbG8gV29ybGQ="
-
 	input := types.RunAgentInput{
 		ThreadID: "thread-1",
 		RunID:    "run-1",
@@ -3156,7 +3312,7 @@ func TestBridge_MultimodalBinary(t *testing.T) {
 					{Type: types.InputContentTypeText, Text: "process this"},
 					{
 						Type:     types.InputContentTypeBinary,
-						Data:     binBase64,
+						Data:     "SGVsbG8gV29ybGQ=",
 						MimeType: "application/octet-stream",
 					},
 				},
@@ -3164,13 +3320,26 @@ func TestBridge_MultimodalBinary(t *testing.T) {
 		},
 	}
 
-	collectEvents(t, bridgeAgent, input)
+	collected := collectEvents(t, bridgeAgent, input)
 
-	if partCount != 2 {
-		t.Errorf("partCount = %d, want 2", partCount)
+	if agentRan {
+		t.Error("agent ran despite binary part, want rejection before agent work")
 	}
-	if !hasInlineData {
-		t.Error("got no inline data part for binary content, want one")
+	var sawError bool
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			sawError = true
+			errEvt, ok := ev.(*events.RunErrorEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.RunErrorEvent", ev)
+			}
+			if !strings.Contains(errEvt.Message, "binary") {
+				t.Errorf("error message = %q, want it to name the binary type", errEvt.Message)
+			}
+		}
+	}
+	if !sawError {
+		t.Fatalf("got %v, want RUN_ERROR", eventTypes(collected))
 	}
 }
 
@@ -5519,5 +5688,434 @@ func TestBridge_TerminalPathLifecycle(t *testing.T) {
 				t.Errorf("STEP_FINISHED missing subagentRunId: %s", string(data))
 			}
 		}
+	}
+}
+
+// --- W5: authentication interrupts ---
+
+func newAuthRequestEvent(author, id string) *session.Event {
+	ev := session.NewEvent(context.Background(), "inv-auth")
+	ev.Author = author
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   id,
+					Name: toolauth.RequestCredentialFunctionCallName,
+					Args: map[string]any{
+						"functionCallId": id,
+						"authConfig": map[string]any{
+							"authScheme": map[string]any{"type": "oauth2"},
+							"authUri":    "https://auth.example.com/authorize",
+						},
+					},
+				},
+			}},
+		},
+	}
+	ev.LongRunningToolIDs = []string{id}
+	ev.Actions.RequestedAuthConfigs = map[string]toolauth.Config{
+		id: {AuthScheme: toolauth.Scheme{Type: toolauth.SchemeType("oauth2")}},
+	}
+	return ev
+}
+
+func newApprovalEvent(author, id string) *session.Event {
+	ev := session.NewEvent(context.Background(), "inv-appr")
+	ev.Author = author
+	ev.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   id,
+					Name: "do_thing",
+					Args: map[string]any{"x": 1},
+				},
+			}},
+		},
+	}
+	ev.LongRunningToolIDs = []string{id}
+	return ev
+}
+
+func newRequestedInputEvent(author, id string) *session.Event {
+	ev := session.NewEvent(context.Background(), "inv-input")
+	ev.Author = author
+	ev.RequestedInput = &session.RequestInput{InterruptID: id, Message: "enter a value"}
+	ev.LongRunningToolIDs = []string{id}
+	return ev
+}
+
+func findRunFinished(t *testing.T, evs []events.Event) *events.RunFinishedEvent {
+	t.Helper()
+	for _, ev := range evs {
+		if ev.Type() == events.EventTypeRunFinished {
+			fin, ok := ev.(*events.RunFinishedEvent)
+			if !ok {
+				t.Fatalf("got %T, want *events.RunFinishedEvent", ev)
+			}
+			return fin
+		}
+	}
+	t.Fatalf("no RUN_FINISHED event in %v", eventTypes(evs))
+	return nil
+}
+
+func TestBridge_AuthInterrupt(t *testing.T) {
+	authEv := newAuthRequestEvent("test-agent", "auth-1")
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) { yield(authEv, nil) }
+	})
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	fin := findRunFinished(t, collectEvents(t, bridgeAgent, defaultInput()))
+	if fin.Outcome == nil || fin.Outcome.Type != events.RunFinishedOutcomeTypeInterrupt {
+		t.Fatalf("Outcome = %+v, want interrupt", fin.Outcome)
+	}
+	if len(fin.Outcome.Interrupts) != 1 {
+		t.Fatalf("got %d interrupts, want 1", len(fin.Outcome.Interrupts))
+	}
+	intr := fin.Outcome.Interrupts[0]
+	if intr.Reason != "auth" {
+		t.Errorf("Reason = %q, want auth", intr.Reason)
+	}
+	if intr.ToolCallID != "auth-1" {
+		t.Errorf("ToolCallID = %q, want auth-1", intr.ToolCallID)
+	}
+	if intr.Metadata == nil || intr.Metadata["authConfig"] == nil {
+		t.Errorf("Metadata = %v, want authConfig present", intr.Metadata)
+	}
+	if intr.ExpiresAt == "" {
+		t.Error("ExpiresAt is empty, want a timestamp")
+	}
+}
+
+func TestBridge_AuthResumeResolved(t *testing.T) {
+	authEv := newAuthRequestEvent("test-agent", "auth-1")
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "done"}}}}
+
+	var callCount int32
+	var gotFR *genai.FunctionResponse
+	capture := func(parts []*genai.Part) {
+		for _, p := range parts {
+			if p != nil && p.FunctionResponse != nil && p.FunctionResponse.Name == toolauth.RequestCredentialFunctionCallName {
+				gotFR = p.FunctionResponse
+			}
+		}
+	}
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if atomic.AddInt32(&callCount, 1) == 1 {
+				yield(authEv, nil)
+				return
+			}
+			if uc := ctx.UserContent(); uc != nil {
+				capture(uc.Parts)
+			}
+			for e := range ctx.Session().Events().All() {
+				if e.Content != nil {
+					capture(e.Content.Parts)
+				}
+			}
+			yield(resumeEv, nil)
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1", RunStore: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	credential := map[string]any{
+		"authScheme": map[string]any{"type": "oauth2"},
+		"exchangedAuthCredential": map[string]any{
+			"authType":    "oauth2",
+			"accessToken": "secret-token-value",
+		},
+	}
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{{
+		InterruptID: "auth-1",
+		Status:      types.ResumeStatusResolved,
+		Payload:     credential,
+	}}
+	collected := collectEvents(t, bridgeAgent, input)
+
+	if gotFR == nil {
+		t.Fatal("got no FunctionResponse passed to runner, want one")
+	}
+	if _, wrapped := gotFR.Response["result"]; wrapped {
+		t.Errorf("FunctionResponse is wrapped in result: %v", gotFR.Response)
+	}
+	if gotFR.Response["exchangedAuthCredential"] == nil {
+		t.Errorf("FunctionResponse.Response = %v, want unwrapped credential", gotFR.Response)
+	}
+
+	var wireContent string
+	for _, ev := range collected {
+		if tr, ok := ev.(*events.ToolCallResultEvent); ok && tr.ToolCallID == "auth-1" {
+			wireContent = tr.Content
+		}
+	}
+	if wireContent != `{"status":"resolved"}` {
+		t.Errorf("TOOL_CALL_RESULT content = %q, want resolved marker", wireContent)
+	}
+	if strings.Contains(wireContent, "secret-token-value") {
+		t.Errorf("TOOL_CALL_RESULT leaked credential material: %q", wireContent)
+	}
+}
+
+func TestBridge_AuthResumeCancelled(t *testing.T) {
+	authEv := newAuthRequestEvent("test-agent", "auth-1")
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			atomic.AddInt32(&callCount, 1)
+			yield(authEv, nil)
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1", RunStore: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{{
+		InterruptID: "auth-1",
+		Status:      types.ResumeStatusCancelled,
+	}}
+	collected := collectEvents(t, bridgeAgent, input)
+
+	if got := atomic.LoadInt32(&callCount); got != 1 {
+		t.Errorf("agent Run invoked %d times, want 1 (resume must not reach the runner)", got)
+	}
+	var errMsg string
+	for _, ev := range collected {
+		if re, ok := ev.(*events.RunErrorEvent); ok {
+			errMsg = re.Message
+		}
+	}
+	if !strings.Contains(errMsg, "did not complete sign-in") {
+		t.Errorf("RUN_ERROR message = %q, want sign-in cancellation", errMsg)
+	}
+}
+
+func TestBridge_AuthResumeNonObjectPayload(t *testing.T) {
+	authEv := newAuthRequestEvent("test-agent", "auth-1")
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			atomic.AddInt32(&callCount, 1)
+			yield(authEv, nil)
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1", RunStore: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{{
+		InterruptID: "auth-1",
+		Status:      types.ResumeStatusResolved,
+		Payload:     "not-an-object",
+	}}
+	collected := collectEvents(t, bridgeAgent, input)
+
+	var errMsg string
+	for _, ev := range collected {
+		if re, ok := ev.(*events.RunErrorEvent); ok {
+			errMsg = re.Message
+		}
+	}
+	if !strings.Contains(errMsg, "must be a JSON object") {
+		t.Errorf("RUN_ERROR message = %q, want non-object payload error", errMsg)
+	}
+}
+
+func TestBridge_AuthResumeApprovedFalseIsNotCancelled(t *testing.T) {
+	// Status drives the decision, never the payload: a resolved entry whose
+	// credential payload happens to carry approved:false must still resume.
+	authEv := newAuthRequestEvent("test-agent", "auth-1")
+	resumeEv := session.NewEvent(context.Background(), "inv-2")
+	resumeEv.Author = "test-agent"
+	resumeEv.LLMResponse = model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "done"}}}}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			if atomic.AddInt32(&callCount, 1) == 1 {
+				yield(authEv, nil)
+				return
+			}
+			yield(resumeEv, nil)
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1", RunStore: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	collectEvents(t, bridgeAgent, defaultInput())
+
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{{
+		InterruptID: "auth-1",
+		Status:      types.ResumeStatusResolved,
+		Payload: map[string]any{
+			"approved":   false,
+			"authScheme": map[string]any{"type": "oauth2"},
+		},
+	}}
+	collected := collectEvents(t, bridgeAgent, input)
+
+	for _, ev := range collected {
+		if ev.Type() == events.EventTypeRunError {
+			t.Fatalf("got RUN_ERROR, want successful resume: %+v", ev)
+		}
+	}
+	var wireContent string
+	for _, ev := range collected {
+		if tr, ok := ev.(*events.ToolCallResultEvent); ok && tr.ToolCallID == "auth-1" {
+			wireContent = tr.Content
+		}
+	}
+	if wireContent != `{"status":"resolved"}` {
+		t.Errorf("TOOL_CALL_RESULT content = %q, want resolved marker", wireContent)
+	}
+}
+
+func TestBridge_MixedPendingAuthAndApproval(t *testing.T) {
+	mixed := session.NewEvent(context.Background(), "inv-mixed")
+	mixed.Author = "test-agent"
+	mixed.LLMResponse = model.LLMResponse{
+		Content: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{FunctionCall: &genai.FunctionCall{
+					ID:   "auth-1",
+					Name: toolauth.RequestCredentialFunctionCallName,
+					Args: map[string]any{"authConfig": map[string]any{"authScheme": map[string]any{"type": "oauth2"}}},
+				}},
+				{FunctionCall: &genai.FunctionCall{ID: "tool-2", Name: "do_thing", Args: map[string]any{}}},
+			},
+		},
+	}
+	mixed.LongRunningToolIDs = []string{"auth-1", "tool-2"}
+
+	var callCount int32
+	a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+		return func(yield func(*session.Event, error) bool) {
+			atomic.AddInt32(&callCount, 1)
+			yield(mixed, nil)
+		}
+	})
+
+	store := aguiadk.NewRunStore()
+	t.Cleanup(store.Stop)
+	bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1", RunStore: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	fin := findRunFinished(t, collectEvents(t, bridgeAgent, defaultInput()))
+	if fin.Outcome == nil || len(fin.Outcome.Interrupts) != 2 {
+		t.Fatalf("got %+v, want two interrupts", fin.Outcome)
+	}
+	reasons := map[string]bool{}
+	for _, intr := range fin.Outcome.Interrupts {
+		reasons[intr.Reason] = true
+	}
+	if !reasons["auth"] || !reasons["tool_call"] {
+		t.Errorf("reasons = %v, want auth and tool_call", reasons)
+	}
+
+	input := defaultInput()
+	input.Resume = []types.ResumeEntry{
+		{InterruptID: "auth-1", Status: types.ResumeStatusCancelled},
+		{InterruptID: "tool-2", Status: types.ResumeStatusResolved, Payload: map[string]any{"approved": true}},
+	}
+	collected := collectEvents(t, bridgeAgent, input)
+
+	var errMsg string
+	for _, ev := range collected {
+		if re, ok := ev.(*events.RunErrorEvent); ok {
+			errMsg = re.Message
+		}
+	}
+	if !strings.Contains(errMsg, "did not complete sign-in") {
+		t.Errorf("RUN_ERROR message = %q, want sign-in cancellation", errMsg)
+	}
+	if got := atomic.LoadInt32(&callCount); got != 1 {
+		t.Errorf("agent Run invoked %d times, want 1 (runner must not start)", got)
+	}
+}
+
+func TestBridge_InterruptsCarrySubagentRunID(t *testing.T) {
+	tests := []struct {
+		name       string
+		ev         *session.Event
+		wantReason string
+	}{
+		{name: "approval", ev: newApprovalEvent("sub-agent", "fc-sub"), wantReason: "tool_call"},
+		{name: "auth", ev: newAuthRequestEvent("sub-agent", "auth-sub"), wantReason: "auth"},
+		{name: "requested_input", ev: newRequestedInputEvent("sub-agent", "ri-sub"), wantReason: "requested_input"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := tc.ev
+			a := testutil.MustNewFakeAgent("test-agent").WithRunFunc(func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+				return func(yield func(*session.Event, error) bool) { yield(ev, nil) }
+			})
+			bridgeAgent, err := aguiadk.New(aguiadk.Config{Agent: a, AppName: "testapp", UserID: "user1"})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			fin := findRunFinished(t, collectEvents(t, bridgeAgent, defaultInput()))
+			if fin.Outcome == nil || len(fin.Outcome.Interrupts) == 0 {
+				t.Fatalf("got %+v, want at least one interrupt", fin.Outcome)
+			}
+			found := false
+			for _, intr := range fin.Outcome.Interrupts {
+				if intr.Reason != tc.wantReason {
+					continue
+				}
+				found = true
+				if intr.SubagentRunID == "" {
+					t.Errorf("interrupt %q has empty SubagentRunID, want the active sub-agent's ID", intr.ID)
+				}
+				if intr.ExpiresAt == "" {
+					t.Errorf("interrupt %q has empty ExpiresAt, want a timestamp", intr.ID)
+				}
+			}
+			if !found {
+				t.Errorf("no interrupt with reason %q in %+v", tc.wantReason, fin.Outcome.Interrupts)
+			}
+		})
 	}
 }

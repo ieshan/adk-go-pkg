@@ -1,0 +1,6 @@
+name: root_agent
+agent_class: SequentialAgent
+description: "Root orchestrator."
+sub_agents:
+  - config_path: prime_agent.yaml
+  - config_path: roll_agent.yaml

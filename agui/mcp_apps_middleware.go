@@ -96,7 +96,7 @@ func (m *mcpAppsMiddleware) runLoop(ctx context.Context, input types.RunAgentInp
 	augmentedInput.Tools = augmentedTools
 
 	// Run agent and intercept events
-	var bufferedRunFinished *events.RunFinishedEvent
+	var bufferedRunFinished events.Event
 	runStarted := false
 
 	for ev, err := range m.next.Run(ctx, augmentedInput) {
@@ -104,17 +104,17 @@ func (m *mcpAppsMiddleware) runLoop(ctx context.Context, input types.RunAgentInp
 			_ = emitter.RunErrorWithOptions(fmt.Sprintf("agui: agent error: %v", err))
 			return
 		}
-		switch e := ev.(type) {
-		case *events.RunStartedEvent:
+		switch {
+		case ev.Type() == events.EventTypeRunStarted:
 			if !runStarted {
 				runStarted = true
 				if emitErr := emitter.emit(ev); emitErr != nil {
 					return
 				}
 			}
-		case *events.RunFinishedEvent:
-			bufferedRunFinished = e
-		case *events.RunErrorEvent:
+		case ev.Type() == events.EventTypeRunFinished:
+			bufferedRunFinished = ev
+		case ev.Type() == events.EventTypeRunError:
 			if emitErr := emitter.emit(ev); emitErr != nil {
 				return
 			}
@@ -177,7 +177,11 @@ func (m *mcpAppsMiddleware) handleProxiedRequest(ctx context.Context, input type
 		serverConfig, ok = m.serverByHash[req.ServerHash]
 	}
 
-	_ = emitter.RunStarted(input.ThreadID, input.RunID)
+	if input.ParentRunID != nil && *input.ParentRunID != "" {
+		_ = emitter.RunStartedWithParent(input.ThreadID, input.RunID, *input.ParentRunID)
+	} else {
+		_ = emitter.RunStarted(input.ThreadID, input.RunID)
+	}
 
 	if !ok {
 		_ = emitter.RunFinishedWithOptions(input.ThreadID, input.RunID,
@@ -202,7 +206,8 @@ func (m *mcpAppsMiddleware) handleProxiedRequest(ctx context.Context, input type
 }
 
 // fetchUITools lists tools from all servers and filters for UI-enabled tools
-// (those with _meta["ui/resourceUri"]). Cached via sync.Once.
+// (those carrying a resource URI under either the MCP Apps `_meta.ui.resourceUri`
+// shape or the legacy `_meta["ui/resourceUri"]` spelling). Cached via sync.Once.
 func (m *mcpAppsMiddleware) fetchUITools(ctx context.Context) []uiToolInfo {
 	m.fetchOnce.Do(func() {
 		used := make(map[string]struct{})
@@ -251,10 +256,17 @@ func (m *mcpAppsMiddleware) fetchUITools(ctx context.Context) []uiToolInfo {
 	return m.uiTools
 }
 
-// extractResourceURI extracts the ui/resourceUri from a tool's _meta field.
+// extractResourceURI extracts the UI resource URI from a tool's _meta field.
+// The MCP Apps spec declares it nested under _meta.ui.resourceUri; the flat
+// _meta["ui/resourceUri"] spelling is the legacy form — both are accepted.
 func extractResourceURI(tool *mcp.Tool) string {
 	if tool == nil || tool.Meta == nil {
 		return ""
+	}
+	if ui, ok := tool.Meta["ui"].(map[string]any); ok {
+		if uri, ok := ui["resourceUri"].(string); ok {
+			return uri
+		}
 	}
 	uri, _ := tool.Meta["ui/resourceUri"].(string)
 	return uri

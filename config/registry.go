@@ -1,6 +1,7 @@
 package config
 
 import (
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -22,8 +23,12 @@ import (
 var ErrMissingPathConfig = errors.New("filesystem skill factory requires 'path' config key")
 
 // ModelFactory is a constructor function that receives a config map and returns
-// an [model.LLM]. The map always contains at least the key "model" set to the
-// remainder of the ref after the first "/".
+// an [model.LLM].
+//
+// For a prefixed ref ("openai/gpt-4o") the map contains the keys from the
+// agent's model_args plus "model" set to the remainder after the first "/".
+// For a bare ref ("gemini-2.5-flash") the map contains model_args plus "model"
+// set to the whole ref. For a model-less config it contains model_args only.
 //
 // Example — registering an OpenAI-compatible factory:
 //
@@ -101,6 +106,7 @@ func StaticSchema(s *genai.Schema) SchemaFactory {
 type Registry struct {
 	mu                    sync.RWMutex
 	models                map[string]ModelFactory
+	defaultModel          ModelFactory
 	tools                 map[string]ToolFactory
 	skills                map[string]SkillFactory // Skill factories by registered name
 	beforeModelCallbacks  map[string]llmagent.BeforeModelCallback
@@ -114,6 +120,7 @@ type Registry struct {
 	modelCodes            map[string]ModelCodeFactory
 	agents                map[string]agent.Agent
 	schemas               map[string]SchemaFactory
+	nodeFunctions         map[string]func(agent.Context, any) (any, error)
 	templates             *prompt.TemplateRegistry
 }
 
@@ -134,6 +141,7 @@ func NewRegistry() *Registry {
 		modelCodes:            make(map[string]ModelCodeFactory),
 		agents:                make(map[string]agent.Agent),
 		schemas:               make(map[string]SchemaFactory),
+		nodeFunctions:         make(map[string]func(agent.Context, any) (any, error)),
 		templates:             prompt.NewRegistry(prompt.New()),
 	}
 
@@ -163,12 +171,16 @@ func (r *Registry) RegisterModel(prefix string, factory ModelFactory) {
 	r.models[prefix] = factory
 }
 
-// HasModel reports whether a factory has been registered for prefix.
-func (r *Registry) HasModel(prefix string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.models[prefix]
-	return ok
+// RegisterDefaultModel sets the factory used when a model reference has no
+// registered prefix, including when model is omitted entirely. Registering
+// again replaces the previous factory.
+//
+// A bare reference ("gemini-2.5-flash") passes the whole ref as "model". An
+// omitted model passes no "model" key, so the factory can pick its own default.
+func (r *Registry) RegisterDefaultModel(factory ModelFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.defaultModel = factory
 }
 
 // RegisterTool associates a [ToolFactory] with the given name.
@@ -231,41 +243,110 @@ func (r *Registry) ResolveSkill(name string, cfg map[string]any) (skill.Source, 
 	return factory(cfg)
 }
 
-// ResolveModel looks up a [ModelFactory] by splitting ref on the first "/"
-// (prefix = everything before the slash, remainder = everything after), then
-// calls the factory with a merged config map:
+// ResolveModel resolves a model reference to a [model.LLM].
 //
-//	{"model": remainder, ...generateConfig}
+// Resolution rules:
 //
-// If ref contains no "/" or the derived prefix has no registered factory,
-// an error is returned.
+//   - A ref containing "/" uses the prefix before the first slash. The factory
+//     receives modelArgs plus "model" set to the remainder.
+//   - A non-empty bare ref uses the default model factory with "model" set to
+//     the whole ref.
+//   - An empty ref (model omitted) uses the default model factory with cfg
+//     containing only modelArgs.
+//
+// If the required factory is not registered, an error wrapping
+// [ErrNoDefaultModel] (bare/empty ref) or a "no factory registered" error
+// (prefix) is returned.
 //
 // Example:
 //
 //	llm, err := r.ResolveModel("openai/gpt-4o", map[string]any{"temperature": 0.5})
-func (r *Registry) ResolveModel(ref string, generateConfig map[string]any) (model.LLM, error) {
+func (r *Registry) ResolveModel(ref string, args map[string]any) (model.LLM, error) {
 	idx := strings.Index(ref, "/")
-	if idx < 0 {
-		return nil, fmt.Errorf("config.Registry.ResolveModel: ref %q has no prefix (expected \"prefix/model\")", ref)
-	}
+	if idx >= 0 {
+		prefix := ref[:idx]
+		remainder := ref[idx+1:]
 
-	prefix := ref[:idx]
-	remainder := ref[idx+1:]
+		r.mu.RLock()
+		factory, ok := r.models[prefix]
+		r.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("config.Registry.ResolveModel: no factory registered for prefix %q", prefix)
+		}
+
+		cfg := cloneArgs(args)
+		cfg["model"] = remainder
+		return factory(cfg)
+	}
 
 	r.mu.RLock()
-	factory, ok := r.models[prefix]
+	factory := r.defaultModel
 	r.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("config.Registry.ResolveModel: no factory registered for prefix %q", prefix)
+	if factory == nil {
+		return nil, fmt.Errorf("config.Registry.ResolveModel: model %q: %w", ref, ErrNoDefaultModel)
 	}
 
-	cfg := make(map[string]any, len(generateConfig)+1)
-	for k, v := range generateConfig {
+	cfg := cloneArgs(args)
+	if ref != "" {
+		cfg["model"] = ref
+	}
+	return factory(cfg)
+}
+
+func cloneArgs(args map[string]any) map[string]any {
+	cfg := make(map[string]any, len(args)+1)
+	for k, v := range args {
 		cfg[k] = v
 	}
-	cfg["model"] = remainder
+	return cfg
+}
 
-	return factory(cfg)
+// RegisterNodeFunction registers a workflow node function under name so it can
+// be referenced from a Workflow's edges or a FunctionNode file.
+//
+// Go forbids type parameters on methods, so this is a package function. The
+// function is stored in the any-signature form workflow.NewFunctionNode expects;
+// inputs are converted by type assertion, a string fast path, or a JSON
+// round-trip.
+func RegisterNodeFunction[IN, OUT any](r *Registry, name string, fn func(agent.Context, IN) (OUT, error)) {
+	wrapped := func(ctx agent.Context, input any) (any, error) {
+		var in IN
+		if input != nil {
+			if typed, ok := input.(IN); ok {
+				in = typed
+			} else if _, isString := any(*new(IN)).(string); isString {
+				in = any(fmt.Sprint(input)).(IN)
+			} else {
+				b, err := jsonv2.Marshal(input)
+				if err != nil {
+					return nil, fmt.Errorf("node function %q: convert input: %w", name, err)
+				}
+				if err := jsonv2.Unmarshal(b, &in); err != nil {
+					return nil, fmt.Errorf("node function %q: convert input: %w", name, err)
+				}
+			}
+		}
+		out, err := fn(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return any(out), nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.nodeFunctions[name] = wrapped
+}
+
+// ResolveNodeFunction looks up a registered node function by name.
+func (r *Registry) ResolveNodeFunction(name string) (func(agent.Context, any) (any, error), error) {
+	r.mu.RLock()
+	fn, ok := r.nodeFunctions[name]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no node function registered for %q", name)
+	}
+	return fn, nil
 }
 
 // ResolveTool looks up a [ToolFactory] by name and calls it with the provided cfg.

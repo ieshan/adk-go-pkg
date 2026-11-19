@@ -5,6 +5,8 @@ import (
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 
+	"github.com/ieshan/adk-go-pkg/agui"
+
 	"google.golang.org/adk/v2/agent"
 )
 
@@ -101,3 +103,32 @@ const stateKeyAGUIContext = "_ag_ui_context"
 // stateKeyAGUIForwardedProps is the session state key under which the bridge
 // persists the AG-UI ForwardedProps envelope field.
 const stateKeyAGUIForwardedProps = "_ag_ui_forwarded_props"
+
+// stateKeyAGUIClientProtocolVersion is the session state key under which the
+// bridge persists the AG-UI protocol version the client declared on
+// RunAgentInput.
+const stateKeyAGUIClientProtocolVersion = "_ag_ui_client_protocol_version"
+
+// ClientProtocolVersionFrom returns the AG-UI protocol version the client
+// declared on RunAgentInput, or ("", false) for a pre-1.0 client. It first
+// checks the request context (which Handler tags via
+// agui.WithClientProtocolVersion), then falls back to the session state
+// value persisted by the bridge — covering invocations where the original
+// request context is not in scope.
+//
+// The persisted state value survives across invocations of the same session
+// and is refreshed by each run that declares a version; a later version-less
+// run leaves the last-seen value, which is acceptable for diagnostics.
+func ClientProtocolVersionFrom(ctx agent.ReadonlyContext) (string, bool) {
+	if v, ok := agui.ClientProtocolVersion(ctx); ok {
+		return v, true
+	}
+	if rs := ctx.ReadonlyState(); rs != nil {
+		if v, err := rs.Get(stateKeyAGUIClientProtocolVersion); err == nil {
+			if s, ok := v.(string); ok && s != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}

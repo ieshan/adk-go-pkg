@@ -8,7 +8,59 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/ieshan/adk-go-pkg/agui"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestExtractResourceURI(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		tool *mcp.Tool
+		want string
+	}{
+		{name: "nil tool", tool: nil, want: ""},
+		{name: "nil meta", tool: &mcp.Tool{Name: "x"}, want: ""},
+		{
+			name: "nested ui.resourceUri",
+			tool: &mcp.Tool{Meta: map[string]any{"ui": map[string]any{"resourceUri": "ui://nested"}}},
+			want: "ui://nested",
+		},
+		{
+			name: "legacy flat key",
+			tool: &mcp.Tool{Meta: map[string]any{"ui/resourceUri": "ui://legacy"}},
+			want: "ui://legacy",
+		},
+		{
+			name: "nested ui without resourceUri falls back to flat",
+			tool: &mcp.Tool{Meta: map[string]any{
+				"ui":             map[string]any{"other": 1},
+				"ui/resourceUri": "ui://fallback",
+			}},
+			want: "ui://fallback",
+		},
+		{
+			name: "nested ui takes precedence",
+			tool: &mcp.Tool{Meta: map[string]any{
+				"ui":             map[string]any{"resourceUri": "ui://nested"},
+				"ui/resourceUri": "ui://legacy",
+			}},
+			want: "ui://nested",
+		},
+		{
+			name: "no resource uri",
+			tool: &mcp.Tool{Meta: map[string]any{"other": "value"}},
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := agui.ExtractResourceURIForTest(tc.tool); got != tc.want {
+				t.Errorf("extractResourceURI = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestMCPAppsMiddleware_Passthrough(t *testing.T) {
 	mw := agui.NewMCPAppsMiddleware(nil)

@@ -219,6 +219,100 @@ func TestBuildMCPTransport(t *testing.T) {
 			t.Fatal("transport is nil")
 		}
 	})
+
+	t.Run("relative URL rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := agui.BuildMCPTransport(agui.MCPClientConfig{
+			Type: "http",
+			URL:  "/mcp",
+		})
+		if err == nil {
+			t.Fatal("got nil error, want error for relative URL")
+		}
+	})
+}
+
+// mcpHTTPClient extracts the *http.Client backing a streamable HTTP transport,
+// so redirect and header behavior can be exercised directly.
+func mcpHTTPClient(t *testing.T, cfg agui.MCPClientConfig) *http.Client {
+	t.Helper()
+	tr, err := agui.BuildMCPTransport(cfg)
+	if err != nil {
+		t.Fatalf("BuildMCPTransport: %v", err)
+	}
+	st, ok := tr.(*mcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want *mcp.StreamableClientTransport", tr)
+	}
+	if st.HTTPClient == nil {
+		t.Fatal("transport HTTPClient is nil")
+	}
+	return st.HTTPClient
+}
+
+func TestMCPHTTPClient_RefusesCrossOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	var secondSawHeaders bool
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Secret") != "" {
+			secondSawHeaders = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(second.Close)
+
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL, http.StatusFound)
+	}))
+	t.Cleanup(first.Close)
+
+	client := mcpHTTPClient(t, agui.MCPClientConfig{
+		Type:    "http",
+		URL:     first.URL,
+		Headers: map[string]string{"X-Secret": "value"},
+	})
+
+	resp, err := client.Get(first.URL)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("got nil error, want redirect refusal")
+	}
+	if secondSawHeaders {
+		t.Error("cross-origin target received custom headers")
+	}
+}
+
+func TestMCPHTTPClient_FollowsSameOriginRedirect(t *testing.T) {
+	t.Parallel()
+
+	var sawHeader bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/new", http.StatusFound)
+			return
+		}
+		if r.Header.Get("X-Secret") == "value" {
+			sawHeader = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := mcpHTTPClient(t, agui.MCPClientConfig{
+		Type:    "http",
+		URL:     server.URL,
+		Headers: map[string]string{"X-Secret": "value"},
+	})
+
+	resp, err := client.Get(server.URL + "/old")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if !sawHeader {
+		t.Error("same-origin redirect target did not receive custom headers")
+	}
 }
 
 func TestListMCPTools(t *testing.T) {

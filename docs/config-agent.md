@@ -8,21 +8,27 @@ YAML or JSON and building them into live ADK-Go agents at runtime.
 Instead of constructing agents in code, you can describe them declaratively in
 a configuration file. The `config` package:
 
-1. Parses YAML/JSON into the sealed `AgentConfig` interface backed by type-specific structs (`LLMAgentConfig`, `SequentialAgentConfig`, `ParallelAgentConfig`, `LoopAgentConfig`).
-2. Uses a `Registry` of model and tool factories to resolve references.
-3. Recursively builds the full agent tree via `BuildWithPath` or `LoadAndBuild`.
+1. Parses YAML/JSON into the sealed `AgentConfig` interface backed by
+   type-specific structs (`LLMAgentConfig`, `SequentialAgentConfig`,
+   `ParallelAgentConfig`, `LoopAgentConfig`, `WorkflowAgentConfig`).
+2. Validates the document strictly: unknown keys fail with `ErrUnknownField`,
+   and adk-python fields with no adk-go equivalent fail with
+   `ErrUnsupportedField` instead of being silently dropped.
+3. Uses a `Registry` of model, tool, skill, and callback factories to resolve
+   references.
+4. Recursively builds the full agent tree via `BuildWithPath` or
+   `LoadAndBuild`.
+
+`agent_class` is optional and defaults to `LlmAgent`.
 
 ## Schema Reference
 
 ### AgentConfig (Sealed Interface)
 
 ```go
-// AgentConfig is the sealed interface for all declarative agent configurations.
 type AgentConfig interface {
-    Type() string
     Name() string
     Description() string
-    SubAgents() []AgentConfig
     SubAgentEntries() []SubAgentEntry
     isAgentConfig() // sealed — only package-defined types can implement it
 }
@@ -32,7 +38,7 @@ type AgentConfig interface {
 
 ```go
 type BaseAgentConfig struct {
-    Name                 string          // Unique agent identifier.
+    Name                 string          // Required unique agent identifier.
     Description          string          // Human-readable description.
     SubAgentEntries      []SubAgentEntry // Nested child agents (inline or referenced).
     BeforeAgentCallbacks []CodeConfig    // Registered before-agent callbacks.
@@ -45,43 +51,35 @@ type BaseAgentConfig struct {
 ```go
 type LLMAgentConfig struct {
     BaseAgentConfig
-    Model                    string              // Model ref: "prefix/model-id".
-    ModelCode                *CodeConfig         // Registered model factory reference.
-    Instruction              string              // Static system prompt.
-    InstructionTemplate      *prompt.TemplateRef // Dynamic instruction via template (takes precedence over Instruction).
-    StaticInstruction        string              // Global instruction for all agents in tree.
-    InputSchema              *SchemaRef     // Registered input schema reference.
-    OutputSchema             *SchemaRef     // Registered output schema reference.
-    OutputKey                string         // Session state key for agent output.
-    IncludeContents          string         // "none", "default".
-    Tools                    []ToolRef      // Tool references.
-    Skillsets                []SkillsetRef  // Skill source references.
-    GenerateConfig           map[string]any // Generation parameters.
-    DisallowTransferToParent bool           // Prevent transfer to parent.
-    DisallowTransferToPeers  bool           // Prevent transfer to siblings.
-    BeforeModelCallbacks     []CodeConfig   // Registered before-model callbacks.
-    AfterModelCallbacks      []CodeConfig   // Registered after-model callbacks.
-    OnModelErrorCallbacks    []CodeConfig   // Registered model-error callbacks.
-    BeforeToolCallbacks      []CodeConfig   // Registered before-tool callbacks.
-    AfterToolCallbacks       []CodeConfig   // Registered after-tool callbacks.
-    OnToolErrorCallbacks     []CodeConfig   // Registered tool-error callbacks.
+    Model                    string                       // Model ref: "prefix/model-id" or a bare name.
+    ModelCode                *CodeConfig                  // Registered model factory reference.
+    ModelArgs                map[string]any               // Arguments passed to the model factory.
+    Instruction              string                       // Static system prompt.
+    InstructionTemplate      *prompt.TemplateRef          // Dynamic instruction (takes precedence over Instruction).
+    GlobalInstruction        string                       // Instruction prepended for the whole subtree.
+    InputSchema              *SchemaRef                   // Inline or registered input schema.
+    OutputSchema             *SchemaRef                   // Inline or registered output schema.
+    OutputKey                string                       // Session state key for agent output.
+    IncludeContents          string                       // "default" or "none".
+    Tools                    []ToolRef                    // Tool references.
+    Skillsets                []SkillsetRef                // Skill source references.
+    GenerateContentConfig    *genai.GenerateContentConfig // Decoded generation parameters.
+    DisallowTransferToParent bool                         // Prevent transfer to parent.
+    DisallowTransferToPeers  bool                         // Prevent transfer to siblings.
+    BeforeModelCallbacks     []CodeConfig
+    AfterModelCallbacks      []CodeConfig
+    OnModelErrorCallbacks    []CodeConfig
+    BeforeToolCallbacks      []CodeConfig
+    AfterToolCallbacks       []CodeConfig
+    OnToolErrorCallbacks     []CodeConfig
 }
 ```
 
-### SequentialAgentConfig
+### SequentialAgentConfig / ParallelAgentConfig
 
 ```go
-type SequentialAgentConfig struct {
-    BaseAgentConfig
-}
-```
-
-### ParallelAgentConfig
-
-```go
-type ParallelAgentConfig struct {
-    BaseAgentConfig
-}
+type SequentialAgentConfig struct{ BaseAgentConfig }
+type ParallelAgentConfig struct{ BaseAgentConfig }
 ```
 
 ### LoopAgentConfig
@@ -89,9 +87,22 @@ type ParallelAgentConfig struct {
 ```go
 type LoopAgentConfig struct {
     BaseAgentConfig
-    MaxIterations int // Maximum iterations (0 = unlimited).
+    MaxIterations int // Maximum iterations (0 = unlimited). Must be >= 0.
 }
 ```
+
+### WorkflowAgentConfig
+
+```go
+type WorkflowAgentConfig struct {
+    BaseAgentConfig
+    Edges          []any // Graph chains; see "Workflows".
+    MaxConcurrency int   // Cap on concurrent nodes (<= 0 = unlimited).
+}
+```
+
+Workflows use `edges` rather than `sub_agents`; `sub_agents` is rejected on a
+Workflow config.
 
 ### AgentRefConfig
 
@@ -99,22 +110,27 @@ References another agent by file path or registered code name.
 
 ```go
 type AgentRefConfig struct {
-    ConfigPath string // Root-relative path to agent config file.
+    ConfigPath string // Path to an agent config file, relative to the referencing file's dir.
     Code       string // Registered agent name in Registry.
 }
 ```
 
-Exactly one of `config_path` or `code` must be set. `config_path` is resolved
-relative to the parent config's directory inside the `*os.Root` passed to
-`BuildWithPath`/`LoadAndBuild`; absolute paths and paths that escape the root
-are rejected by the `os.Root` boundary.
+Exactly one of `config_path` or `code` must be set. A `sub_agents` entry may be
+a bare string (shorthand for `config_path`) or a map with only one of these
+keys; any other key is an unknown-field error.
+
+`config_path` is resolved relative to the **referencing file's own directory**
+inside the `*os.Root` passed to `BuildWithPath`/`LoadAndBuild`; absolute paths
+and paths that escape the root are rejected. A referenced file's own
+`run_config`/`context_cache_config` sections are ignored.
 
 **YAML Example:**
 
 ```yaml
 sub_agents:
-  - config_path: "./researcher.yaml"
-  - code: "myapp.agents.writer"
+  - ./researcher.yaml
+  - config_path: "./writer.yaml"
+  - code: "myapp.agents.reviewer"
 ```
 
 ### CodeConfig
@@ -128,9 +144,11 @@ type CodeConfig struct {
 }
 ```
 
-### SubAgentEntry
+Callback references are **name-only**: `args` on a callback code config is
+rejected with `ErrCallbackArgs`. A tools/callback entry may also be a bare
+string (shorthand for `{name: s}`).
 
-A tagged union representing either an inline `AgentConfig` or a reference to an external agent.
+### SubAgentEntry
 
 ```go
 type SubAgentEntry struct {
@@ -148,44 +166,98 @@ type ToolRef struct {
 }
 ```
 
-### Supported Agent Types
+### Supported Agent Classes
 
-| Config `agent_class` | Go `Type()` | ADK Agent | Description | Valid Fields |
-|----------------------|-------------|-----------|-------------|--------------|
-| `LlmAgent` | `llm` | `llmagent.New` | LLM-backed agent with model, tools, and instruction. | All BaseAgentConfig fields, Model, ModelCode, Instruction, InstructionTemplate, StaticInstruction, InputSchema, OutputSchema, OutputKey, IncludeContents, Tools, Skillsets, GenerateConfig, DisallowTransferToParent, DisallowTransferToPeers, BeforeModelCallbacks, AfterModelCallbacks, OnModelErrorCallbacks, BeforeToolCallbacks, AfterToolCallbacks, OnToolErrorCallbacks |
-| `SequentialAgent` | `sequential` | `sequentialagent.New` | Runs sub-agents one after another. | BaseAgentConfig fields |
-| `ParallelAgent` | `parallel` | `parallelagent.New` | Runs sub-agents concurrently. | BaseAgentConfig fields |
-| `LoopAgent` | `loop` | `loopagent.New` | Runs sub-agents in a loop up to `MaxIterations`. | BaseAgentConfig fields, MaxIterations |
+| Config `agent_class`   | ADK Agent           | Description |
+|------------------------|---------------------|-------------|
+| `LlmAgent` (default)   | `llmagent.New`      | LLM-backed agent with model, tools, and instruction. |
+| `SequentialAgent`      | `sequentialagent.New` | Runs sub-agents one after another. |
+| `ParallelAgent`        | `parallelagent.New` | Runs sub-agents concurrently. |
+| `LoopAgent`            | `loopagent.New`     | Runs sub-agents in a loop up to `MaxIterations`. |
+| `Workflow`             | `workflow.Workflow` | Runs an explicit graph described by `edges`. |
 
-Note: `agent_class` is the config-file discriminator. `Type()` returns Go-internal short names consumed by builder logic. |
+## Strict Field Validation
 
-### Generation Config Keys
+Parsing rejects:
 
-See the full key table under [TranslateGenerateConfig](#translategenerateconfig).
-Unknown keys are silently ignored.
+- a key that is not part of the agent class's schema → `ErrUnknownField`;
+- a real adk-python field with no adk-go target → `ErrUnsupportedField`
+  (for example `static_instruction`, `custom_metadata`, `save_live_audio`);
+- a missing required `name` (at any level);
+- `model` together with `model_code`, or `model_args` together with
+  `model_code`;
+- `include_contents` other than `"default"`/`"none"` (and the key itself on
+  non-LLM agents);
+- `max_iterations < 0`;
+- callback `args` → `ErrCallbackArgs`.
+
+Duplicate object/mapping keys are rejected by the decoders
+(`encoding/json/v2` for JSON, `yaml.v4` for YAML).
+
+Parsing also rejects any real adk-python `run_config` field with no adk-go
+equivalent (`speech_config`, `http_options`, `labels`, `service_tier`, and
+others) with `ErrUnsupportedField`.
+
+## Generation Config
+
+`generate_content_config` is decoded directly into a
+`*genai.GenerateContentConfig`. Keys are matched to fields by a normalized
+comparison (strip `_`/`-`, case-fold), so `safety_settings`, `safetySettings`,
+and `safetysettings` are equivalent. snake_case is recommended because it
+matches adk-python. Unknown keys → `ErrUnknownField`; two keys that normalize
+to the same field (e.g. `top_p` and `topP`) → `ErrAmbiguousField`.
+
+Map keys such as `labels` names and `response_schema.properties` names are
+preserved verbatim while nested struct fields are normalized.
+
+`system_instruction` accepts the same tri-shape as adk-python's
+`ContentUnion`: a string, a `{role, parts}` map, or a list of parts.
+
+Inline `input_schema`/`output_schema` values use the same normalizing decoder,
+so snake_case fields like `property_ordering` and `min_items` work inside them.
+
+## Runtime Config
+
+`run_config` is a spec-aligned extension mirroring adk-python's `RunConfig`
+field names. Only fields with adk-go targets are supported:
+
+```yaml
+run_config:
+  streaming_mode: sse                 # "", "none", "sse", or "bidi"
+  save_input_blobs_as_artifacts: true # agent.RunConfig.SaveInputBlobsAsArtifacts
+  save_live_blob: true                # agent.LiveRunConfig.SaveLiveBlob
+  max_llm_calls: 100                  # see mapping below
+```
+
+`max_llm_calls` maps as: unset → adk-go `0` (default, 500/`ADK_MAX_LLM_CALLS`);
+`<= 0` → `-1` (unbounded, matching adk-python); `> 0` → the value.
+
+`BuildAppWithPath` returns both `*agent.RunConfig` and `*agent.LiveRunConfig`
+when a `run_config` section is present. `LiveRunConfig` is non-nil even when
+only `streaming_mode` is set; its zero values are harmless.
+
+`streaming_mode: bidi` is accepted by `Parse` but rejected by
+`BuildAppWithPath` because adk-go has no bidi streaming mode.
+
+`context_cache_config` supports `cache_intervals`, `ttl_seconds`, and
+`min_tokens`; `create_http_options` is rejected as unsupported.
 
 ## Registry Setup
-
-The `Registry` maps model prefixes, tool names, skill sources, callbacks, model codes, and agents to their respective factory functions or values.
 
 ```go
 reg := config.NewRegistry()
 
-// Register a prompt template registry for named instruction templates.
-engine := prompt.New()
-tmplReg := prompt.NewRegistry(engine)
-tmplReg.Register("greeting", "Hello from {{.Agent.Name}}.")
-reg.RegisterTemplateRegistry(tmplReg)
-
 // Register a model factory for the "openai" prefix.
-// When the config says model: "openai/gpt-4o", this factory is called
-// with cfg["model"] = "gpt-4o" plus any generateConfig keys.
 reg.RegisterModel("openai", func(cfg map[string]any) (model.LLM, error) {
     modelName := cfg["model"].(string)
-    return openai.New(openai.Config{
-        Model:  modelName,
-        APIKey: os.Getenv("OPENAI_API_KEY"),
-    })
+    return openai.New(openai.Config{Model: modelName, APIKey: os.Getenv("OPENAI_API_KEY")})
+})
+
+// Register a default model used for bare refs ("gemini-2.5-flash") and for
+// configs that omit model entirely.
+reg.RegisterDefaultModel(func(cfg map[string]any) (model.LLM, error) {
+    name, _ := cfg["model"].(string)
+    return gemini.New(name)
 })
 
 // Register a tool factory.
@@ -193,88 +265,18 @@ reg.RegisterTool("search", func(cfg map[string]any) (tool.Tool, error) {
     return mySearchTool(cfg)
 })
 
-// Register a modelCode factory.
-reg.RegisterModelCode("myapp.models.custom", func(args map[string]any) (model.LLM, error) {
-    return customModel(args)
-})
-
-// Register callbacks.
-reg.RegisterBeforeModelCallback("myapp.cb.cache", beforeModelCache)
-reg.RegisterAfterModelCallback("myapp.cb.log", afterModelLog)
+// Register callbacks and a pre-built agent.
 reg.RegisterBeforeAgentCallback("myapp.cb.auth", beforeAgentAuth)
-
-// Register a pre-built agent for code references.
 reg.RegisterAgent("myapp.agents.sub", subAgent)
 ```
 
-### ModelFactory
-
-```go
-type ModelFactory func(cfg map[string]any) (model.LLM, error)
-```
-
-Receives a config map that always contains the key `"model"` set to the
-portion of the model ref after the first `/`.
-
-### ToolFactory
-
-```go
-type ToolFactory func(cfg map[string]any) (tool.Tool, error)
-```
-
-### ModelCodeFactory
-
-```go
-type ModelCodeFactory func(args map[string]any) (model.LLM, error)
-```
-
-Creates a model from configuration arguments. Used when `model_code` is specified instead of `model`.
-
-### StaticSchema
-
-```go
-func StaticSchema(s *genai.Schema) SchemaFactory
-```
-
-A convenience helper that wraps a pre-built `*genai.Schema` as a `SchemaFactory` for registration via `Registry.RegisterSchema`. Useful when you have a schema constructed in code rather than from config arguments.
-
-### NewFilteredSource
-
-```go
-func NewFilteredSource(base skill.Source, names []string) skill.Source
-```
-
-Wraps an existing `skill.Source` and restricts the visible skills to those listed in `names`. Used internally by the builder when a `SkillsetRef` specifies `Names`; you can also use it directly when composing skill sources programmatically.
-
-### Callback Registration
-
-The Registry provides typed registration and resolution for all callback types:
-
-| Register | Resolve | Type |
-|------------|---------|------|
-| `RegisterBeforeModelCallback` | `ResolveBeforeModelCallback` | `llmagent.BeforeModelCallback` |
-| `RegisterAfterModelCallback` | `ResolveAfterModelCallback` | `llmagent.AfterModelCallback` |
-| `RegisterOnModelErrorCallback` | `ResolveOnModelErrorCallback` | `llmagent.OnModelErrorCallback` |
-| `RegisterBeforeToolCallback` | `ResolveBeforeToolCallback` | `llmagent.BeforeToolCallback` |
-| `RegisterAfterToolCallback` | `ResolveAfterToolCallback` | `llmagent.AfterToolCallback` |
-| `RegisterOnToolErrorCallback` | `ResolveOnToolErrorCallback` | `llmagent.OnToolErrorCallback` |
-| `RegisterBeforeAgentCallback` | `ResolveBeforeAgentCallback` | `agent.BeforeAgentCallback` |
-| `RegisterAfterAgentCallback` | `ResolveAfterAgentCallback` | `agent.AfterAgentCallback` |
-| `RegisterModelCode` | `ResolveModelCode` | `ModelCodeFactory` |
-| `RegisterAgent` | `ResolveAgent` | `agent.Agent` |
-| `RegisterTemplateRegistry` | `TemplateRegistry` | `*prompt.TemplateRegistry` |
+`model_args` are passed to the model factory. For a prefixed ref the factory
+receives `model_args` plus `"model": <remainder>` (the ref wins over a `model`
+key inside `model_args`). A bare ref passes the whole ref as `"model"`. An
+omitted model passes `model_args` only; without a default factory this errors
+with `ErrNoDefaultModel`.
 
 ## Skillsets
-
-Skillsets provide agents with access to specialized instruction sets stored in
-SKILL.md files. Each skill is a directory containing:
-
-- `SKILL.md` (required): YAML frontmatter + markdown instructions
-- `references/` (optional): Additional documentation
-- `assets/` (optional): Templates and resources
-- `scripts/` (optional): Executable scripts (future support)
-
-### SkillsetRef Schema
 
 ```go
 type SkillsetRef struct {
@@ -286,240 +288,109 @@ type SkillsetRef struct {
 }
 ```
 
-### Preload Strategies
-
-| Strategy | Description | Best For |
-|----------|-------------|----------|
-| `""` (default) | Load on-demand | Large skill sets, memory-constrained |
-| `"complete"` | Load all data at init | Small skill sets, fast response needed |
-| `"frontmatters"` | Load metadata only | Balanced, frequent skill listing |
-
-### YAML Examples
-
-**Basic filesystem skills:**
-```yaml
-name: my-agent
-agent_class: LlmAgent
-skill_sets:
-  - name: filesystem
-    config:
-      path: "./skills"
-```
-
-**Preloaded skills with custom instruction:**
-```yaml
-skill_sets:
-  - name: filesystem
-    config:
-      path: "/app/skills"
-    preload: complete
-    system_instruction: "Use these skills for domain-specific tasks."
-```
-
-**Multiple skill sources:**
-```yaml
-skill_sets:
-  - name: filesystem
-    config:
-      path: "./local-skills"
-    preload: frontmatters
-  - name: gcs
-    config:
-      bucket: "org-skills"
-      prefix: "shared/"
-```
-
-**Specific skills only (filtering):**
-```yaml
-skill_sets:
-  - name: filesystem
-    config:
-      path: "./skills"  # Folder has 20+ skills
-    names:              # But agent only sees these 2:
-      - "weather"
-      - "cooking"
-    preload: frontmatters
-```
-
-### Registering Custom Skill Factories
-
-```go
-reg.RegisterSkill("s3", func(cfg map[string]any) (skill.Source, error) {
-    bucket := cfg["bucket"].(string)
-    // Create S3-based skill source...
-    return s3Source, nil
-})
-```
+See [Agent Skills Configuration](skills-config.md) for details.
 
 ## Instruction Templates
 
-The `InstructionTemplate` field on `LLMAgentConfig` enables dynamic, template-based
-instructions using the `prompt` package. It accepts a `prompt.TemplateRef` which
-can reference a template by name, inline text, or file path.
-
-When `InstructionTemplate` is set, it takes precedence over the static `Instruction`
-field. The builder resolves the template using the registry's `TemplateRegistry`
-(if registered) or a default `prompt.New()` engine, then wraps it as an
-`llmagent.InstructionProvider` via `prompt.NewInstructionProviderFromTemplate`.
-
-See [Prompt Templating](prompt.md) for template syntax, available data fields,
-and built-in functions.
-
-### Registering a Template Registry
-
-```go
-reg := config.NewRegistry()
-
-engine := prompt.New()
-tmplReg := prompt.NewRegistry(engine)
-tmplReg.Register("greeting", "Hello from {{.Agent.Name}}.")
-reg.RegisterTemplateRegistry(tmplReg)
-```
-
-### YAML Examples
-
-**Inline template:**
-```yaml
-name: my-agent
-agent_class: LlmAgent
-model: openai/gpt-4o
-instruction_template:
-  inline: "You are {{.Agent.Name}}. User: {{.User.Text}}"
-```
-
-**Named template (requires registered TemplateRegistry):**
-```yaml
-name: my-agent
-agent_class: LlmAgent
-model: openai/gpt-4o
-instruction_template:
-  name: "greeting"
-```
-
-**File-based template (path is resolved relative to the `*os.Root` passed to `BuildWithPath`/`LoadAndBuild`):**
-```yaml
-name: my-agent
-agent_class: LlmAgent
-model: openai/gpt-4o
-instruction_template:
-  path: "prompts/system.tmpl"
-```
+`instruction_template` accepts exactly one of `name`, `inline`, or `path`.
+`path` is resolved relative to the config file's own directory inside the
+`*os.Root`. When set, the template takes precedence over `instruction`.
 
 ## Loading and Building
 
-### Load
-
 ```go
 func Load(root *os.Root, path string) (*AppConfig, error)
-```
-
-Reads a config file beneath `root`. Format is inferred from extension: `.json`, `.yaml`, `.yml`.
-`path` is interpreted relative to `root`; the `*os.Root` enforces kernel-level path traversal protection so callers cannot escape the configured boundary. Returns an `*AppConfig` whose `.AgentConfig` field is the sealed `AgentConfig` interface — type-assert to `*LLMAgentConfig`, `*SequentialAgentConfig`, etc. to access type-specific fields.
-
-### Parse
-
-```go
 func Parse(data []byte, format string) (*AppConfig, error)
-```
-
-Parses raw bytes. `format` must be `"json"` or `"yaml"`.
-Both formats validate type-specific field restrictions — setting an LLM-only field (`before_model_callbacks`, `after_model_callbacks`, `before_tool_callbacks`, `after_tool_callbacks`, `on_model_error_callbacks`, `on_tool_error_callbacks`) on a non-LLM agent type returns an error. Agent-level callbacks (`before_agent_callbacks`, `after_agent_callbacks`) are accepted for all agent types.
-
-### BuildWithPath
-
-```go
 func BuildWithPath(ctx context.Context, cfg AgentConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, error)
-```
-
-Recursively builds a live agent tree from the config and registry. Uses a type switch internally to delegate to the correct agent constructor. `root` scopes all filesystem access for sub-agent `config_path` references and file-based instruction templates; pass `nil` when the config tree contains no file references. The `configPath` parameter is the root-relative path of the parent config, used to resolve relative `config_path` references in `AgentRefConfig`; pass an empty string when not loading from a file.
-
-### BuildAppWithPath
-
-```go
 func BuildAppWithPath(ctx context.Context, appCfg *AppConfig, reg *Registry, root *os.Root, configPath string) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
-```
-
-Like `BuildWithPath`, but accepts a full `*AppConfig` (which wraps an `AgentConfig` alongside optional `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig`) and returns the resolved runtime configs alongside the built agent. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
-
-### LoadAndBuild
-
-```go
 func LoadAndBuild(ctx context.Context, root *os.Root, path string, reg *Registry) (agent.Agent, *agent.RunConfig, *agent.LiveRunConfig, *ContextCacheConfig, error)
 ```
 
-Convenience function combining `Load` and `BuildAppWithPath`. Reads the config file at `path` beneath `root`, builds the agent tree, and returns the runtime configs. The returned `RunConfig`, `LiveRunConfig`, and `ContextCacheConfig` may be `nil` if absent in the config file.
+Each config's references resolve against its own directory; `root` scopes all
+filesystem access and rejects escapes.
 
-## TranslateGenerateConfig
+## Workflows
 
-```go
-func TranslateGenerateConfig(m map[string]any) (*genai.GenerateContentConfig, error)
+A Workflow describes a graph with `edges`. Each top-level `edges` entry is a
+chain (a sequence). Inside a chain, an item is:
+
+| Form | Meaning |
+|---|---|
+| `START` | the workflow entry sentinel |
+| `name` | a registered node function (see below) |
+| `file.yaml` / `file.yml` | a node file or agent config file |
+| `{config_path: x}` / `{code: x}` | a single-key node reference |
+| `{ROUTE: target, default: other}` | a route map; targets resolve like scalars |
+
+A chain with no route maps needs at least two nodes and becomes a chain. A
+chain with route maps needs at least one source node; each route-map entry
+becomes an edge from the last scalar node to the resolved target. `default`
+(case-insensitive) maps to the default route.
+
+Example:
+
+```yaml
+name: pipeline
+agent_class: Workflow
+max_concurrency: 4
+edges:
+  - [START, fetch, {OK: transform, default: report}]
+  - [transform, report]
 ```
 
-Converts a generic `map[string]any` (typically the `GenerateConfig` field from
-an `AgentConfig`) into a `*genai.GenerateContentConfig` suitable for passing to
-an LLM.
+### Node files
 
-Recognised keys and their target fields:
+A `.yaml`/`.yml` reference may be a `FunctionNode`, `JoinNode`, `ToolNode`, or a
+regular agent config:
 
-| Key | Target Field | Type |
-|-----|-------------|------|
-| `temperature` | `Temperature` | `*float32` |
-| `topP` | `TopP` | `*float32` |
-| `topK` | `TopK` | `*float32` |
-| `maxOutputTokens` | `MaxOutputTokens` | `int32` |
-| `candidateCount` | `CandidateCount` | `int32` |
-| `stopSequences` | `StopSequences` | `[]string` |
-| `responseMimeType` | `ResponseMIMEType` | `string` |
-| `responseLogprobs` | `ResponseLogprobs` | `bool` |
-| `logprobs` | `Logprobs` | `*int32` |
-| `presencePenalty` | `PresencePenalty` | `*float32` |
-| `frequencyPenalty` | `FrequencyPenalty` | `*float32` |
-| `seed` | `Seed` | `*int32` |
-| `audioTimestamp` | `AudioTimestamp` | `bool` |
-| `cachedContent` | `CachedContent` | `string` |
-| `enableEnhancedCivicAnswers` | `EnableEnhancedCivicAnswers` | `*bool` |
-| `serviceTier` | `ServiceTier` | `genai.ServiceTier` |
-| `mediaResolution` | `MediaResolution` | `genai.MediaResolution` |
-| `responseModalities` | `ResponseModalities` | `[]string` |
-| `labels` | `Labels` | `map[string]string` |
-| `responseSchema` | `ResponseSchema` | `*genai.Schema` |
-| `responseJsonSchema` | `ResponseJsonSchema` | `any` |
-| `safetySettings` | `SafetySettings` | `[]genai.SafetySetting` |
-| `tools` | `Tools` | `[]genai.Tool` |
-| `toolConfig` | `ToolConfig` | `*genai.ToolConfig` |
-| `thinkingConfig` | `ThinkingConfig` | `*genai.ThinkingConfig` |
-| `speechConfig` | `SpeechConfig` | `*genai.SpeechConfig` |
-| `imageConfig` | `ImageConfig` | `*genai.ImageConfig` |
-| `routingConfig` | `RoutingConfig` | `*genai.RoutingConfig` |
-| `modelSelectionConfig` | `ModelSelectionConfig` | `*genai.ModelSelectionConfig` |
-| `modelArmorConfig` | `ModelArmorConfig` | `*genai.ModelArmorConfig` |
-| `httpOptions` | `HTTPOptions` | `*genai.HTTPOptions` |
-| `systemInstruction` | `SystemInstruction` | `*genai.Content` |
+```yaml
+# FunctionNode
+agent_class: FunctionNode
+name: uppercase
+func_code: myapp.nodes.uppercase
+parallel_worker: false
+rerun_on_resume: false
+```
 
-Unknown keys are silently ignored. A `nil` map returns an empty config without error.
+```yaml
+# JoinNode
+agent_class: JoinNode
+name: join
+```
 
-### Example
+```yaml
+# ToolNode
+agent_class: ToolNode
+name: search_node
+tool_code: search
+args: {maxResults: 5}
+```
+
+Any other `agent_class` is parsed and built as a normal agent and wrapped in an
+agent node; its own directory is the base for its references. Node-file
+`description` is not accepted (no adk-go node constructor exposes it) and fails
+with `ErrUnknownField`.
+
+### Registering node functions
+
+Go forbids type parameters on methods, so registration is a package function:
 
 ```go
-import (
-    "log"
-
-    "github.com/ieshan/adk-go-pkg/config"
-)
-
-gc, err := config.TranslateGenerateConfig(map[string]any{
-    "temperature":     0.7,
-    "maxOutputTokens": float64(1024),
+config.RegisterNodeFunction(reg, "uppercase", func(ctx agent.Context, s string) (string, error) {
+    return strings.ToUpper(s), nil
 })
-if err != nil {
-    log.Fatal(err)
-}
-// gc.Temperature is a *float32 pointing to 0.7
-// gc.MaxOutputTokens is int32(1024)
 ```
 
-`Build` calls `TranslateGenerateConfig` internally when constructing LLM agents,
-but you can also call it directly if you are building agents programmatically.
+Any input/output types work: inputs are converted by type assertion, a string
+fast path, or a JSON round-trip.
+
+### Deduplication
+
+Within a single build, nodes loaded from the same file share one instance
+(required for join fan-in) and a repeated function reference shares one
+FunctionNode. Agent files referenced more than once resolve to the same agent;
+listing the same file twice under `sub_agents` therefore fails with ADK's
+"appears multiple times" error. Caches are per-build, never global.
 
 ## YAML Example
 
@@ -528,157 +399,39 @@ name: root-agent
 agent_class: LlmAgent
 model: openai/gpt-4o
 instruction: "You are a helpful assistant."
-# Optional: use a template instead of a static instruction
-# instruction_template:
-#   inline: "You are {{.Agent.Name}}. User: {{.User.Text}}"
-#   # or by name: name: "greeting"
-#   # or from file: path: "prompts/system.tmpl"
-static_instruction: "All agents in this tree are professional and concise."
+instruction_template:
+  inline: "You are {{.Agent.Name}}. User: {{.User.Text}}"
+global_instruction: "All agents in this tree are professional and concise."
 output_key: result
 include_contents: default
 disallow_transfer_to_parent: true
 disallow_transfer_to_peers: true
 tools:
-  - name: search
+  - search
+  - name: scrape
     args:
-      maxResults: 5
-before_model_callbacks:
-  - name: myapp.cb.cache
-after_model_callbacks:
-  - name: myapp.cb.log
+      timeout: 30
+skill_sets:
+  - name: filesystem
+    config:
+      path: "./skills"
+    preload: complete
 generate_content_config:
   temperature: 0.7
-  maxOutputTokens: 1024
-```
-
-## JSON Example
-
-```json
-{
-  "name": "root-agent",
-  "agent_class": "LlmAgent",
-  "model": "openai/gpt-4o",
-  "instruction": "You are a helpful assistant.",
-  "instruction_template": {"inline": "You are {{.Agent.Name}}."},
-  "disallow_transfer_to_parent": true,
-  "disallow_transfer_to_peers": true,
-  "tools": [
-    {"name": "search", "args": {"maxResults": 5}}
-  ],
-  "generate_content_config": {
-    "temperature": 0.7,
-    "maxOutputTokens": 1024
-  }
-}
-```
-
-## Full Agent Tree Example
-
-A multi-agent system with a sequential orchestrator:
-
-```yaml
-name: orchestrator
-agent_class: SequentialAgent
+  max_output_tokens: 1024
+  safety_settings:
+    - category: HARM_CATEGORY_HARASSMENT
+      threshold: BLOCK_LOW_AND_ABOVE
+before_model_callbacks:
+  - myapp.cb.cache
+run_config:
+  streaming_mode: sse
+  save_live_blob: true
+  max_llm_calls: 100
+context_cache_config:
+  cache_intervals: 5
+  ttl_seconds: 600
+  min_tokens: 100
 sub_agents:
-  - name: researcher
-    agent_class: LlmAgent
-    model: openai/gpt-4o
-    instruction: "Find information about the user's topic."
-    tools:
-      - name: search
-      - name: scrape
-    generate_content_config:
-      temperature: 0.3
-
-  - name: writer
-    agent_class: LlmAgent
-    model: openai/gpt-4o
-    instruction: "Write a report based on the research."
-    disallow_transfer_to_parent: true
-    generate_content_config:
-      temperature: 0.7
-      maxOutputTokens: 2048
-
-  - name: reviewer
-    agent_class: LoopAgent
-    max_iterations: 3
-    sub_agents:
-      - name: critic
-        agent_class: LlmAgent
-        model: openai/gpt-4o
-        instruction: "Review the report. Output APPROVED if it meets quality standards."
-```
-
-Loading and running:
-
-```go
-reg := config.NewRegistry()
-reg.RegisterModel("openai", openaiFactory)
-reg.RegisterTool("search", searchFactory)
-reg.RegisterTool("scrape", scrapeFactory)
-
-root, err := os.OpenRoot(".")
-if err != nil {
-    log.Fatal(err)
-}
-defer root.Close()
-
-agent, runCfg, liveRunCfg, ctxCacheCfg, err := config.LoadAndBuild(ctx, root, "agents/orchestrator.yaml", reg)
-if err != nil {
-    log.Fatal(err)
-}
-// Use agent with runner.New(...).
-// runCfg, liveRunCfg, and ctxCacheCfg may be nil if not specified in the YAML.
-_ = runCfg
-_ = liveRunCfg
-_ = ctxCacheCfg
-```
-
-## Parse-Only Types
-
-The following types are parsed from config and returned by `BuildAppWithPath`/`LoadAndBuild` but are not wired into agent execution in the current release:
-
-- `RunConfig` — runtime behavior configuration (streaming mode, save live blob, custom metadata)
-- `LiveRunConfig` — live run configuration (max LLM calls, etc.)
-- `ContextCacheConfig` — context caching intervals, TTL, and minimum token threshold
-- `CustomMetadata` — parsed from config but not propagated to `agent.RunConfig`
-
-### StreamingMode
-
-The `streaming_mode` field controls how the ADK runner streams responses:
-
-| Value | Description |
-|-------|-------------|
-| `none` | No streaming (default) |
-| `sse` | Server-sent events streaming |
-| `bidi` | Accepted by Parse but rejected by Build — ADK-Go does not support bidirectional streaming |
-
-`bidi` is kept as a parseable value for forward compatibility. `BuildAppWithPath` returns an error if `streaming_mode: bidi` is used.
-
-Programmatic construction with typed configs:
-
-```go
-orchestrator := &config.SequentialAgentConfig{
-    BaseAgentConfig: config.BaseAgentConfig{Name: "orchestrator"},
-}
-
-researcher := &config.LLMAgentConfig{
-    BaseAgentConfig: config.BaseAgentConfig{Name: "researcher"},
-    Model:           "openai/gpt-4o",
-    Instruction:     "Find information.",
-    Tools:           []config.ToolRef{{Name: "search"}},
-}
-
-writer := &config.LLMAgentConfig{
-    BaseAgentConfig:          config.BaseAgentConfig{Name: "writer"},
-    Model:                    "openai/gpt-4o",
-    Instruction:              "Write a report.",
-    DisallowTransferToParent: true,
-}
-
-orchestrator.SubAgentEntries = []config.SubAgentEntry{
-    {Inline: researcher},
-    {Inline: writer},
-}
-agent, err := config.BuildWithPath(ctx, orchestrator, reg, nil, "")
+  - ./researcher.yaml
 ```

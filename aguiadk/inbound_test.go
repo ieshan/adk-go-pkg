@@ -1,6 +1,7 @@
 package aguiadk
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
@@ -224,6 +225,48 @@ func TestConvertInboundMessages_Empty(t *testing.T) {
 	}
 	if current == nil || len(current.Parts) == 0 {
 		t.Error("got empty current content, want non-empty")
+	}
+}
+
+// TestConvertInboundMessages_RejectsBinaryPart verifies the retired
+// {type:"binary"} input part fails the run at conversion time.
+func TestConvertInboundMessages_RejectsBinaryPart(t *testing.T) {
+	messages := []types.Message{
+		{
+			ID:   "m1",
+			Role: types.RoleUser,
+			Content: []types.InputContent{
+				{Type: types.InputContentTypeBinary, Data: "SGVsbG8=", MimeType: "application/octet-stream"},
+			},
+		},
+	}
+	_, _, err := convertInboundMessages(messages, "")
+	if err == nil {
+		t.Fatal("got nil error, want rejection of binary part")
+	}
+	if !strings.Contains(err.Error(), "binary") {
+		t.Errorf("error = %q, want it to name the binary type", err)
+	}
+}
+
+// TestConvertInboundMessages_RejectsUnknownPart verifies unknown content types
+// follow the same error path as the retired binary part.
+func TestConvertInboundMessages_RejectsUnknownPart(t *testing.T) {
+	messages := []types.Message{
+		{
+			ID:   "m1",
+			Role: types.RoleUser,
+			Content: []types.InputContent{
+				{Type: "hologram", Text: "hi"},
+			},
+		},
+	}
+	_, _, err := convertInboundMessages(messages, "")
+	if err == nil {
+		t.Fatal("got nil error, want rejection of unknown part type")
+	}
+	if !strings.Contains(err.Error(), "hologram") {
+		t.Errorf("error = %q, want it to name the unknown type", err)
 	}
 }
 

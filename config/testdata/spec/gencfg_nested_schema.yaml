@@ -1,0 +1,13 @@
+name: gencfg_nested_schema
+agent_class: LlmAgent
+model: gemini-2.5-flash
+generate_content_config:
+  response_schema:
+    type: object
+    properties:
+      user_name:
+        type: string
+        property_ordering: [first, last]
+      age:
+        type: integer
+        min_items: 1

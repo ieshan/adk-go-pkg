@@ -46,4 +46,36 @@ func TestReasoningTracker_FullLifecycle(t *testing.T) {
 			t.Errorf("event[%d] type = %s, want %s", i, got[i].Type(), want)
 		}
 	}
+
+	// Spans and reasoning messages use distinct IDs: the span ID derives as
+	// messageID+"-span"; message events carry messageID.
+	spanID := msgID + "-span"
+	start, ok := got[0].(*events.ReasoningStartEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.ReasoningStartEvent", got[0])
+	}
+	if start.MessageID != spanID {
+		t.Errorf("REASONING_START messageId = %q, want %q", start.MessageID, spanID)
+	}
+	msgStart, ok := got[1].(*events.ReasoningMessageStartEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.ReasoningMessageStartEvent", got[1])
+	}
+	if msgStart.MessageID != msgID {
+		t.Errorf("REASONING_MESSAGE_START messageId = %q, want %q", msgStart.MessageID, msgID)
+	}
+	msgEnd, ok := got[4].(*events.ReasoningMessageEndEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.ReasoningMessageEndEvent", got[4])
+	}
+	if msgEnd.MessageID != msgID {
+		t.Errorf("REASONING_MESSAGE_END messageId = %q, want %q", msgEnd.MessageID, msgID)
+	}
+	end, ok := got[5].(*events.ReasoningEndEvent)
+	if !ok {
+		t.Fatalf("got %T, want *events.ReasoningEndEvent", got[5])
+	}
+	if end.MessageID != spanID {
+		t.Errorf("REASONING_END messageId = %q, want %q", end.MessageID, spanID)
+	}
 }

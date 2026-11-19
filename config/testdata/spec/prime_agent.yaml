@@ -1,0 +1,5 @@
+name: prime_agent
+agent_class: LlmAgent
+model: gemini-2.5-flash
+description: "Primes the conversation."
+instruction: "Greet the user and explain what you will do."
