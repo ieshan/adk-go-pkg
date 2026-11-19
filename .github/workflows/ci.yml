@@ -29,13 +29,16 @@ jobs:
           cache: true
 
       # golangci-lint-action@v9 supports golangci-lint v2 and runs on node24.
-      # v2.13.1 is the first patch release with go1.27 support (added in
-      # v2.13.0). Pinning a specific release keeps the Go-version check
-      # satisfied without depending on how "latest" happens to resolve.
+      # v2.14.0+ is required for go1.27.2+: the toolchain bumped export data
+      # to version 5 mid-minor (golang/go#81188) and v2.13.x's bundled
+      # x/tools v0.49.0 only decodes v4, failing typecheck on every import.
+      # v2.15.0 ships x/tools v0.52.0. Pinning a specific release keeps the
+      # Go-version check satisfied without depending on how "latest"
+      # happens to resolve.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.1
+          version: v2.15.0
 
   test:
     runs-on: ubuntu-latest
